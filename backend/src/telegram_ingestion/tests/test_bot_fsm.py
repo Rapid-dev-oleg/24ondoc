@@ -57,10 +57,22 @@ class AuthorizedUserPort(UserProfilePort):
     async def is_authorized(self, telegram_id: int) -> bool:
         return True
 
+    async def get_profile(self, telegram_id: int) -> None:
+        return None
+
+    async def list_active_agents(self) -> list:
+        return []
+
 
 class UnauthorizedUserPort(UserProfilePort):
     async def is_authorized(self, telegram_id: int) -> bool:
         return False
+
+    async def get_profile(self, telegram_id: int) -> None:
+        return None
+
+    async def list_active_agents(self) -> list:
+        return []
 
 
 class MockSTTPort(STTPort):

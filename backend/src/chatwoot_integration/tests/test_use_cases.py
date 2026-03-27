@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from chatwoot_integration.application.use_cases import CreateTicketFromSession
+from chatwoot_integration.domain.events import TicketCreated, TicketCreationFailed, TicketUpdated
 from chatwoot_integration.domain.models import CreateTicketCommand, SupportTicket, TicketStatus
 from chatwoot_integration.domain.repository import ChatwootPort, SupportTicketRepository
 from telegram_ingestion.domain.models import AIResult, DraftSession, SessionStatus
@@ -182,3 +185,122 @@ async def test_webhook_unknown_event_ignored() -> None:
 
     ticket_repo.get_by_id.assert_not_called()
     ticket_repo.save.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Domain Events
+# ---------------------------------------------------------------------------
+
+
+def test_ticket_created_event() -> None:
+    """TicketCreated — проверяем создание и поля."""
+    session_id = uuid.uuid4()
+    event = TicketCreated(task_id=42, session_id=session_id, permalink="http://example.com")
+    assert event.task_id == 42
+    assert event.session_id == session_id
+    assert event.permalink == "http://example.com"
+    assert event.occurred_at is not None
+
+
+def test_ticket_updated_event() -> None:
+    """TicketUpdated — проверяем создание и поля."""
+    event = TicketUpdated(task_id=7, new_status="resolved")
+    assert event.task_id == 7
+    assert event.new_status == "resolved"
+
+
+def test_ticket_creation_failed_event() -> None:
+    """TicketCreationFailed — проверяем создание и поля."""
+    session_id = uuid.uuid4()
+    event = TicketCreationFailed(session_id=session_id, reason="Chatwoot unreachable")
+    assert event.session_id == session_id
+    assert event.reason == "Chatwoot unreachable"
+
+
+def test_domain_event_defaults() -> None:
+    """DomainEvent с дефолтными значениями для всех событий."""
+    e1 = TicketCreated()
+    assert e1.task_id == 0
+    assert e1.permalink == ""
+
+    e2 = TicketUpdated()
+    assert e2.task_id == 0
+    assert e2.new_status == ""
+
+    e3 = TicketCreationFailed()
+    assert e3.reason == ""
+
+
+# ---------------------------------------------------------------------------
+# Webhook: граничные случаи process_webhook_event
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_webhook_missing_task_id_does_not_save() -> None:
+    """Webhook без 'id' — не должен вызывать репозиторий."""
+    from chatwoot_integration.infrastructure.webhook_handler import process_webhook_event
+
+    ticket_repo: SupportTicketRepository = AsyncMock(spec=SupportTicketRepository)
+    payload = {"event": "conversation_status_changed", "status": "resolved"}
+
+    await process_webhook_event(payload=payload, ticket_repo=ticket_repo)
+
+    ticket_repo.get_by_id.assert_not_called()
+    ticket_repo.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_webhook_unknown_status_does_not_save() -> None:
+    """Webhook с неизвестным статусом — не должен вызывать save."""
+    from chatwoot_integration.infrastructure.webhook_handler import process_webhook_event
+
+    ticket_repo: SupportTicketRepository = AsyncMock(spec=SupportTicketRepository)
+    payload = {"event": "conversation_status_changed", "id": 10, "status": "unknown_status"}
+
+    await process_webhook_event(payload=payload, ticket_repo=ticket_repo)
+
+    ticket_repo.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chatwoot_webhook_endpoint_no_repo_raises_503() -> None:
+    """HTTP endpoint: repo недоступен → 503."""
+    from fastapi import FastAPI
+    from chatwoot_integration.infrastructure.webhook_handler import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/webhook/chatwoot",
+        json={"event": "conversation_status_changed", "id": 1, "status": "resolved"},
+    )
+    assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_chatwoot_webhook_endpoint_with_repo_returns_ok() -> None:
+    """HTTP endpoint: repo доступен → 200 ok."""
+    from fastapi import FastAPI, Request
+    from chatwoot_integration.infrastructure.webhook_handler import router
+
+    ticket_repo: SupportTicketRepository = AsyncMock(spec=SupportTicketRepository)
+    ticket_repo.get_by_id = AsyncMock(return_value=None)
+
+    app = FastAPI()
+    app.include_router(router)
+
+    @app.middleware("http")
+    async def inject_repo(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.ticket_repo = ticket_repo
+        return await call_next(request)
+
+    client = TestClient(app)
+    response = client.post(
+        "/webhook/chatwoot",
+        json={"event": "conversation_status_changed", "id": 99, "status": "resolved"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}

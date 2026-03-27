@@ -34,6 +34,7 @@ class SupportTicket(BaseModel):
     task_id: int
     source_session_id: uuid.UUID | None = None
     assignee_telegram_id: int | None = None
+    assignee_chatwoot_id: int | None = None
     status: TicketStatus = TicketStatus.OPEN
     priority: str = "medium"
     title: str = ""

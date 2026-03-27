@@ -35,3 +35,8 @@ class ChatwootPort(ABC):
 
     @abstractmethod
     async def add_message(self, task_id: int, content: str, private: bool = True) -> None: ...
+
+    @abstractmethod
+    async def update_conversation_assignee(
+        self, task_id: int, assignee_chatwoot_id: int
+    ) -> None: ...

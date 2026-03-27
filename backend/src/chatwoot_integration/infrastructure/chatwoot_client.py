@@ -189,12 +189,55 @@ class ChatwootClient(ChatwootPort):
                     task_id=item["id"],
                     status=TicketStatus(item.get("status", "open")),
                     title=item.get("meta", {}).get("subject", ""),
+                    assignee_chatwoot_id=(
+                        item.get("meta", {}).get("assignee", {}).get("id")
+                        if item.get("meta", {}).get("assignee")
+                        else None
+                    ),
                 )
                 for item in payload
             ]
         except Exception:
             logger.warning("get_conversations failed for assignee=%d", assignee_id)
             return []
+
+    async def update_conversation_assignee(
+        self, task_id: int, assignee_chatwoot_id: int
+    ) -> None:
+        """POST /api/v1/accounts/{id}/conversations/{task_id}/assignments с retry → Redis."""
+        body = {"assignee_id": assignee_chatwoot_id}
+        attempt = 0
+
+        async def _do_request() -> None:
+            nonlocal attempt
+            attempt += 1
+            response = await self._http.post(
+                f"{self._api_prefix}/conversations/{task_id}/assignments",
+                content=json.dumps(body),
+            )
+            self._raise_for_status(response)
+
+        retry_decorator = retry(
+            retry=retry_if_exception_type((_ChatwootAPIError, httpx.TransportError)),
+            stop=stop_after_attempt(_MAX_ATTEMPTS),
+            wait=wait_exponential(multiplier=0.1, min=0.1, max=1),
+            reraise=True,
+        )
+        decorated = retry_decorator(_do_request)
+
+        try:
+            await decorated()
+        except Exception:
+            logger.warning(
+                "update_conversation_assignee failed after %d attempts, queuing.", attempt
+            )
+            await self._push_to_queue(
+                {
+                    "action": "update_conversation_assignee",
+                    "task_id": task_id,
+                    "assignee_chatwoot_id": assignee_chatwoot_id,
+                }
+            )
 
     async def add_message(self, task_id: int, content: str, private: bool = True) -> None:
         """POST /api/v1/accounts/{id}/conversations/{task_id}/messages с retry → Redis."""
