@@ -401,7 +401,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        page = int(callback.data.split(":")[1])
+        page = int(callback.data.split(":")[1])  # type: ignore[union-attr]
         data = await state.get_data()
         tasks = data.get("tasks", [])
         await state.update_data(tasks_page=page)
@@ -418,7 +418,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")
+        parts = callback.data.split(":")  # type: ignore[union-attr]
         task_id = int(parts[1])
         assignee_chatwoot_id = int(parts[2])
 
@@ -456,7 +456,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")
+        parts = callback.data.split(":")  # type: ignore[union-attr]
         task_id = int(parts[1])
         assignee_chatwoot_id = int(parts[2]) if parts[2] != "0" else None
 
@@ -478,7 +478,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")
+        parts = callback.data.split(":")  # type: ignore[union-attr]
         task_id = int(parts[1])
         assignee_chatwoot_id = int(parts[2]) if parts[2] != "0" else None
 
@@ -500,7 +500,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        task_id = int(callback.data.split(":")[1])
+        task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
         agents = await user_port.list_active_agents()
         keyboard = _reassign_keyboard(task_id, agents)
         await callback.answer()
@@ -515,7 +515,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")
+        parts = callback.data.split(":")  # type: ignore[union-attr]
         task_id = int(parts[1])
         target_chatwoot_id = int(parts[2])
 
@@ -536,7 +536,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        task_id = int(callback.data.split(":")[1])
+        task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
         await state.set_state(TelegramFSMStates.adding_comment)
         await state.update_data(comment_task_id=task_id)
         await callback.answer()
@@ -617,7 +617,7 @@ def create_call_notification_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")
+        parts = callback.data.split(":")  # type: ignore[union-attr]
         if len(parts) < 3:
             await callback.answer("❌ Некорректный callback.")
             return

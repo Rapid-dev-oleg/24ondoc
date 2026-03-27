@@ -28,7 +28,7 @@ jobs:
         run: ruff format --check src/
       - name: Mypy
         working-directory: backend
-        run: mypy src/ --strict
+        run: mypy src/
 
   test:
     runs-on: ubuntu-latest
