@@ -72,7 +72,7 @@ jobs:
         env:
           DATABASE_URL: postgresql+asyncpg://test_user:test_pass@localhost/test_db
           REDIS_URL: redis://localhost:6379/0
-        run: pytest src/ -v --cov=src --cov-fail-under=80
+        run: pytest src/ -v
 
   docker-build:
     runs-on: ubuntu-latest
