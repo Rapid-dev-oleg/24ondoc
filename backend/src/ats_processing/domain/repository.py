@@ -15,3 +15,17 @@ class CallRecordRepository(ABC):
 
     @abstractmethod
     async def get_pending(self, limit: int = 10) -> list[CallRecord]: ...
+
+    @abstractmethod
+    async def find_recent_by_phone(self, phone: str, limit: int = 10) -> list[CallRecord]: ...
+
+
+class AgentVoiceSampleRepository(ABC):
+    """Repository for agent voice embeddings (pgvector)."""
+
+    @abstractmethod
+    async def find_closest(
+        self, embedding: list[float]
+    ) -> tuple[int, float] | None:
+        """Return (agent_id, score) of the closest embedding, or None if empty."""
+        ...
