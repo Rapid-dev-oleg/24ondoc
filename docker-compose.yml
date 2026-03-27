@@ -108,6 +108,9 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME:-}
     volumes:
       - voice_samples:/app/data/voices
     depends_on:
