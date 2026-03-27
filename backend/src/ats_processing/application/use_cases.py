@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
+from abc import ABC, abstractmethod
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -121,3 +123,85 @@ class IdentifyAgentByVoice:
                 return None  # имя найдено, но agent_id неизвестен без справочника
 
         return None
+
+
+# ============================================================
+# Notification Port
+# ============================================================
+
+
+class TelegramNotificationPort(ABC):
+    """Port for sending Telegram notifications about processed calls."""
+
+    @abstractmethod
+    async def send_call_notification(
+        self,
+        chat_id: int,
+        call_record: CallRecord,
+    ) -> None:
+        """Send a call notification with inline action buttons."""
+        ...
+
+
+# ============================================================
+# ProcessCallWebhook
+# ============================================================
+
+
+class ProcessCallWebhook:
+    """
+    Оркестратор полного flow обработки звонка (ТЗ раздел 4.2):
+
+    1. Получить CallRecord по call_id
+    2. FetchAudioRecording → скачать + транскрибировать
+    3. IdentifyAgentByVoice → биометрия
+    4. Обновить статус CallRecord → PREVIEW + DraftSession
+    5. SendCallNotification в Telegram
+    6. При ошибке → mark_error() + логирование
+    """
+
+    def __init__(
+        self,
+        call_repo: CallRecordRepository,
+        fetch_audio: FetchAudioRecording,
+        identify_agent: IdentifyAgentByVoice,
+        notification_port: TelegramNotificationPort,
+        dispatcher_chat_id: int,
+    ) -> None:
+        self._call_repo = call_repo
+        self._fetch_audio = fetch_audio
+        self._identify_agent = identify_agent
+        self._notification_port = notification_port
+        self._dispatcher_chat_id = dispatcher_chat_id
+
+    async def execute(self, call_id: str) -> CallRecord | None:
+        """Process the call end-to-end. Returns updated CallRecord or None if not found."""
+        call_record = await self._call_repo.get_by_id(call_id)
+        if call_record is None:
+            logger.warning("ProcessCallWebhook: call_id %s not found", call_id)
+            return None
+
+        try:
+            # Step 2: fetch + transcribe
+            await self._fetch_audio.execute(call_record)
+
+            # Step 3: voice biometry
+            await self._identify_agent.execute(call_record, audio_bytes=b"")
+
+            # Step 4: transition to PREVIEW
+            session_id = uuid.uuid4()
+            call_record.mark_preview(session_id)
+            await self._call_repo.save(call_record)
+
+            # Step 5: Telegram notification
+            await self._notification_port.send_call_notification(
+                self._dispatcher_chat_id, call_record
+            )
+
+        except Exception:
+            logger.exception("ProcessCallWebhook failed for call_id %s", call_id)
+            call_record.mark_error()
+            await self._call_repo.save(call_record)
+            return call_record
+
+        return call_record

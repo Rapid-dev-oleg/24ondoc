@@ -492,3 +492,88 @@ def create_tasks_router(
             await callback.message.edit_text(text, reply_markup=keyboard if tasks else None)
 
     return router
+
+
+# ---------- Call Notification Router (DEV-53) ----------
+
+
+def _call_notification_keyboard(call_id: str) -> InlineKeyboardMarkup:
+    """Inline кнопки для уведомления о звонке."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Создать тикет", callback_data=f"call_action:{call_id}:create")],
+            [InlineKeyboardButton(text="✏️ Изменить", callback_data=f"call_action:{call_id}:edit")],
+            [InlineKeyboardButton(text="🚫 Игнорировать", callback_data=f"call_action:{call_id}:ignore")],
+        ]
+    )
+
+
+def create_call_notification_router(
+    call_repo: "CallRecordRepositoryLike",
+    chatwoot_port: "ChatwootPortLike | None" = None,
+) -> Router:
+    """Роутер для обработки callback-кнопок уведомления о звонке."""
+    router = Router(name="call_notification")
+
+    @router.callback_query(F.data.startswith("call_action:"))
+    async def handle_call_action(callback: CallbackQuery, state: FSMContext) -> None:
+        if callback.from_user is None:
+            await callback.answer()
+            return
+        parts = callback.data.split(":")  # type: ignore[union-attr]
+        if len(parts) < 3:
+            await callback.answer("❌ Некорректный callback.")
+            return
+
+        call_id = parts[1]
+        action = parts[2]
+        await callback.answer()
+
+        if action == "create":
+            if chatwoot_port is not None and isinstance(callback.message, Message):
+                await callback.message.edit_text(f"⏳ Создаём тикет для звонка {call_id}...")
+                try:
+                    await chatwoot_port.create_ticket_from_call(call_id)
+                    await callback.message.edit_text(
+                        f"✅ Тикет для звонка {call_id} создан в Chatwoot."
+                    )
+                except Exception:
+                    await callback.message.edit_text("❌ Ошибка создания тикета.")
+            elif isinstance(callback.message, Message):
+                await callback.message.edit_text(
+                    f"✅ Создание тикета для звонка {call_id} запланировано."
+                )
+
+        elif action == "edit":
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(
+                    f"✏️ Редактирование звонка {call_id}. Используйте /new_task."
+                )
+
+        elif action == "ignore":
+            record = await call_repo.get_by_id(call_id)
+            if record is not None:
+                record.mark_error()
+                await call_repo.save(record)
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(f"🚫 Звонок {call_id} проигнорирован.")
+
+        else:
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text("❓ Неизвестное действие.")
+
+    return router
+
+
+# Type aliases to avoid circular imports
+class CallRecordRepositoryLike:
+    async def get_by_id(self, call_id: str) -> object | None:  # pragma: no cover
+        ...
+
+    async def save(self, record: object) -> None:  # pragma: no cover
+        ...
+
+
+class ChatwootPortLike:
+    async def create_ticket_from_call(self, call_id: str) -> None:  # pragma: no cover
+        ...
