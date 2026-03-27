@@ -13,6 +13,7 @@ from fastapi.responses import Response
 from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from admin.infrastructure.router import router as admin_router
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
 from ats_processing.infrastructure.webhook_handler import router as t2_router
 from chatwoot_integration.infrastructure.chatwoot_client import ChatwootClient
@@ -132,6 +133,7 @@ async def metrics() -> dict[str, str]:
 
 
 # Handlers already define full paths — include WITHOUT extra prefix
-app.include_router(t2_router)   # POST /webhook/t2/call
-app.include_router(cw_router)   # POST /webhook/chatwoot
-app.include_router(tg_router)   # POST /webhook/telegram
+app.include_router(admin_router)  # /api/admin/*
+app.include_router(t2_router)     # POST /webhook/t2/call
+app.include_router(cw_router)     # POST /webhook/chatwoot
+app.include_router(tg_router)     # POST /webhook/telegram

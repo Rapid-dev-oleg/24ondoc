@@ -42,6 +42,10 @@ class SQLAlchemyPendingUserRepository(PendingUserRepository):
         if row is not None:
             await self._session.delete(row)
 
+    async def list_all(self) -> list[PendingUser]:
+        result = await self._session.execute(select(PendingUserORM))
+        return [self._to_domain(row) for row in result.scalars().all()]
+
     @staticmethod
     def _to_domain(row: PendingUserORM) -> PendingUser:
         return PendingUser(

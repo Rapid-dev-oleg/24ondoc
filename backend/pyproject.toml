@@ -26,6 +26,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "aiofiles>=23.2.1",
     "tenacity>=8.3.0",
+    "PyJWT>=2.8.0",
 ]
 
 [project.optional-dependencies]

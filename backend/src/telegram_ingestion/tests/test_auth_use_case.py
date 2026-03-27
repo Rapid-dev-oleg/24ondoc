@@ -24,6 +24,9 @@ class InMemoryPendingUserRepository(PendingUserRepository):
     async def delete(self, phone: str) -> None:
         self._store.pop(phone, None)
 
+    async def list_all(self) -> list[PendingUser]:
+        return list(self._store.values())
+
 
 class InMemoryUserProfileRepository(UserProfileRepository):
     def __init__(self) -> None:

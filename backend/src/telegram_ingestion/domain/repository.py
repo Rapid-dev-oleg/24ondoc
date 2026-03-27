@@ -31,6 +31,9 @@ class PendingUserRepository(ABC):
     @abstractmethod
     async def delete(self, phone: str) -> None: ...
 
+    @abstractmethod
+    async def list_all(self) -> list[PendingUser]: ...
+
 
 class UserProfileRepository(ABC):
     @abstractmethod

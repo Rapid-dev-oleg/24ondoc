@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     minio_secret_key: str
     minio_bucket_voices: str = "voice-samples"
 
+    # Admin panel
+    admin_jwt_secret: str = "CHANGE_ME_ADMIN_JWT_SECRET"
+    admin_password: str = "CHANGE_ME_ADMIN_PASSWORD"
+    env_file_path: str = ".env"
+
     # App
     log_level: str = "INFO"
     voice_match_threshold: float = 0.85
