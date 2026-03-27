@@ -9,6 +9,26 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class UserRole(str, Enum):
+    AGENT = "agent"
+    SUPERVISOR = "supervisor"
+    ADMIN = "admin"
+
+
+class UserProfile(BaseModel):
+    """Aggregate Root: профиль пользователя Telegram/Chatwoot."""
+
+    telegram_id: int
+    chatwoot_user_id: int
+    chatwoot_account_id: int
+    role: UserRole = UserRole.AGENT
+    phone_internal: str | None = None
+    voice_sample_url: str | None = None
+    settings: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class SessionStatus(str, Enum):
     COLLECTING = "collecting"
     ANALYZING = "analyzing"

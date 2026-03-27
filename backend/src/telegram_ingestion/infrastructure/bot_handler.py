@@ -101,11 +101,11 @@ def create_router(
         if tg_file.file_path is None:
             await message.answer("❌ Не удалось получить файл.")
             return
-        file_io: io.BytesIO | None = await bot.download_file(tg_file.file_path)
-        if file_io is None:
+        raw_file_io = await bot.download_file(tg_file.file_path)
+        if not isinstance(raw_file_io, io.BytesIO):
             await message.answer("❌ Не удалось скачать файл.")
             return
-        await add_voice.execute(message.from_user.id, file_id, file_io.read())
+        await add_voice.execute(message.from_user.id, file_id, raw_file_io.read())
         await message.answer(
             "🎤 Голосовое сообщение транскрибировано и добавлено.",
             reply_markup=_collect_keyboard(),

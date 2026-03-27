@@ -1,10 +1,10 @@
-"""Telegram Ingestion — Abstract Repository."""
+"""Telegram Ingestion — Abstract Repositories."""
 from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
 
-from .models import DraftSession
+from .models import DraftSession, UserProfile
 
 
 class DraftSessionRepository(ABC):
@@ -19,3 +19,17 @@ class DraftSessionRepository(ABC):
 
     @abstractmethod
     async def delete(self, session_id: uuid.UUID) -> None: ...
+
+
+class UserProfileRepository(ABC):
+    @abstractmethod
+    async def get_by_telegram_id(self, telegram_id: int) -> UserProfile | None: ...
+
+    @abstractmethod
+    async def get_by_chatwoot_id(self, chatwoot_user_id: int) -> UserProfile | None: ...
+
+    @abstractmethod
+    async def save(self, profile: UserProfile) -> None: ...
+
+    @abstractmethod
+    async def list_active(self) -> list[UserProfile]: ...
