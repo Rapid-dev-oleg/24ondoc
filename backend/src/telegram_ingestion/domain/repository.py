@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from abc import ABC, abstractmethod
 
-from .models import DraftSession, UserProfile
+from .models import DraftSession, PendingUser, UserProfile
 
 
 class DraftSessionRepository(ABC):
@@ -19,6 +19,17 @@ class DraftSessionRepository(ABC):
 
     @abstractmethod
     async def delete(self, session_id: uuid.UUID) -> None: ...
+
+
+class PendingUserRepository(ABC):
+    @abstractmethod
+    async def get_by_phone(self, phone: str) -> PendingUser | None: ...
+
+    @abstractmethod
+    async def save(self, pending: PendingUser) -> None: ...
+
+    @abstractmethod
+    async def delete(self, phone: str) -> None: ...
 
 
 class UserProfileRepository(ABC):

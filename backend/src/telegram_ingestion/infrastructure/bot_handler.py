@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from typing import TYPE_CHECKING
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
@@ -12,8 +13,14 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
+
+if TYPE_CHECKING:
+    from ..application.auth_use_case import AuthByPhoneUseCase, RegisterPhoneUseCase
 
 from ..application.ports import UserProfilePort
 from ..application.tasks_use_cases import (
@@ -34,6 +41,7 @@ _TASKS_PAGE_SIZE = 5
 
 
 class TelegramFSMStates(StatesGroup):
+    awaiting_phone = State()
     collecting = State()
     analyzing = State()
     preview = State()
@@ -68,6 +76,9 @@ def create_router(
     add_voice: AddVoiceContentUseCase,
     trigger_analysis: TriggerAnalysisUseCase,
     cancel_session: CancelSessionUseCase,
+    auth_by_phone: AuthByPhoneUseCase,
+    register_phone: RegisterPhoneUseCase,
+    user_port: UserProfilePort,
 ) -> Router:
     """Create and configure the telegram ingestion router with injected use cases."""
     router = Router(name="telegram_ingestion")
@@ -77,9 +88,76 @@ def create_router(
         if message.from_user is None:
             return
         await state.clear()
-        await message.answer(
-            "👋 Добро пожаловать в 24ondoc!\nИспользуйте /new_task чтобы создать новую задачу."
+        if await user_port.is_authorized(message.from_user.id):
+            await message.answer(
+                "👋 Добро пожаловать в 24ondoc!\nИспользуйте /new_task чтобы создать новую задачу."
+            )
+            return
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
         )
+        await state.set_state(TelegramFSMStates.awaiting_phone)
+        await message.answer(
+            "🔒 Для доступа необходимо авторизоваться. Поделитесь своим номером телефона:",
+            reply_markup=keyboard,
+        )
+
+    @router.message(TelegramFSMStates.awaiting_phone, F.contact)
+    async def handle_contact(message: Message, state: FSMContext) -> None:
+        if message.from_user is None or message.contact is None:
+            return
+        contact = message.contact
+        if contact.user_id != message.from_user.id:
+            await message.answer("❌ Пожалуйста, поделитесь своим собственным номером.")
+            return
+        profile = await auth_by_phone.execute(
+            telegram_id=message.from_user.id,
+            phone=contact.phone_number,
+        )
+        await state.clear()
+        if profile is not None:
+            await message.answer(
+                "✅ Вы успешно авторизованы!\nИспользуйте /new_task чтобы создать задачу.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+        else:
+            await message.answer(
+                "❌ Ваш номер не зарегистрирован. Обратитесь к администратору.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+
+    @router.message(Command("register_phone"))
+    async def cmd_register_phone(message: Message, state: FSMContext) -> None:
+        if message.from_user is None or message.text is None:
+            return
+        parts = message.text.split()
+        if len(parts) != 3:
+            await message.answer("Формат: /register_phone +79001234567 chatwoot_id")
+            return
+        phone_raw = parts[1]
+        try:
+            chatwoot_user_id = int(parts[2])
+        except ValueError:
+            await message.answer("❌ chatwoot_id должен быть числом.")
+            return
+        admin_profile = await user_port.get_profile(message.from_user.id)
+        if admin_profile is None:
+            await message.answer("❌ Нет прав для выполнения этой команды.")
+            return
+        ok = await register_phone.execute(
+            requester_telegram_id=message.from_user.id,
+            phone=phone_raw,
+            chatwoot_user_id=chatwoot_user_id,
+            chatwoot_account_id=admin_profile.chatwoot_account_id,
+        )
+        if ok:
+            await message.answer(
+                f"✅ Номер {phone_raw} зарегистрирован для chatwoot_id={chatwoot_user_id}."
+            )
+        else:
+            await message.answer("❌ Нет прав для выполнения этой команды.")
 
     @router.message(Command("new_task"))
     async def cmd_new_task(message: Message, state: FSMContext) -> None:

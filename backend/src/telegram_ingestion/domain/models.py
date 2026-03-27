@@ -29,6 +29,16 @@ class UserProfile(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class PendingUser(BaseModel):
+    """Value Object: предварительно зарегистрированный пользователь (по телефону)."""
+
+    phone: str  # normalized (digits only, 7XXXXXXXXXX for Russian)
+    chatwoot_user_id: int
+    chatwoot_account_id: int
+    role: UserRole = UserRole.AGENT
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class SessionStatus(str, Enum):
     COLLECTING = "collecting"
     ANALYZING = "analyzing"

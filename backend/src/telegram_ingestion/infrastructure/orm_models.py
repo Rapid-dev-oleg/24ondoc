@@ -31,6 +31,19 @@ class UserORM(Base):
     )
 
 
+class PendingUserORM(Base):
+    __tablename__ = "pending_users"
+
+    phone: Mapped[str] = mapped_column(String(20), primary_key=True)
+    chatwoot_user_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    chatwoot_account_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), default="agent")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 class DraftSessionORM(Base):
     __tablename__ = "draft_sessions"
 

@@ -10,8 +10,9 @@ from aiogram import Dispatcher
 from aiogram.enums import ChatType
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Chat, Message, Update, User
+from aiogram.types import Chat, Contact, Message, Update, User
 
+from ..application.auth_use_case import AuthByPhoneUseCase, RegisterPhoneUseCase
 from ..application.ports import STTPort, UserProfilePort
 from ..application.use_cases import (
     AddTextContentUseCase,
@@ -26,6 +27,8 @@ from ..domain.models import (
     ContentBlock,
     DraftSession,
     SessionStatus,
+    UserProfile,
+    UserRole,
 )
 from ..domain.repository import DraftSessionRepository
 from ..infrastructure.bot_handler import TelegramFSMStates, create_router
@@ -101,6 +104,22 @@ def make_message(
         chat=Chat(id=user_id, type=ChatType.PRIVATE),
         from_user=make_tg_user(user_id),
         text=text,
+    )
+
+
+def make_contact_message(
+    user_id: int = 100,
+    contact_user_id: int = 100,
+    phone: str = "+79001234567",
+    message_id: int = 2,
+) -> Message:
+    contact = Contact(phone_number=phone, first_name="Test", user_id=contact_user_id)
+    return Message(
+        message_id=message_id,
+        date=datetime.now(UTC),
+        chat=Chat(id=user_id, type=ChatType.PRIVATE),
+        from_user=make_tg_user(user_id),
+        contact=contact,
     )
 
 
@@ -331,7 +350,14 @@ class TestBotHandlers:
         self,
         authorized: bool = True,
         session: DraftSession | None = None,
+        auth_by_phone_result: UserProfile | None = None,
+        register_phone_result: bool = True,
+        user_port_authorized: bool = True,
+        user_port_profile: UserProfile | None = None,
     ) -> tuple[
+        MagicMock,
+        MagicMock,
+        MagicMock,
         MagicMock,
         MagicMock,
         MagicMock,
@@ -356,14 +382,38 @@ class TestBotHandlers:
         mock_cancel = MagicMock(spec=CancelSessionUseCase)
         mock_cancel.execute = AsyncMock(return_value=True)
 
-        return mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel
+        mock_auth_by_phone = MagicMock(spec=AuthByPhoneUseCase)
+        mock_auth_by_phone.execute = AsyncMock(return_value=auth_by_phone_result)
+
+        mock_register_phone = MagicMock(spec=RegisterPhoneUseCase)
+        mock_register_phone.execute = AsyncMock(return_value=register_phone_result)
+
+        mock_user_port = MagicMock(spec=UserProfilePort)
+        mock_user_port.is_authorized = AsyncMock(return_value=user_port_authorized)
+        mock_user_port.get_profile = AsyncMock(return_value=user_port_profile)
+        mock_user_port.list_active_agents = AsyncMock(return_value=[])
+
+        return (
+            mock_start,
+            mock_add_text,
+            mock_add_voice,
+            mock_trigger,
+            mock_cancel,
+            mock_auth_by_phone,
+            mock_register_phone,
+            mock_user_port,
+        )
 
     async def test_cmd_new_task_authorized_sets_collecting_state(self) -> None:
         storage = MemoryStorage()
-        mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel = self._make_use_cases(
-            authorized=True
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases(authorized=True)
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
         )
-        router = create_router(mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel)
         dp = Dispatcher(storage=storage)
         dp.include_router(router)
         bot = make_mock_bot(bot_id=42)
@@ -378,10 +428,14 @@ class TestBotHandlers:
 
     async def test_cmd_new_task_unauthorized_no_state_change(self) -> None:
         storage = MemoryStorage()
-        mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel = self._make_use_cases(
-            authorized=False, session=None
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases(authorized=False, session=None)
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
         )
-        router = create_router(mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel)
         dp = Dispatcher(storage=storage)
         dp.include_router(router)
         bot = make_mock_bot(bot_id=42)
@@ -399,10 +453,14 @@ class TestBotHandlers:
         key = StorageKey(bot_id=42, chat_id=100, user_id=100)
         await storage.set_state(key, TelegramFSMStates.collecting.state)
 
-        mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel = (
-            self._make_use_cases()
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases()
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
         )
-        router = create_router(mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel)
         dp = Dispatcher(storage=storage)
         dp.include_router(router)
         bot = make_mock_bot(bot_id=42)
@@ -418,10 +476,14 @@ class TestBotHandlers:
         key = StorageKey(bot_id=42, chat_id=100, user_id=100)
         await storage.set_state(key, TelegramFSMStates.collecting.state)
 
-        mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel = (
-            self._make_use_cases()
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases()
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
         )
-        router = create_router(mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel)
         dp = Dispatcher(storage=storage)
         dp.include_router(router)
         bot = make_mock_bot(bot_id=42)
@@ -430,3 +492,207 @@ class TestBotHandlers:
         await dp.feed_update(bot, update)
 
         mock_add_text.execute.assert_called_once_with(100, "Проблема с кнопкой")
+
+    async def test_cmd_start_authorized_sends_welcome(self) -> None:
+        storage = MemoryStorage()
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases(user_port_authorized=True)
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        )
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        bot = make_mock_bot(bot_id=42)
+
+        update = make_update(make_message(user_id=100, text="/start"))
+        await dp.feed_update(bot, update)
+
+        # State should be None (not set to awaiting_phone)
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        state = await storage.get_state(key)
+        assert state is None
+
+    async def test_cmd_start_unauthorized_sets_awaiting_phone(self) -> None:
+        storage = MemoryStorage()
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases(user_port_authorized=False)
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        )
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        bot = make_mock_bot(bot_id=42)
+
+        update = make_update(make_message(user_id=100, text="/start"))
+        await dp.feed_update(bot, update)
+
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        state = await storage.get_state(key)
+        assert state == TelegramFSMStates.awaiting_phone.state
+
+    async def test_contact_handler_success(self) -> None:
+        storage = MemoryStorage()
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        await storage.set_state(key, TelegramFSMStates.awaiting_phone.state)
+
+        profile = UserProfile(
+            telegram_id=100,
+            chatwoot_user_id=10,
+            chatwoot_account_id=1,
+            role=UserRole.AGENT,
+        )
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases(auth_by_phone_result=profile)
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        )
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        bot = make_mock_bot(bot_id=42)
+
+        contact_msg = make_contact_message(user_id=100, contact_user_id=100, phone="+79001234567")
+        update = make_update(contact_msg)
+        await dp.feed_update(bot, update)
+
+        mock_auth.execute.assert_called_once_with(telegram_id=100, phone="+79001234567")
+        state = await storage.get_state(key)
+        assert state is None
+
+    async def test_contact_handler_wrong_user_id(self) -> None:
+        storage = MemoryStorage()
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        await storage.set_state(key, TelegramFSMStates.awaiting_phone.state)
+
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases()
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        )
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        bot = make_mock_bot(bot_id=42)
+
+        # contact_user_id differs from user_id (200 vs 100)
+        contact_msg = make_contact_message(user_id=100, contact_user_id=200, phone="+79001234567")
+        update = make_update(contact_msg)
+        await dp.feed_update(bot, update)
+
+        # auth not called since contact belongs to another user
+        mock_auth.execute.assert_not_called()
+        # State remains awaiting_phone
+        state = await storage.get_state(key)
+        assert state == TelegramFSMStates.awaiting_phone.state
+
+    async def test_contact_handler_not_found(self) -> None:
+        storage = MemoryStorage()
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        await storage.set_state(key, TelegramFSMStates.awaiting_phone.state)
+
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases(auth_by_phone_result=None)
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        )
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        bot = make_mock_bot(bot_id=42)
+
+        contact_msg = make_contact_message(user_id=100, contact_user_id=100, phone="+79009999999")
+        update = make_update(contact_msg)
+        await dp.feed_update(bot, update)
+
+        mock_auth.execute.assert_called_once_with(telegram_id=100, phone="+79009999999")
+        # State cleared even on failure
+        state = await storage.get_state(key)
+        assert state is None
+
+    async def test_register_phone_success(self) -> None:
+        storage = MemoryStorage()
+        admin_profile = UserProfile(
+            telegram_id=100,
+            chatwoot_user_id=1,
+            chatwoot_account_id=5,
+            role=UserRole.ADMIN,
+        )
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases(
+            register_phone_result=True,
+            user_port_profile=admin_profile,
+        )
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        )
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        bot = make_mock_bot(bot_id=42)
+
+        update = make_update(make_message(user_id=100, text="/register_phone +79001234567 50"))
+        await dp.feed_update(bot, update)
+
+        mock_reg.execute.assert_called_once_with(
+            requester_telegram_id=100,
+            phone="+79001234567",
+            chatwoot_user_id=50,
+            chatwoot_account_id=5,
+        )
+
+    async def test_register_phone_bad_format(self) -> None:
+        storage = MemoryStorage()
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases()
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        )
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        bot = make_mock_bot(bot_id=42)
+
+        # Too few args
+        update = make_update(make_message(user_id=100, text="/register_phone +79001234567"))
+        await dp.feed_update(bot, update)
+
+        mock_reg.execute.assert_not_called()
+
+    async def test_register_phone_no_permission(self) -> None:
+        storage = MemoryStorage()
+        (
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        ) = self._make_use_cases(
+            register_phone_result=False,
+            user_port_profile=None,  # no profile = no admin
+        )
+        router = create_router(
+            mock_start, mock_add_text, mock_add_voice, mock_trigger, mock_cancel,
+            mock_auth, mock_reg, mock_user_port,
+        )
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        bot = make_mock_bot(bot_id=42)
+
+        update = make_update(make_message(user_id=100, text="/register_phone +79001234567 50"))
+        await dp.feed_update(bot, update)
+
+        # register_phone.execute not called because admin_profile is None
+        mock_reg.execute.assert_not_called()

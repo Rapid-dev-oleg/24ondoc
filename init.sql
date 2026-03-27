@@ -18,6 +18,15 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Предварительная регистрация по телефону (PendingUser)
+CREATE TABLE IF NOT EXISTS pending_users (
+    phone VARCHAR(20) PRIMARY KEY,
+    chatwoot_user_id INTEGER UNIQUE NOT NULL,
+    chatwoot_account_id INTEGER NOT NULL,
+    role VARCHAR(20) DEFAULT 'agent' CHECK (role IN ('agent', 'supervisor', 'admin')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Сессии черновиков (DraftSession, TTL 24ч)
 CREATE TABLE IF NOT EXISTS draft_sessions (
     session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
