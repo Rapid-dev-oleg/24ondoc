@@ -23,6 +23,9 @@ jobs:
       - name: Ruff check
         working-directory: backend
         run: ruff check src/
+      - name: Ruff format check
+        working-directory: backend
+        run: ruff format --check src/
       - name: Mypy
         working-directory: backend
         run: mypy src/ --strict
