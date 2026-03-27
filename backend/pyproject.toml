@@ -60,8 +60,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["src"]
-addopts = "--cov=src/telegram_ingestion --cov-report=term-missing --cov-fail-under=80"
+pythonpath = ["src"]
+addopts = "--cov=src/chatwoot_integration --cov-report=term-missing --cov-fail-under=80"
 
 [tool.coverage.run]
-source = ["src/telegram_ingestion"]
+source = ["src/chatwoot_integration"]
 omit = ["*/tests/*", "*/__init__.py"]
