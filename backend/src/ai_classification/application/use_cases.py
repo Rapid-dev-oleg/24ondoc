@@ -1,4 +1,5 @@
 """AI Classification — Application Use Cases."""
+
 from __future__ import annotations
 
 from ..domain.models import ClassificationResult

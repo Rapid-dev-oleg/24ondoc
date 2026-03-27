@@ -1,4 +1,5 @@
 """Telegram Ingestion — SQLAlchemy UserProfileRepository implementation."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -55,9 +56,7 @@ class SQLAlchemyUserProfileRepository(UserProfileRepository):
             row.is_active = profile.is_active
 
     async def list_active(self) -> list[UserProfile]:
-        result = await self._session.execute(
-            select(UserORM).where(UserORM.is_active.is_(True))
-        )
+        result = await self._session.execute(select(UserORM).where(UserORM.is_active.is_(True)))
         return [self._to_domain(row) for row in result.scalars().all()]
 
     @staticmethod

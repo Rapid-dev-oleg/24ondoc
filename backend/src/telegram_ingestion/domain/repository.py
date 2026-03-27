@@ -1,4 +1,5 @@
 """Telegram Ingestion — Abstract Repositories."""
+
 from __future__ import annotations
 
 import uuid

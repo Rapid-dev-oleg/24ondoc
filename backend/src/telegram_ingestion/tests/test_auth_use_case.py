@@ -1,4 +1,5 @@
 """Tests for phone authorization use cases (TDD)."""
+
 from __future__ import annotations
 
 from ..application.auth_use_case import AuthByPhoneUseCase, RegisterPhoneUseCase, normalize_phone

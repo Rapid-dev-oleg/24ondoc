@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import io
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
@@ -40,7 +41,7 @@ from ..application.use_cases import (
 _TASKS_PAGE_SIZE = 5
 
 
-class TelegramFSMStates(StatesGroup):
+class TelegramFSMStates(StatesGroup):  # type: ignore[misc]
     awaiting_phone = State()
     collecting = State()
     analyzing = State()
@@ -283,7 +284,9 @@ def create_router(
 
 
 def _tasks_list_keyboard(
-    tickets: list, page: int, total: int
+    tickets: list[dict[str, Any]],
+    page: int,
+    total: int,
 ) -> InlineKeyboardMarkup:
     """Клавиатура со списком задач (5 шт.) и навигацией по страницам."""
     buttons: list[list[InlineKeyboardButton]] = []
@@ -312,47 +315,47 @@ def _task_detail_keyboard(
     buttons: list[list[InlineKeyboardButton]] = []
 
     if status == "open" or status == "pending":
-        buttons.append([
-            InlineKeyboardButton(
-                text="✅ Решить", callback_data=f"task_resolve:{task_id}:{assignee_chatwoot_id}"
-            )
-        ])
-    else:
-        buttons.append([
-            InlineKeyboardButton(
-                text="🔓 Открыть", callback_data=f"task_reopen:{task_id}:{assignee_chatwoot_id}"
-            )
-        ])
-
-    buttons.append([
-        InlineKeyboardButton(
-            text="💬 Комментарий", callback_data=f"task_comment:{task_id}"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ Решить", callback_data=f"task_resolve:{task_id}:{assignee_chatwoot_id}"
+                )
+            ]
         )
-    ])
+    else:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="🔓 Открыть", callback_data=f"task_reopen:{task_id}:{assignee_chatwoot_id}"
+                )
+            ]
+        )
+
+    buttons.append(
+        [InlineKeyboardButton(text="💬 Комментарий", callback_data=f"task_comment:{task_id}")]
+    )
 
     if is_supervisor:
-        buttons.append([
-            InlineKeyboardButton(
-                text="👤 Переназначить", callback_data=f"task_reassign_list:{task_id}"
-            )
-        ])
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="👤 Переназначить", callback_data=f"task_reassign_list:{task_id}"
+                )
+            ]
+        )
 
-    buttons.append([
-        InlineKeyboardButton(text="◀ К списку", callback_data="tasks_back")
-    ])
+    buttons.append([InlineKeyboardButton(text="◀ К списку", callback_data="tasks_back")])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _reassign_keyboard(task_id: int, agents: list) -> InlineKeyboardMarkup:
+def _reassign_keyboard(task_id: int, agents: Sequence[Any]) -> InlineKeyboardMarkup:
     buttons: list[list[InlineKeyboardButton]] = []
     for agent in agents:
         label = f"👤 {agent.telegram_id} (cwt:{agent.chatwoot_user_id})"
         cb = f"reassign_to:{task_id}:{agent.chatwoot_user_id}"
         buttons.append([InlineKeyboardButton(text=label, callback_data=cb)])
-    buttons.append([
-        InlineKeyboardButton(text="◀ Отмена", callback_data="tasks_back")
-    ])
+    buttons.append([InlineKeyboardButton(text="◀ Отмена", callback_data="tasks_back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -398,7 +401,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        page = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+        page = int(callback.data.split(":")[1])
         data = await state.get_data()
         tasks = data.get("tasks", [])
         await state.update_data(tasks_page=page)
@@ -415,14 +418,16 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")  # type: ignore[union-attr]
+        parts = callback.data.split(":")
         task_id = int(parts[1])
         assignee_chatwoot_id = int(parts[2])
 
         profile = await user_port.get_profile(callback.from_user.id)
         from ..domain.models import UserRole
+
         is_supervisor = profile is not None and profile.role in (
-            UserRole.SUPERVISOR, UserRole.ADMIN
+            UserRole.SUPERVISOR,
+            UserRole.ADMIN,
         )
 
         data = await state.get_data()
@@ -451,7 +456,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")  # type: ignore[union-attr]
+        parts = callback.data.split(":")
         task_id = int(parts[1])
         assignee_chatwoot_id = int(parts[2]) if parts[2] != "0" else None
 
@@ -473,7 +478,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")  # type: ignore[union-attr]
+        parts = callback.data.split(":")
         task_id = int(parts[1])
         assignee_chatwoot_id = int(parts[2]) if parts[2] != "0" else None
 
@@ -495,7 +500,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+        task_id = int(callback.data.split(":")[1])
         agents = await user_port.list_active_agents()
         keyboard = _reassign_keyboard(task_id, agents)
         await callback.answer()
@@ -510,7 +515,7 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")  # type: ignore[union-attr]
+        parts = callback.data.split(":")
         task_id = int(parts[1])
         target_chatwoot_id = int(parts[2])
 
@@ -531,14 +536,12 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+        task_id = int(callback.data.split(":")[1])
         await state.set_state(TelegramFSMStates.adding_comment)
         await state.update_data(comment_task_id=task_id)
         await callback.answer()
         if isinstance(callback.message, Message):
-            await callback.message.edit_text(
-                f"💬 Введите комментарий к задаче #{task_id}:"
-            )
+            await callback.message.edit_text(f"💬 Введите комментарий к задаче #{task_id}:")
 
     @router.message(TelegramFSMStates.adding_comment, F.text)
     async def handle_comment_text(message: Message, state: FSMContext) -> None:
@@ -577,18 +580,34 @@ def create_tasks_router(
 
 def _call_notification_keyboard(call_id: str) -> InlineKeyboardMarkup:
     """Inline кнопки для уведомления о звонке."""
+    cid = call_id
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Создать тикет", callback_data=f"call_action:{call_id}:create")],
-            [InlineKeyboardButton(text="✏️ Изменить", callback_data=f"call_action:{call_id}:edit")],
-            [InlineKeyboardButton(text="🚫 Игнорировать", callback_data=f"call_action:{call_id}:ignore")],
+            [
+                InlineKeyboardButton(
+                    text="✅ Создать тикет",
+                    callback_data=f"call_action:{cid}:create",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Изменить",
+                    callback_data=f"call_action:{cid}:edit",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🚫 Игнорировать",
+                    callback_data=f"call_action:{cid}:ignore",
+                )
+            ],
         ]
     )
 
 
 def create_call_notification_router(
-    call_repo: "CallRecordRepositoryLike",
-    chatwoot_port: "ChatwootPortLike | None" = None,
+    call_repo: CallRecordRepositoryLike,
+    chatwoot_port: ChatwootPortLike | None = None,
 ) -> Router:
     """Роутер для обработки callback-кнопок уведомления о звонке."""
     router = Router(name="call_notification")
@@ -598,7 +617,7 @@ def create_call_notification_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")  # type: ignore[union-attr]
+        parts = callback.data.split(":")
         if len(parts) < 3:
             await callback.answer("❌ Некорректный callback.")
             return
@@ -644,14 +663,12 @@ def create_call_notification_router(
 
 
 # Type aliases to avoid circular imports
-class CallRecordRepositoryLike:
-    async def get_by_id(self, call_id: str) -> object | None:  # pragma: no cover
-        ...
-
-    async def save(self, record: object) -> None:  # pragma: no cover
-        ...
+@runtime_checkable
+class CallRecordRepositoryLike(Protocol):
+    async def get_by_id(self, call_id: str) -> Any: ...
+    async def save(self, record: Any) -> None: ...
 
 
-class ChatwootPortLike:
-    async def create_ticket_from_call(self, call_id: str) -> None:  # pragma: no cover
-        ...
+@runtime_checkable
+class ChatwootPortLike(Protocol):
+    async def create_ticket_from_call(self, call_id: str) -> None: ...

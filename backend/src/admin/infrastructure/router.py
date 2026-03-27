@@ -1,4 +1,5 @@
 """Admin panel — FastAPI router for /api/admin endpoints."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -79,9 +80,7 @@ async def public_config() -> PublicConfigResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.post(
-    "/api/admin/auth/token", response_model=TokenResponse, status_code=status.HTTP_200_OK
-)
+@router.post("/api/admin/auth/token", response_model=TokenResponse, status_code=status.HTTP_200_OK)
 async def login(body: LoginRequest, request: Request) -> TokenResponse:
     """Issue a JWT for an admin or supervisor user (password login)."""
     settings = get_settings()
@@ -128,9 +127,7 @@ async def login_telegram(body: TelegramAuthRequest, request: Request) -> TokenRe
     try:
         token = await uc.execute(body)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return TokenResponse(access_token=token)
 
 
@@ -146,7 +143,8 @@ async def list_users(request: Request, _: AdminPayload) -> list[UserResponse]:
         SQLAlchemyUserProfileRepository(db_session),
         SQLAlchemyPendingUserRepository(db_session),
     )
-    return await uc.execute()
+    result: list[UserResponse] = await uc.execute()
+    return result
 
 
 @router.post(
@@ -203,7 +201,8 @@ async def deactivate_user(telegram_id: int, request: Request, _: AdminPayload) -
 async def list_pending(request: Request, _: AdminPayload) -> list[PendingUserResponse]:
     db_session = request.state.db_session
     uc = ListPendingUseCase(SQLAlchemyPendingUserRepository(db_session))
-    return await uc.execute()
+    result: list[PendingUserResponse] = await uc.execute()
+    return result
 
 
 @router.post(
@@ -225,9 +224,7 @@ async def delete_pending(phone: str, request: Request, _: AdminPayload) -> None:
     uc = DeletePendingUseCase(SQLAlchemyPendingUserRepository(db_session))
     found = await uc.execute(phone)
     if not found:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Pending user not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending user not found")
 
 
 # ---------------------------------------------------------------------------

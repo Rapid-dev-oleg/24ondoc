@@ -1,13 +1,12 @@
 """Tests for ProcessCallWebhook use case and Telegram notifications (DEV-53)."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from aiogram import Dispatcher
 from aiogram.enums import ChatType
-from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
@@ -20,7 +19,6 @@ from ..application.use_cases import (
 )
 from ..domain.models import CallRecord, CallStatus
 from ..domain.repository import AgentVoiceSampleRepository, CallRecordRepository
-
 
 # ---------- Stubs ----------
 
@@ -98,14 +96,11 @@ def _build_process_call_webhook(
 
     if fetch_audio_raises:
         # Patch _download_audio to raise
-        from unittest.mock import patch
-
-        orig_execute = fetch_audio.execute
 
         async def patched_execute(cr: CallRecord) -> str:
-            raise fetch_audio_raises  # type: ignore[misc]
+            raise fetch_audio_raises
 
-        fetch_audio.execute = patched_execute  # type: ignore[method-assign]
+        fetch_audio.execute = patched_execute  # type: ignore[assignment]
 
     uc = ProcessCallWebhook(
         call_repo=repo,
@@ -125,7 +120,6 @@ def _build_process_call_webhook(
 class TestProcessCallWebhook:
     async def test_process_call_webhook_full_flow(self) -> None:
         """AC: полный flow без ошибок, статус PREVIEW."""
-        import httpx
         from unittest.mock import patch
 
         call = _make_call("t2_full")
@@ -171,7 +165,6 @@ class TestProcessCallWebhook:
 
     async def test_telegram_notification_sent_with_inline_buttons(self) -> None:
         """AC: уведомление с кнопками (notification_port.send called)."""
-        import httpx
         from unittest.mock import patch
 
         call = _make_call("t2_notif")
@@ -228,12 +221,16 @@ def _build_call_router_dp(
     call_record: CallRecord | None = None,
     chatwoot_port: object | None = None,
 ) -> tuple[Dispatcher, StubCallRepo, MemoryStorage]:
-    from telegram_ingestion.infrastructure.bot_handler import create_call_notification_router
+    from telegram_ingestion.infrastructure.bot_handler import (
+        ChatwootPortLike,
+        create_call_notification_router,
+    )
 
     repo = StubCallRepo(call_record)
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
-    router = create_call_notification_router(call_repo=repo, chatwoot_port=chatwoot_port)
+    cw_port: ChatwootPortLike | None = chatwoot_port  # type: ignore[assignment]
+    router = create_call_notification_router(call_repo=repo, chatwoot_port=cw_port)
     dp.include_router(router)
     return dp, repo, storage
 

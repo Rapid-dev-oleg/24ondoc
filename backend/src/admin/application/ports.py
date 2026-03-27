@@ -1,4 +1,5 @@
 """Admin panel — Abstract ports (interfaces to external services)."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

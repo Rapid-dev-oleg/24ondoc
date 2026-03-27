@@ -1,4 +1,5 @@
 """Speech-to-Text — Abstract Repository and Port."""
+
 from __future__ import annotations
 
 import uuid

@@ -1,4 +1,5 @@
 """ATS Processing — MinIO AudioStoragePort adapter."""
+
 from __future__ import annotations
 
 import io

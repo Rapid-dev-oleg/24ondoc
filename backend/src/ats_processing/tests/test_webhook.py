@@ -1,16 +1,15 @@
 """Tests for T2 Webhook handler (DEV-50)."""
+
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from ..domain.models import CallRecord, CallStatus
 from ..domain.repository import CallRecordRepository
 from ..infrastructure.webhook_handler import router
-
 
 # ---------- Helpers ----------
 

@@ -1,16 +1,16 @@
 """Тесты для ChatwootClient и CreateTicketFromSession."""
+
 from __future__ import annotations
 
 import json
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
 from chatwoot_integration.domain.models import CreateTicketCommand, SupportTicket, TicketStatus
 from chatwoot_integration.infrastructure.chatwoot_client import ChatwootClient
-
 
 # ---------------------------------------------------------------------------
 # Фикстуры
@@ -29,7 +29,7 @@ def make_client(redis: AsyncMock | None = None) -> ChatwootClient:
     )
 
 
-def _chatwoot_conversation_response(task_id: int = 42) -> dict:
+def _chatwoot_conversation_response(task_id: int = 42) -> dict[str, object]:
     return {
         "id": task_id,
         "inbox_id": 1,
@@ -40,7 +40,7 @@ def _chatwoot_conversation_response(task_id: int = 42) -> dict:
     }
 
 
-def _chatwoot_conversations_list(task_id: int = 42) -> dict:
+def _chatwoot_conversations_list(task_id: int = 42) -> dict[str, object]:
     return {
         "data": {
             "meta": {"all_count": 1, "mine_count": 1, "assigned_count": 1},
@@ -70,9 +70,7 @@ async def test_create_conversation_success() -> None:
 
     response_data = _chatwoot_conversation_response(task_id=99)
 
-    transport = httpx.MockTransport(
-        lambda req: httpx.Response(200, json=response_data)
-    )
+    transport = httpx.MockTransport(lambda req: httpx.Response(200, json=response_data))
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         with patch.object(client, "_http", http):
             ticket = await client.create_conversation(command)
@@ -210,9 +208,7 @@ async def test_get_conversations_returns_list() -> None:
 
     response_data = _chatwoot_conversations_list(task_id=10)
 
-    transport = httpx.MockTransport(
-        lambda req: httpx.Response(200, json=response_data)
-    )
+    transport = httpx.MockTransport(lambda req: httpx.Response(200, json=response_data))
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         with patch.object(client, "_http", http):
             tickets = await client.get_conversations(assignee_id=5, status="open")
@@ -228,9 +224,7 @@ async def test_get_conversations_empty_on_error() -> None:
     redis = AsyncMock()
     client = make_client(redis)
 
-    transport = httpx.MockTransport(
-        lambda req: httpx.Response(500, json={"error": "fail"})
-    )
+    transport = httpx.MockTransport(lambda req: httpx.Response(500, json={"error": "fail"}))
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         with patch.object(client, "_http", http):
             tickets = await client.get_conversations(assignee_id=5)
@@ -273,9 +267,7 @@ async def test_add_message_retry_and_queue() -> None:
     redis = AsyncMock()
     client = make_client(redis)
 
-    transport = httpx.MockTransport(
-        lambda req: httpx.Response(503, json={"error": "fail"})
-    )
+    transport = httpx.MockTransport(lambda req: httpx.Response(503, json={"error": "fail"}))
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         with patch.object(client, "_http", http):
             await client.add_message(task_id=5, content="test msg", private=False)

@@ -1,4 +1,5 @@
 """Tests for Whisper adapter."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch

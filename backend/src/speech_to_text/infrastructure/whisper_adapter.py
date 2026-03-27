@@ -1,4 +1,5 @@
 """Speech-to-Text — Whisper Adapter (STTPort implementation)."""
+
 from __future__ import annotations
 
 import httpx

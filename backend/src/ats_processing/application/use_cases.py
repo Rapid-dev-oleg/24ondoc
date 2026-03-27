@@ -1,4 +1,5 @@
 """ATS Processing — Application Use Cases."""
+
 from __future__ import annotations
 
 import logging
@@ -37,7 +38,7 @@ class FetchAudioRecording:
         self,
         audio_storage: AudioStoragePort,
         call_repo: CallRecordRepository,
-        stt_port: "STTPortLike | None" = None,
+        stt_port: STTPortLike | None = None,
     ) -> None:
         self._storage = audio_storage
         self._call_repo = call_repo
@@ -79,7 +80,7 @@ class FetchAudioRecording:
 # Type alias (избегаем circular import)
 class STTPortLike:
     async def transcribe(self, audio_bytes: bytes) -> str:  # pragma: no cover
-        ...
+        raise NotImplementedError
 
 
 class IdentifyAgentByVoice:

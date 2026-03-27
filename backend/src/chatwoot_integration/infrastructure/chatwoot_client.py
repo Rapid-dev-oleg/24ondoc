@@ -1,4 +1,5 @@
 """Chatwoot Integration — HTTP client implementing ChatwootPort."""
+
 from __future__ import annotations
 
 import json
@@ -75,11 +76,11 @@ class ChatwootClient(ChatwootPort):
 
     async def _push_to_queue(self, payload: dict[str, Any]) -> None:
         try:
-            await self._redis.rpush(_FAILED_QUEUE, json.dumps(payload))
+            await self._redis.rpush(_FAILED_QUEUE, json.dumps(payload))  # type: ignore[misc]
         except Exception:
             logger.exception("Failed to push to Redis queue: %s", payload)
 
-    async def create_conversation(self, command: CreateTicketCommand) -> SupportTicket | None:
+    async def create_conversation(self, command: CreateTicketCommand) -> SupportTicket | None:  # type: ignore[override]
         """POST /api/v1/accounts/{id}/conversations с retry 3 раза → Redis при неудаче."""
         body: dict[str, Any] = {
             "subject": command.title,
@@ -121,7 +122,8 @@ class ChatwootClient(ChatwootPort):
         decorated = retry_decorator(_do_request)
 
         try:
-            return await decorated()
+            result: SupportTicket = await decorated()
+            return result
         except Exception:
             logger.warning("create_conversation failed after %d attempts, queuing.", attempt)
             await self._push_to_queue(
@@ -157,9 +159,7 @@ class ChatwootClient(ChatwootPort):
         try:
             await decorated()
         except Exception:
-            logger.warning(
-                "update_conversation_status failed after %d attempts, queuing.", attempt
-            )
+            logger.warning("update_conversation_status failed after %d attempts, queuing.", attempt)
             await self._push_to_queue(
                 {
                     "action": "update_conversation_status",
@@ -175,7 +175,7 @@ class ChatwootClient(ChatwootPort):
         page: int = 1,
     ) -> list[SupportTicket]:
         """GET /api/v1/accounts/{id}/conversations — возвращает [] при ошибке."""
-        params = {"status": status, "page": page, "assignee_type": "assigned"}
+        params: dict[str, str | int] = {"status": status, "page": page, "assignee_type": "assigned"}
         try:
             response = await self._http.get(
                 f"{self._api_prefix}/conversations",
@@ -201,9 +201,7 @@ class ChatwootClient(ChatwootPort):
             logger.warning("get_conversations failed for assignee=%d", assignee_id)
             return []
 
-    async def update_conversation_assignee(
-        self, task_id: int, assignee_chatwoot_id: int
-    ) -> None:
+    async def update_conversation_assignee(self, task_id: int, assignee_chatwoot_id: int) -> None:
         """POST /api/v1/accounts/{id}/conversations/{task_id}/assignments с retry → Redis."""
         body = {"assignee_id": assignee_chatwoot_id}
         attempt = 0

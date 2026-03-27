@@ -1,4 +1,5 @@
 """Admin panel — .env file read/write implementation of EnvSettingsPort."""
+
 from __future__ import annotations
 
 import re

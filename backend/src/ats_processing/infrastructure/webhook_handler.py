@@ -1,13 +1,14 @@
 """ATS Processing — T2 Webhook endpoint."""
+
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
 from pydantic import BaseModel
 
-from ..domain.models import CallRecord, CallStatus
+from ..domain.models import CallRecord
 from ..domain.repository import CallRecordRepository
 
 logger = logging.getLogger(__name__)

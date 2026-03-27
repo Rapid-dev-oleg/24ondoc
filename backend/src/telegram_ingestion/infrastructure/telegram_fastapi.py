@@ -1,4 +1,5 @@
 """Telegram Ingestion — FastAPI webhook endpoint bridging to aiogram Dispatcher."""
+
 from __future__ import annotations
 
 import logging
@@ -101,8 +102,14 @@ async def telegram_webhook(
     dp = Dispatcher(storage=storage)
     dp.include_router(
         create_router(
-            start_session, add_text, add_voice, trigger_analysis, cancel_session,
-            auth_by_phone, register_phone_uc, user_port,
+            start_session,
+            add_text,
+            add_voice,
+            trigger_analysis,
+            cancel_session,
+            auth_by_phone,
+            register_phone_uc,
+            user_port,
         )
     )
     dp.include_router(

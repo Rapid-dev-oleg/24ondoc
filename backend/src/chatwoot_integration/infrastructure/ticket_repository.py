@@ -1,4 +1,5 @@
 """Chatwoot Integration — In-memory SupportTicketRepository implementation."""
+
 from __future__ import annotations
 
 from ..domain.models import SupportTicket
@@ -24,9 +25,7 @@ class InMemorySupportTicketRepository(SupportTicketRepository):
     async def get_by_assignee(
         self, telegram_id: int, status: str | None = None
     ) -> list[SupportTicket]:
-        results = [
-            t for t in self._store.values() if t.assignee_telegram_id == telegram_id
-        ]
+        results = [t for t in self._store.values() if t.assignee_telegram_id == telegram_id]
         if status:
             results = [t for t in results if t.status.value == status]
         return results

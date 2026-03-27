@@ -1,4 +1,5 @@
 """Tests for ATS Processing use cases (DEV-51, DEV-52)."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +11,6 @@ from ..application.ports import AudioStoragePort, VoiceEmbeddingPort
 from ..application.use_cases import FetchAudioRecording, IdentifyAgentByVoice
 from ..domain.models import CallRecord, CallStatus
 from ..domain.repository import AgentVoiceSampleRepository, CallRecordRepository
-
 
 # ---------- Stubs ----------
 

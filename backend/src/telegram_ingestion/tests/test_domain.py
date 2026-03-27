@@ -1,4 +1,5 @@
 """Tests for TelegramIngestion domain models."""
+
 import pytest
 
 from ..domain.models import (
@@ -71,9 +72,7 @@ class TestDraftSession:
 
     def test_complete_analysis_fails_if_not_analyzing(self) -> None:
         session = make_session()
-        result = AIResult(
-            title="t", description="d", category="bug", priority="low"
-        )
+        result = AIResult(title="t", description="d", category="bug", priority="low")
         with pytest.raises(ValueError, match="Cannot complete analysis"):
             session.complete_analysis(result)
 

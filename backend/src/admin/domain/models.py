@@ -1,9 +1,10 @@
 """Admin panel — Pydantic schemas for request/response."""
+
 from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel
 
 from telegram_ingestion.domain.models import UserRole
 

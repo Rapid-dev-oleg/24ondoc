@@ -1,4 +1,5 @@
 """Telegram Ingestion — SQLAlchemy PendingUserRepository implementation."""
+
 from __future__ import annotations
 
 from sqlalchemy import select

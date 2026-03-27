@@ -1,4 +1,5 @@
 """ATS Processing — Abstract Repository."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -24,8 +25,6 @@ class AgentVoiceSampleRepository(ABC):
     """Repository for agent voice embeddings (pgvector)."""
 
     @abstractmethod
-    async def find_closest(
-        self, embedding: list[float]
-    ) -> tuple[int, float] | None:
+    async def find_closest(self, embedding: list[float]) -> tuple[int, float] | None:
         """Return (agent_id, score) of the closest embedding, or None if empty."""
         ...

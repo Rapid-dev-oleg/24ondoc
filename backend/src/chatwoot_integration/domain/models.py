@@ -1,14 +1,15 @@
 """Chatwoot Integration — Domain Models."""
+
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class TicketStatus(str, Enum):
+class TicketStatus(StrEnum):
     OPEN = "open"
     PENDING = "pending"
     RESOLVED = "resolved"
@@ -39,12 +40,12 @@ class SupportTicket(BaseModel):
     priority: str = "medium"
     title: str = ""
     permalink: str = ""
-    last_sync: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_sync: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def update_status(self, new_status: TicketStatus) -> None:
         self.status = new_status
-        self.last_sync = datetime.now(timezone.utc)
+        self.last_sync = datetime.now(UTC)
 
     def reassign(self, telegram_id: int) -> None:
         self.assignee_telegram_id = telegram_id
-        self.last_sync = datetime.now(timezone.utc)
+        self.last_sync = datetime.now(UTC)

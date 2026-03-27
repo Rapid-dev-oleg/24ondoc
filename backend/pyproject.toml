@@ -57,6 +57,16 @@ select = ["E", "F", "I", "UP", "B", "C4"]
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
+explicit_package_bases = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = [
+    "telegram_ingestion.infrastructure.bot_handler",
+    "ats_processing.application.use_cases",
+    "ai_classification.infrastructure.openrouter_adapter",
+]
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1,15 +1,15 @@
 """Admin panel — TDD tests for use cases."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import hashlib
+import hmac
+import time
+from datetime import UTC, datetime
 
 import pytest
 
 from admin.application.ports import ChatwootAdminPort, EnvSettingsPort
-import hashlib
-import hmac
-import time
-
 from admin.application.use_cases import (
     AddPendingUseCase,
     CreateOperatorUseCase,
@@ -34,7 +34,6 @@ from admin.domain.models import (
 from admin.infrastructure.auth import create_access_token, decode_access_token
 from telegram_ingestion.domain.models import PendingUser, UserProfile, UserRole
 from telegram_ingestion.domain.repository import PendingUserRepository, UserProfileRepository
-
 
 # ---------------------------------------------------------------------------
 # In-memory stubs (reused across tests)
@@ -113,7 +112,7 @@ def _make_user(
         chatwoot_account_id=1,
         role=role,
         is_active=is_active,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
 
@@ -123,7 +122,7 @@ def _make_pending(phone: str = "79001234567", chatwoot_user_id: int = 20) -> Pen
         chatwoot_user_id=chatwoot_user_id,
         chatwoot_account_id=1,
         role=UserRole.AGENT,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
 
@@ -364,9 +363,7 @@ class TestAddPendingUseCase:
         await pending_repo.save(_make_pending("79001234567", chatwoot_user_id=10))
 
         uc = AddPendingUseCase(pending_repo)
-        req = AddPendingRequest(
-            phone="79001234567", chatwoot_user_id=99, chatwoot_account_id=1
-        )
+        req = AddPendingRequest(phone="79001234567", chatwoot_user_id=99, chatwoot_account_id=1)
         result = await uc.execute(req)
 
         assert result.chatwoot_user_id == 99
@@ -473,7 +470,7 @@ def _make_tg_request(
     telegram_id: int = 42,
     bot_token: str = _BOT_TOKEN,
     auth_date: int | None = None,
-    extra_fields: dict | None = None,
+    extra_fields: dict[str, str] | None = None,
 ) -> TelegramAuthRequest:
     """Build a TelegramAuthRequest with a valid HMAC hash for the given bot_token."""
     if auth_date is None:
@@ -567,9 +564,7 @@ class TestLoginWithTelegramUseCase:
 
     async def test_invalid_hash_raises(self) -> None:
         user_repo = InMemoryUserProfileRepository()
-        req = TelegramAuthRequest(
-            id=42, first_name="X", auth_date=int(time.time()), hash="invalid"
-        )
+        req = TelegramAuthRequest(id=42, first_name="X", auth_date=int(time.time()), hash="invalid")
         uc = LoginWithTelegramUseCase(user_repo, self._JWT_SECRET, _BOT_TOKEN)
         with pytest.raises(ValueError, match="signature"):
             await uc.execute(req)
@@ -584,9 +579,7 @@ class TestLoginWithTelegramUseCase:
 
     async def test_user_not_found_raises(self) -> None:
         req = _make_tg_request(telegram_id=999)
-        uc = LoginWithTelegramUseCase(
-            InMemoryUserProfileRepository(), self._JWT_SECRET, _BOT_TOKEN
-        )
+        uc = LoginWithTelegramUseCase(InMemoryUserProfileRepository(), self._JWT_SECRET, _BOT_TOKEN)
         with pytest.raises(ValueError, match="not found"):
             await uc.execute(req)
 

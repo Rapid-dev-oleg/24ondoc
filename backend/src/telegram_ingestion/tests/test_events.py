@@ -1,8 +1,9 @@
 """Unit-тесты для domain events TelegramIngestion."""
+
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pytest
 
@@ -75,9 +76,7 @@ class TestDomainEvents:
 
 class TestUserProfileModel:
     def test_user_profile_default_role(self) -> None:
-        profile = UserProfile(
-            telegram_id=1, chatwoot_user_id=2, chatwoot_account_id=1
-        )
+        profile = UserProfile(telegram_id=1, chatwoot_user_id=2, chatwoot_account_id=1)
         assert profile.role == UserRole.AGENT
 
     def test_user_role_supervisor_value(self) -> None:
@@ -87,7 +86,5 @@ class TestUserProfileModel:
         assert UserRole.ADMIN.value == "admin"
 
     def test_user_profile_is_active_default(self) -> None:
-        profile = UserProfile(
-            telegram_id=1, chatwoot_user_id=2, chatwoot_account_id=1
-        )
+        profile = UserProfile(telegram_id=1, chatwoot_user_id=2, chatwoot_account_id=1)
         assert profile.is_active is True

@@ -1,4 +1,5 @@
 """Tests for ATS Processing domain models."""
+
 import pytest
 
 from ..domain.models import CallRecord, CallStatus

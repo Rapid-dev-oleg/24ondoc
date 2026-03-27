@@ -1,4 +1,5 @@
 """Telegram Ingestion — Phone Authorization Use Cases."""
+
 from __future__ import annotations
 
 from ..domain.models import PendingUser, UserProfile, UserRole

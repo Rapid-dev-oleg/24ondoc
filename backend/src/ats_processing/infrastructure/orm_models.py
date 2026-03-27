@@ -1,15 +1,16 @@
 """ATS Processing — SQLAlchemy ORM Models."""
+
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, Float, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-class ATSBase(DeclarativeBase):
+class ATSBase(DeclarativeBase):  # type: ignore[misc]
     pass
 
 
@@ -29,5 +30,5 @@ class CallRecordORM(ATSBase):
     session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )

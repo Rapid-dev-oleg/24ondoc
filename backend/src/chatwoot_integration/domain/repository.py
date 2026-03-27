@@ -1,4 +1,5 @@
 """Chatwoot Integration — Abstract Repository and Port."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

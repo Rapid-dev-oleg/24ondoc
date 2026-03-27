@@ -1,7 +1,8 @@
 """Admin panel — JWT authentication utilities and FastAPI dependency."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -19,7 +20,7 @@ bearer_scheme = HTTPBearer()
 
 def create_access_token(telegram_id: int, role: str, secret: str) -> str:
     """Issue a JWT containing telegram_id and role claims."""
-    expire = datetime.now(timezone.utc) + timedelta(hours=_TOKEN_EXPIRE_HOURS)
+    expire = datetime.now(UTC) + timedelta(hours=_TOKEN_EXPIRE_HOURS)
     payload: dict[str, Any] = {
         "sub": str(telegram_id),
         "role": role,
@@ -39,8 +40,8 @@ def decode_access_token(token: str, secret: str) -> dict[str, Any]:
 
 
 async def require_admin_role(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    settings: Settings = Depends(get_settings),
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),  # noqa: B008
+    settings: Settings = Depends(get_settings),  # noqa: B008
 ) -> dict[str, Any]:
     """FastAPI dependency: verify JWT and require admin or supervisor role."""
     try:

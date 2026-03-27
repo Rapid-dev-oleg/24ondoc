@@ -1,4 +1,5 @@
 """Telegram Ingestion — UserProfilePort adapter over UserProfileRepository."""
+
 from __future__ import annotations
 
 from ..application.ports import UserProfilePort

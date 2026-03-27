@@ -1,8 +1,9 @@
 """Telegram Ingestion — SQLAlchemy + Redis DraftSessionRepository implementation."""
+
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from redis.asyncio import Redis as AsyncRedis
@@ -43,10 +44,8 @@ class SQLAlchemyRedisDraftSessionRepository(DraftSessionRepository):
             select(DraftSessionORM)
             .where(
                 DraftSessionORM.user_id == user_id,
-                DraftSessionORM.status.in_(
-                    ["collecting", "analyzing", "preview", "editing"]
-                ),
-                DraftSessionORM.expires_at > datetime.now(timezone.utc),
+                DraftSessionORM.status.in_(["collecting", "analyzing", "preview", "editing"]),
+                DraftSessionORM.expires_at > datetime.now(UTC),
             )
             .order_by(DraftSessionORM.created_at.desc())
             .limit(1)
@@ -62,9 +61,7 @@ class SQLAlchemyRedisDraftSessionRepository(DraftSessionRepository):
             row.status = session.status.value
             row.content_blocks = [b.model_dump(mode="json") for b in session.content_blocks]
             row.assembled_text = session.assembled_text
-            row.ai_result = (
-                session.ai_result.model_dump(mode="json") if session.ai_result else None
-            )
+            row.ai_result = session.ai_result.model_dump(mode="json") if session.ai_result else None
             row.preview_message_id = session.preview_message_id
             row.updated_at = session.updated_at
         redis_key = f"{_REDIS_KEY_PREFIX}{session.user_id}"
@@ -79,12 +76,8 @@ class SQLAlchemyRedisDraftSessionRepository(DraftSessionRepository):
 
     @staticmethod
     def _to_domain(row: DraftSessionORM) -> DraftSession:
-        blocks_raw: list[dict[str, Any]] = cast(
-            list[dict[str, Any]], row.content_blocks or []
-        )
-        ai_raw: dict[str, Any] | None = cast(
-            "dict[str, Any] | None", row.ai_result
-        )
+        blocks_raw: list[dict[str, Any]] = cast(list[dict[str, Any]], row.content_blocks or [])
+        ai_raw: dict[str, Any] | None = cast("dict[str, Any] | None", row.ai_result)
         return DraftSession(
             session_id=row.session_id,
             user_id=row.user_id,
@@ -110,9 +103,7 @@ class SQLAlchemyRedisDraftSessionRepository(DraftSessionRepository):
             call_record_id=session.call_record_id,
             content_blocks=[b.model_dump(mode="json") for b in session.content_blocks],
             assembled_text=session.assembled_text,
-            ai_result=(
-                session.ai_result.model_dump(mode="json") if session.ai_result else None
-            ),
+            ai_result=(session.ai_result.model_dump(mode="json") if session.ai_result else None),
             preview_message_id=session.preview_message_id,
             created_at=session.created_at,
             updated_at=session.updated_at,

@@ -1,26 +1,21 @@
 """Unit-тесты для UserProfileRepository и DraftSessionRepository (mock DB/Redis)."""
+
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone, timedelta
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call
-
-import pytest
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 
 from ..domain.models import (
-    AIResult,
     ContentBlock,
     DraftSession,
     SessionStatus,
-    SourceType,
     UserProfile,
     UserRole,
 )
 from ..infrastructure.draft_session_repository import SQLAlchemyRedisDraftSessionRepository
 from ..infrastructure.orm_models import DraftSessionORM, UserORM
 from ..infrastructure.user_profile_repository import SQLAlchemyUserProfileRepository
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -37,7 +32,7 @@ def make_user_orm(telegram_id: int = 111) -> UserORM:
     row.voice_sample_url = None
     row.settings = {}
     row.is_active = True
-    row.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    row.created_at = datetime(2026, 1, 1, tzinfo=UTC)
     return row
 
 
@@ -52,9 +47,9 @@ def make_draft_orm(session_id: uuid.UUID | None = None, user_id: int = 111) -> D
     row.assembled_text = None
     row.ai_result = None
     row.preview_message_id = None
-    row.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    row.updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    row.expires_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    row.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    row.updated_at = datetime(2026, 1, 1, tzinfo=UTC)
+    row.expires_at = datetime(2026, 1, 2, tzinfo=UTC)
     return row
 
 
@@ -291,9 +286,7 @@ class TestSQLAlchemyRedisDraftSessionRepository:
         await repo.save(draft)
 
         session.add.assert_called_once()
-        redis.set.assert_called_once_with(
-            f"draft:active:111", str(draft.session_id), ex=86400
-        )
+        redis.set.assert_called_once_with("draft:active:111", str(draft.session_id), ex=86400)
 
     async def test_save_updates_existing_session_and_sets_redis(self) -> None:
         sid = uuid.uuid4()
@@ -308,9 +301,7 @@ class TestSQLAlchemyRedisDraftSessionRepository:
         await repo.save(draft)
 
         session.add.assert_not_called()
-        assert row.content_blocks == [
-            cb for cb in [draft.content_blocks[0].model_dump(mode="json")]
-        ]
+        assert row.content_blocks == [draft.content_blocks[0].model_dump(mode="json")]
         redis.set.assert_called_once()
 
     async def test_delete_removes_from_db_and_redis(self) -> None:
@@ -341,7 +332,12 @@ class TestSQLAlchemyRedisDraftSessionRepository:
         sid = uuid.uuid4()
         row = make_draft_orm(session_id=sid)
         row.content_blocks = [
-            {"type": "text", "content": "Тест", "file_id": None, "timestamp": "2026-01-01T00:00:00+00:00"}
+            {
+                "type": "text",
+                "content": "Тест",
+                "file_id": None,
+                "timestamp": "2026-01-01T00:00:00+00:00",
+            }
         ]
 
         draft = SQLAlchemyRedisDraftSessionRepository._to_domain(row)

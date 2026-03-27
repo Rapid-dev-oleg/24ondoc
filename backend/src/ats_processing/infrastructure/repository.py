@@ -1,8 +1,6 @@
 """ATS Processing — SQLAlchemy CallRecord Repository."""
-from __future__ import annotations
 
-import uuid
-from datetime import datetime, timezone
+from __future__ import annotations
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

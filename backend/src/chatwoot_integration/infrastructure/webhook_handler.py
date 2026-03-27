@@ -1,10 +1,11 @@
 """Chatwoot Integration — FastAPI webhook endpoint."""
+
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 
 from chatwoot_integration.domain.models import TicketStatus
 from chatwoot_integration.domain.repository import SupportTicketRepository

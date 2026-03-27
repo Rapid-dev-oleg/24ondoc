@@ -20,11 +20,12 @@ class GetMyTasksUseCase:
         profile = await self._user_port.get_profile(telegram_id)
         if profile is None:
             return []
-        return await self._chatwoot_port.get_conversations(
+        result: list[SupportTicket] = await self._chatwoot_port.get_conversations(
             assignee_id=profile.chatwoot_user_id,
             status="open",
             page=page,
         )
+        return result
 
 
 class UpdateTaskStatusUseCase:

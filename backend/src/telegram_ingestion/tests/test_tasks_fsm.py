@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from aiogram import Dispatcher
 from aiogram.enums import ChatType
 from aiogram.fsm.storage.base import StorageKey
@@ -62,8 +61,8 @@ class InMemoryChatwootPort(ChatwootPort):
         self.assignee_updates: list[tuple[int, int]] = []
         self.messages: list[tuple[int, str, bool]] = []
 
-    async def create_conversation(self, command):  # type: ignore[override]
-        return None  # type: ignore[return-value]
+    async def create_conversation(self, command: object) -> SupportTicket:
+        raise NotImplementedError
 
     async def update_conversation_status(self, task_id: int, status: str) -> None:
         self.status_updates.append((task_id, status))
@@ -73,9 +72,7 @@ class InMemoryChatwootPort(ChatwootPort):
     ) -> list[SupportTicket]:
         return self._tickets
 
-    async def update_conversation_assignee(
-        self, task_id: int, assignee_chatwoot_id: int
-    ) -> None:
+    async def update_conversation_assignee(self, task_id: int, assignee_chatwoot_id: int) -> None:
         self.assignee_updates.append((task_id, assignee_chatwoot_id))
 
     async def add_message(self, task_id: int, content: str, private: bool = True) -> None:
@@ -127,7 +124,7 @@ class TestGetMyTasksUseCase:
 
     async def test_passes_page_to_chatwoot(self) -> None:
         profile = _make_agent_profile()
-        chatwoot = InMemoryChatwootPort([_make_ticket()])
+        InMemoryChatwootPort([_make_ticket()])
 
         class TrackingChatwoot(InMemoryChatwootPort):
             def __init__(self) -> None:
@@ -149,7 +146,9 @@ class TestGetMyTasksUseCase:
         profile = _make_agent_profile()
 
         class FailingChatwoot(InMemoryChatwootPort):
-            async def get_conversations(self, *args, **kwargs) -> list[SupportTicket]:  # type: ignore[override]
+            async def get_conversations(
+                self, assignee_id: int, status: str = "open", page: int = 1
+            ) -> list[SupportTicket]:
                 return []
 
         uc = GetMyTasksUseCase(StubUserProfilePort(profile), FailingChatwoot())
@@ -235,42 +234,30 @@ class TestReassignTaskUseCase:
         )
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
-        ok = await uc.execute(
-            requester_telegram_id=100, task_id=1, target_chatwoot_user_id=20
-        )
+        ok = await uc.execute(requester_telegram_id=100, task_id=1, target_chatwoot_user_id=20)
         assert ok is True
         assert (1, 20) in chatwoot.assignee_updates
 
     async def test_admin_can_reassign(self) -> None:
-        profile = _make_agent_profile(
-            telegram_id=100, chatwoot_user_id=10, role=UserRole.ADMIN
-        )
+        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10, role=UserRole.ADMIN)
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
-        ok = await uc.execute(
-            requester_telegram_id=100, task_id=2, target_chatwoot_user_id=30
-        )
+        ok = await uc.execute(requester_telegram_id=100, task_id=2, target_chatwoot_user_id=30)
         assert ok is True
         assert (2, 30) in chatwoot.assignee_updates
 
     async def test_agent_cannot_reassign(self) -> None:
-        profile = _make_agent_profile(
-            telegram_id=100, chatwoot_user_id=10, role=UserRole.AGENT
-        )
+        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10, role=UserRole.AGENT)
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
-        ok = await uc.execute(
-            requester_telegram_id=100, task_id=1, target_chatwoot_user_id=20
-        )
+        ok = await uc.execute(requester_telegram_id=100, task_id=1, target_chatwoot_user_id=20)
         assert ok is False
         assert len(chatwoot.assignee_updates) == 0
 
     async def test_returns_false_if_requester_not_found(self) -> None:
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(None), chatwoot)
-        ok = await uc.execute(
-            requester_telegram_id=999, task_id=1, target_chatwoot_user_id=20
-        )
+        ok = await uc.execute(requester_telegram_id=999, task_id=1, target_chatwoot_user_id=20)
         assert ok is False
 
 
@@ -438,7 +425,10 @@ class TestMyTasksBotHandlers:
 
         # Pre-set state and data for callback
         await storage.set_state(key, TelegramFSMStates.tasks_list.state)
-        serialized = [{"task_id": t.task_id, "title": t.title, "status": "open", "assignee_chatwoot_id": 10} for t in tickets]
+        serialized = [
+            {"task_id": t.task_id, "title": t.title, "status": "open", "assignee_chatwoot_id": 10}
+            for t in tickets
+        ]
         await storage.set_data(key, {"tasks": serialized, "tasks_page": 0})
 
         # Navigate to page 1
@@ -459,7 +449,14 @@ class TestMyTasksBotHandlers:
         key = _storage_key(100)
 
         # Pre-set state with tasks data
-        serialized = [{"task_id": 7, "title": "Детальная задача", "status": "open", "assignee_chatwoot_id": 10}]
+        serialized = [
+            {
+                "task_id": 7,
+                "title": "Детальная за��ача",
+                "status": "open",
+                "assignee_chatwoot_id": 10,
+            }
+        ]
         await storage.set_state(key, TelegramFSMStates.tasks_list.state)
         await storage.set_data(key, {"tasks": serialized, "tasks_page": 0})
 

@@ -1,4 +1,5 @@
 """AI Classification — OpenRouter Adapter (AIClassificationPort implementation)."""
+
 from __future__ import annotations
 
 import json
@@ -84,12 +85,19 @@ class OpenRouterAdapter(AIClassificationPort):
             raise CircuitBreakerOpenError("OpenRouter circuit breaker is open")
 
         try:
-            result = await self._classify_with_retry(text, self._primary_model)
+            primary_result: ClassificationResult = await self._classify_with_retry(
+                text,
+                self._primary_model,
+            )
             self._circuit_breaker.record_success()
-            return result
+            return primary_result
         except Exception:
             self._circuit_breaker.record_failure()
-            return await self._classify_with_retry(text, self._fallback_model)
+            fallback_result: ClassificationResult = await self._classify_with_retry(
+                text,
+                self._fallback_model,
+            )
+            return fallback_result
 
     @retry(
         retry=retry_if_exception_type(httpx.HTTPError),

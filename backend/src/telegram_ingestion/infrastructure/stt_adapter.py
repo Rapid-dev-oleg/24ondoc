@@ -1,4 +1,5 @@
 """Telegram Ingestion — STTPort adapter over OpenAI-compatible API (OpenRouter)."""
+
 from __future__ import annotations
 
 import os

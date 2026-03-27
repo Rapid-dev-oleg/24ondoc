@@ -1,8 +1,10 @@
 """FastAPI application entry point."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import cast
 
 import structlog
 from aiogram import Bot
@@ -104,13 +106,13 @@ app.add_middleware(
 @app.middleware("http")
 async def db_session_middleware(request: Request, call_next: object) -> Response:
     """Create a per-request SQLAlchemy session and inject repos into request.state."""
+    from collections.abc import Awaitable, Callable
+
+    _call_next = cast(Callable[[Request], Awaitable[Response]], call_next)
     # Skip lifespan-internal requests that don't need DB
     session_factory = getattr(request.app.state, "session_factory", None)
     if session_factory is None:
-        from collections.abc import Callable
-        return await (call_next)(request)  # type: ignore[arg-type]
-
-    from collections.abc import Callable
+        return await _call_next(request)
 
     async with session_factory() as session:
         async with session.begin():
@@ -118,7 +120,7 @@ async def db_session_middleware(request: Request, call_next: object) -> Response
             request.state.call_repo = CallRecordRepositoryImpl(session)
             request.state.ticket_repo = request.app.state.ticket_repo
             request.state.t2_webhook_secret = request.app.state.settings.t2_webhook_secret
-            response: Response = await (call_next)(request)  # type: ignore[arg-type]
+            response: Response = await _call_next(request)
     return response
 
 
@@ -134,6 +136,6 @@ async def metrics() -> dict[str, str]:
 
 # Handlers already define full paths — include WITHOUT extra prefix
 app.include_router(admin_router)  # /api/admin/*
-app.include_router(t2_router)     # POST /webhook/t2/call
-app.include_router(cw_router)     # POST /webhook/chatwoot
-app.include_router(tg_router)     # POST /webhook/telegram
+app.include_router(t2_router)  # POST /webhook/t2/call
+app.include_router(cw_router)  # POST /webhook/chatwoot
+app.include_router(tg_router)  # POST /webhook/telegram

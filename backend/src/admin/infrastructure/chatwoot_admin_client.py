@@ -1,4 +1,5 @@
 """Admin panel — Chatwoot admin client for creating agents."""
+
 from __future__ import annotations
 
 import json
@@ -38,4 +39,4 @@ class ChatwootAdminClient(ChatwootAdminPort):
                 f"Chatwoot agent creation failed {response.status_code}: {response.text}"
             )
         data: dict[str, object] = response.json()
-        return int(data["id"])  # type: ignore[arg-type]
+        return int(str(data["id"]))

@@ -1,4 +1,5 @@
 """Tests for OpenRouter adapter."""
+
 from __future__ import annotations
 
 import json
@@ -10,7 +11,7 @@ import pytest
 from ..domain.models import Category, Priority
 from ..infrastructure.openrouter_adapter import CircuitBreakerOpenError, OpenRouterAdapter
 
-_VALID_PAYLOAD = {
+_VALID_PAYLOAD: dict[str, object] = {
     "title": "Тест",
     "description": "Описание",
     "category": "complaint",
@@ -21,7 +22,7 @@ _VALID_PAYLOAD = {
 }
 
 
-def _make_response(content: dict) -> MagicMock:
+def _make_response(content: dict[str, object]) -> MagicMock:
     resp = MagicMock()
     resp.json.return_value = {"choices": [{"message": {"content": json.dumps(content)}}]}
     resp.raise_for_status = MagicMock()
@@ -48,7 +49,8 @@ async def test_classify_uses_fallback_on_primary_failure() -> None:
     adapter = OpenRouterAdapter(api_key="test-key")
 
     async def fake_post(url: str, **kwargs: object) -> MagicMock:
-        model = kwargs.get("json", {}).get("model", "")  # type: ignore[union-attr]
+        json_data: dict[str, object] = kwargs.get("json", {})  # type: ignore[assignment]
+        model = json_data.get("model", "")
         if "claude" in str(model):
             raise httpx.HTTPStatusError("fail", request=MagicMock(), response=MagicMock())
         return _make_response(_VALID_PAYLOAD)

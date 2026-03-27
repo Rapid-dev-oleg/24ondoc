@@ -1,16 +1,15 @@
 """Tests for CallRecord ORM + Repository (DEV-49)."""
+
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ..domain.models import CallRecord, CallStatus
 from ..infrastructure.orm_models import CallRecordORM
 from ..infrastructure.repository import CallRecordRepositoryImpl
-
 
 # ---------- Helpers ----------
 
@@ -25,7 +24,7 @@ def _make_call(
         audio_url="https://t2.example.com/rec/001.mp3",
         status=status,
         caller_phone=caller_phone,
-        created_at=datetime(2026, 3, 27, 12, 0, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 3, 27, 12, 0, 0, tzinfo=UTC),
     )
 
 
@@ -42,7 +41,7 @@ def _make_orm(call_id: str = "t2_001", status: str = "new") -> CallRecordORM:
     row.voice_match_score = None
     row.status = status
     row.session_id = None
-    row.created_at = datetime(2026, 3, 27, 12, 0, 0, tzinfo=timezone.utc)
+    row.created_at = datetime(2026, 3, 27, 12, 0, 0, tzinfo=UTC)
     return row
 
 
@@ -168,9 +167,9 @@ class TestCallRecordRepositoryFindByPhone:
     async def test_find_recent_by_phone_returns_sorted(self) -> None:
         """AC: поиск по телефону возвращает отсортированные записи."""
         orm1 = _make_orm("t2_001")
-        orm1.created_at = datetime(2026, 3, 27, 10, 0, 0, tzinfo=timezone.utc)
+        orm1.created_at = datetime(2026, 3, 27, 10, 0, 0, tzinfo=UTC)
         orm2 = _make_orm("t2_002")
-        orm2.created_at = datetime(2026, 3, 27, 11, 0, 0, tzinfo=timezone.utc)
+        orm2.created_at = datetime(2026, 3, 27, 11, 0, 0, tzinfo=UTC)
 
         session = AsyncMock()
         scalars_mock = MagicMock()

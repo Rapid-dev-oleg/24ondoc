@@ -1,4 +1,5 @@
 """Admin panel — Application use cases."""
+
 from __future__ import annotations
 
 import hashlib
@@ -17,7 +18,7 @@ from admin.domain.models import (
     UserResponse,
 )
 from telegram_ingestion.application.auth_use_case import normalize_phone
-from telegram_ingestion.domain.models import PendingUser, UserProfile, UserRole
+from telegram_ingestion.domain.models import PendingUser, UserRole
 from telegram_ingestion.domain.repository import PendingUserRepository, UserProfileRepository
 
 
@@ -292,4 +293,5 @@ class LoginWithTelegramUseCase:
 
         from admin.infrastructure.auth import create_access_token  # avoid circular import
 
-        return create_access_token(user.telegram_id, user.role.value, self._jwt_secret)
+        token: str = create_access_token(user.telegram_id, user.role.value, self._jwt_secret)
+        return token

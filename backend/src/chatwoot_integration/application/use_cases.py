@@ -1,4 +1,5 @@
 """Chatwoot Integration — Application Use Cases."""
+
 from __future__ import annotations
 
 from chatwoot_integration.domain.models import CreateTicketCommand, SupportTicket

@@ -1,14 +1,15 @@
 """Speech-to-Text — Domain Models."""
+
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class TranscriptionStatus(str, Enum):
+class TranscriptionStatus(StrEnum):
     PENDING = "pending"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -24,7 +25,7 @@ class Transcription(BaseModel):
     status: TranscriptionStatus = TranscriptionStatus.PENDING
     error_message: str | None = None
     duration_seconds: float | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def complete(self, text: str, duration_seconds: float | None = None) -> None:
         if self.status != TranscriptionStatus.PENDING:
