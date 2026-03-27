@@ -1,0 +1,49 @@
+"""AI Classification — Domain Models."""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from enum import Enum
+
+from pydantic import BaseModel, Field
+
+
+class Category(str, Enum):
+    BUG = "bug"
+    FEATURE = "feature"
+    QUESTION = "question"
+    COMPLAINT = "complaint"
+    OTHER = "other"
+
+
+class Priority(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
+class ClassificationEntities(BaseModel):
+    emails: list[str] = Field(default_factory=list)
+    phones: list[str] = Field(default_factory=list)
+    prices: list[float] = Field(default_factory=list)
+    dates: list[str] = Field(default_factory=list)
+
+
+class ClassificationResult(BaseModel):
+    """Aggregate Root: результат AI-классификации обращения."""
+
+    result_id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    source_text: str
+    title: str
+    description: str
+    category: Category
+    priority: Priority
+    deadline: str | None = None
+    entities: ClassificationEntities = Field(default_factory=ClassificationEntities)
+    assignee_hint: str | None = None
+    model_used: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def is_urgent(self) -> bool:
+        return self.priority in (Priority.URGENT, Priority.HIGH)

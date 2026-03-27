@@ -1,0 +1,21 @@
+"""Telegram Ingestion — Abstract Repository."""
+from __future__ import annotations
+
+import uuid
+from abc import ABC, abstractmethod
+
+from .models import DraftSession
+
+
+class DraftSessionRepository(ABC):
+    @abstractmethod
+    async def get_by_id(self, session_id: uuid.UUID) -> DraftSession | None: ...
+
+    @abstractmethod
+    async def get_active_by_user(self, user_id: int) -> DraftSession | None: ...
+
+    @abstractmethod
+    async def save(self, session: DraftSession) -> None: ...
+
+    @abstractmethod
+    async def delete(self, session_id: uuid.UUID) -> None: ...
