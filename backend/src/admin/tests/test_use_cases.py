@@ -6,6 +6,10 @@ from datetime import datetime, timezone
 import pytest
 
 from admin.application.ports import ChatwootAdminPort, EnvSettingsPort
+import hashlib
+import hmac
+import time
+
 from admin.application.use_cases import (
     AddPendingUseCase,
     CreateOperatorUseCase,
@@ -14,13 +18,16 @@ from admin.application.use_cases import (
     GetSettingsUseCase,
     ListPendingUseCase,
     ListUsersUseCase,
+    LoginWithTelegramUseCase,
     UpdateSettingsUseCase,
     UpdateUserUseCase,
     _mask_value,
+    verify_telegram_hash,
 )
 from admin.domain.models import (
     AddPendingRequest,
     CreateUserRequest,
+    TelegramAuthRequest,
     UpdateSettingsRequest,
     UpdateUserRequest,
 )
@@ -452,3 +459,143 @@ class TestUpdateSettingsUseCase:
 
         assert env.get_setting("TELEGRAM_BOT_TOKEN") == "keeptoken"
         assert env.get_setting("OPENROUTER_API_KEY") == "newkey5678"
+
+
+# ---------------------------------------------------------------------------
+# Helpers for Telegram auth tests
+# ---------------------------------------------------------------------------
+
+
+_BOT_TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"
+
+
+def _make_tg_request(
+    telegram_id: int = 42,
+    bot_token: str = _BOT_TOKEN,
+    auth_date: int | None = None,
+    extra_fields: dict | None = None,
+) -> TelegramAuthRequest:
+    """Build a TelegramAuthRequest with a valid HMAC hash for the given bot_token."""
+    if auth_date is None:
+        auth_date = int(time.time())
+    data: dict[str, str] = {
+        "id": str(telegram_id),
+        "first_name": "Admin",
+        "auth_date": str(auth_date),
+    }
+    if extra_fields:
+        data.update({k: str(v) for k, v in extra_fields.items()})
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+    secret_key = hashlib.sha256(bot_token.encode()).digest()
+    hash_val = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    return TelegramAuthRequest(
+        id=telegram_id,
+        first_name="Admin",
+        auth_date=auth_date,
+        hash=hash_val,
+        username=extra_fields.get("username") if extra_fields else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests: verify_telegram_hash
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyTelegramHash:
+    def test_valid_hash_returns_true(self) -> None:
+        req = _make_tg_request()
+        data: dict[str, str | int] = {
+            "id": req.id,
+            "first_name": req.first_name,
+            "auth_date": req.auth_date,
+            "hash": req.hash,
+        }
+        assert verify_telegram_hash(data, _BOT_TOKEN) is True
+
+    def test_wrong_hash_returns_false(self) -> None:
+        req = _make_tg_request()
+        data: dict[str, str | int] = {
+            "id": req.id,
+            "first_name": req.first_name,
+            "auth_date": req.auth_date,
+            "hash": "deadbeef" * 8,
+        }
+        assert verify_telegram_hash(data, _BOT_TOKEN) is False
+
+    def test_wrong_bot_token_returns_false(self) -> None:
+        req = _make_tg_request()
+        data: dict[str, str | int] = {
+            "id": req.id,
+            "first_name": req.first_name,
+            "auth_date": req.auth_date,
+            "hash": req.hash,
+        }
+        assert verify_telegram_hash(data, "wrong:token") is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: LoginWithTelegramUseCase
+# ---------------------------------------------------------------------------
+
+
+class TestLoginWithTelegramUseCase:
+    _JWT_SECRET = "test-jwt-secret-32-bytes-long!!"
+
+    async def test_valid_admin_returns_token(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        admin = _make_user(telegram_id=42, role=UserRole.ADMIN)
+        await user_repo.save(admin)
+
+        req = _make_tg_request(telegram_id=42)
+        uc = LoginWithTelegramUseCase(user_repo, self._JWT_SECRET, _BOT_TOKEN)
+        token = await uc.execute(req)
+
+        assert isinstance(token, str)
+        assert len(token) > 20
+
+    async def test_valid_supervisor_returns_token(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        supervisor = _make_user(telegram_id=55, role=UserRole.SUPERVISOR)
+        await user_repo.save(supervisor)
+
+        req = _make_tg_request(telegram_id=55)
+        uc = LoginWithTelegramUseCase(user_repo, self._JWT_SECRET, _BOT_TOKEN)
+        token = await uc.execute(req)
+
+        assert isinstance(token, str)
+
+    async def test_invalid_hash_raises(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        req = TelegramAuthRequest(
+            id=42, first_name="X", auth_date=int(time.time()), hash="invalid"
+        )
+        uc = LoginWithTelegramUseCase(user_repo, self._JWT_SECRET, _BOT_TOKEN)
+        with pytest.raises(ValueError, match="signature"):
+            await uc.execute(req)
+
+    async def test_expired_auth_date_raises(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        old_date = int(time.time()) - 90000  # > 24h ago
+        req = _make_tg_request(telegram_id=42, auth_date=old_date)
+        uc = LoginWithTelegramUseCase(user_repo, self._JWT_SECRET, _BOT_TOKEN)
+        with pytest.raises(ValueError, match="expired"):
+            await uc.execute(req)
+
+    async def test_user_not_found_raises(self) -> None:
+        req = _make_tg_request(telegram_id=999)
+        uc = LoginWithTelegramUseCase(
+            InMemoryUserProfileRepository(), self._JWT_SECRET, _BOT_TOKEN
+        )
+        with pytest.raises(ValueError, match="not found"):
+            await uc.execute(req)
+
+    async def test_agent_role_raises(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        agent = _make_user(telegram_id=77, role=UserRole.AGENT)
+        await user_repo.save(agent)
+
+        req = _make_tg_request(telegram_id=77)
+        uc = LoginWithTelegramUseCase(user_repo, self._JWT_SECRET, _BOT_TOKEN)
+        with pytest.raises(ValueError, match="permissions"):
+            await uc.execute(req)

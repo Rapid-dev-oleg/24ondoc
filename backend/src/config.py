@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     admin_jwt_secret: str = "CHANGE_ME_ADMIN_JWT_SECRET"
     admin_password: str = "CHANGE_ME_ADMIN_PASSWORD"
     env_file_path: str = ".env"
+    telegram_bot_username: str = ""
 
     # App
     log_level: str = "INFO"

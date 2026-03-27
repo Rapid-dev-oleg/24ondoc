@@ -1,9 +1,11 @@
 """Admin panel — FastAPI router for /api/admin endpoints."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse
 
 from admin.application.use_cases import (
     AddPendingUseCase,
@@ -13,6 +15,7 @@ from admin.application.use_cases import (
     GetSettingsUseCase,
     ListPendingUseCase,
     ListUsersUseCase,
+    LoginWithTelegramUseCase,
     UpdateSettingsUseCase,
     UpdateUserUseCase,
 )
@@ -21,7 +24,9 @@ from admin.domain.models import (
     CreateUserRequest,
     LoginRequest,
     PendingUserResponse,
+    PublicConfigResponse,
     SettingsResponse,
+    TelegramAuthRequest,
     TokenResponse,
     UpdateSettingsRequest,
     UpdateUserRequest,
@@ -38,9 +43,35 @@ from telegram_ingestion.infrastructure.user_profile_repository import (
     SQLAlchemyUserProfileRepository,
 )
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+_TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
+
+# Router without prefix — contains /admin (SPA) and full /api/admin/* paths
+router = APIRouter(tags=["admin"])
 
 AdminPayload = Annotated[dict[str, Any], Depends(require_admin_role)]
+
+
+# ---------------------------------------------------------------------------
+# SPA frontend
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin", include_in_schema=False)
+async def admin_ui() -> FileResponse:
+    """Serve the single-page admin panel."""
+    return FileResponse(_TEMPLATES_DIR / "admin.html", media_type="text/html")
+
+
+# ---------------------------------------------------------------------------
+# Public config (no auth required)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/admin/public-config", response_model=PublicConfigResponse)
+async def public_config() -> PublicConfigResponse:
+    """Return non-sensitive config for the frontend."""
+    settings = get_settings()
+    return PublicConfigResponse(telegram_bot_username=settings.telegram_bot_username)
 
 
 # ---------------------------------------------------------------------------
@@ -48,9 +79,11 @@ AdminPayload = Annotated[dict[str, Any], Depends(require_admin_role)]
 # ---------------------------------------------------------------------------
 
 
-@router.post("/auth/token", response_model=TokenResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/api/admin/auth/token", response_model=TokenResponse, status_code=status.HTTP_200_OK
+)
 async def login(body: LoginRequest, request: Request) -> TokenResponse:
-    """Issue a JWT for an admin or supervisor user."""
+    """Issue a JWT for an admin or supervisor user (password login)."""
     settings = get_settings()
 
     if body.password != settings.admin_password:
@@ -78,12 +111,35 @@ async def login(body: LoginRequest, request: Request) -> TokenResponse:
     return TokenResponse(access_token=token)
 
 
+@router.post(
+    "/api/admin/auth/telegram", response_model=TokenResponse, status_code=status.HTTP_200_OK
+)
+async def login_telegram(body: TelegramAuthRequest, request: Request) -> TokenResponse:
+    """Issue a JWT after verifying Telegram Login Widget auth data."""
+    settings = get_settings()
+    db_session = request.state.db_session
+    user_repo = SQLAlchemyUserProfileRepository(db_session)
+
+    uc = LoginWithTelegramUseCase(
+        user_repo=user_repo,
+        jwt_secret=settings.admin_jwt_secret,
+        bot_token=settings.telegram_bot_token,
+    )
+    try:
+        token = await uc.execute(body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
+        ) from exc
+    return TokenResponse(access_token=token)
+
+
 # ---------------------------------------------------------------------------
 # Users
 # ---------------------------------------------------------------------------
 
 
-@router.get("/users", response_model=list[UserResponse])
+@router.get("/api/admin/users", response_model=list[UserResponse])
 async def list_users(request: Request, _: AdminPayload) -> list[UserResponse]:
     db_session = request.state.db_session
     uc = ListUsersUseCase(
@@ -93,7 +149,9 @@ async def list_users(request: Request, _: AdminPayload) -> list[UserResponse]:
     return await uc.execute()
 
 
-@router.post("/users", response_model=PendingUserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/api/admin/users", response_model=PendingUserResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_user(
     body: CreateUserRequest, request: Request, _: AdminPayload
 ) -> PendingUserResponse:
@@ -115,7 +173,7 @@ async def create_user(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
-@router.patch("/users/{telegram_id}", response_model=UserResponse)
+@router.patch("/api/admin/users/{telegram_id}", response_model=UserResponse)
 async def update_user(
     telegram_id: int, body: UpdateUserRequest, request: Request, _: AdminPayload
 ) -> UserResponse:
@@ -127,10 +185,8 @@ async def update_user(
     return result
 
 
-@router.delete("/users/{telegram_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def deactivate_user(
-    telegram_id: int, request: Request, _: AdminPayload
-) -> None:
+@router.delete("/api/admin/users/{telegram_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def deactivate_user(telegram_id: int, request: Request, _: AdminPayload) -> None:
     db_session = request.state.db_session
     uc = DeactivateUserUseCase(SQLAlchemyUserProfileRepository(db_session))
     found = await uc.execute(telegram_id)
@@ -143,14 +199,18 @@ async def deactivate_user(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/pending", response_model=list[PendingUserResponse])
+@router.get("/api/admin/pending", response_model=list[PendingUserResponse])
 async def list_pending(request: Request, _: AdminPayload) -> list[PendingUserResponse]:
     db_session = request.state.db_session
     uc = ListPendingUseCase(SQLAlchemyPendingUserRepository(db_session))
     return await uc.execute()
 
 
-@router.post("/pending", response_model=PendingUserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/api/admin/pending",
+    response_model=PendingUserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def add_pending(
     body: AddPendingRequest, request: Request, _: AdminPayload
 ) -> PendingUserResponse:
@@ -159,7 +219,7 @@ async def add_pending(
     return await uc.execute(body)
 
 
-@router.delete("/pending/{phone}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/api/admin/pending/{phone}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_pending(phone: str, request: Request, _: AdminPayload) -> None:
     db_session = request.state.db_session
     uc = DeletePendingUseCase(SQLAlchemyPendingUserRepository(db_session))
@@ -175,14 +235,14 @@ async def delete_pending(phone: str, request: Request, _: AdminPayload) -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/settings", response_model=SettingsResponse)
+@router.get("/api/admin/settings", response_model=SettingsResponse)
 async def get_settings_endpoint(_: AdminPayload) -> SettingsResponse:
     settings = get_settings()
     env_port = DotEnvSettingsPort(settings.env_file_path)
     return GetSettingsUseCase(env_port).execute()
 
 
-@router.patch("/settings", response_model=SettingsResponse)
+@router.patch("/api/admin/settings", response_model=SettingsResponse)
 async def update_settings_endpoint(
     body: UpdateSettingsRequest, _: AdminPayload
 ) -> SettingsResponse:

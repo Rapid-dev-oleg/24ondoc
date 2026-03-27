@@ -1,18 +1,23 @@
 """Admin panel — Application use cases."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+import time
+
 from admin.application.ports import ChatwootAdminPort, EnvSettingsPort
 from admin.domain.models import (
     AddPendingRequest,
     CreateUserRequest,
     PendingUserResponse,
     SettingsResponse,
+    TelegramAuthRequest,
     UpdateSettingsRequest,
     UpdateUserRequest,
     UserResponse,
 )
 from telegram_ingestion.application.auth_use_case import normalize_phone
-from telegram_ingestion.domain.models import PendingUser, UserRole
+from telegram_ingestion.domain.models import PendingUser, UserProfile, UserRole
 from telegram_ingestion.domain.repository import PendingUserRepository, UserProfileRepository
 
 
@@ -235,3 +240,56 @@ class UpdateSettingsUseCase:
         if request.telegram_bot_token is not None:
             self._env.update_setting("TELEGRAM_BOT_TOKEN", request.telegram_bot_token)
         return GetSettingsUseCase(self._env).execute()
+
+
+_AUTH_DATE_MAX_AGE_SECONDS = 86400  # 24 hours
+
+
+def verify_telegram_hash(data: dict[str, str | int], bot_token: str) -> bool:
+    """Verify the HMAC-SHA256 signature in Telegram Login Widget callback data."""
+    check_hash = str(data.get("hash", ""))
+    pairs = {k: str(v) for k, v in data.items() if k != "hash"}
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+    secret_key = hashlib.sha256(bot_token.encode()).digest()
+    computed = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(computed, check_hash)
+
+
+class LoginWithTelegramUseCase:
+    """Verify Telegram Login Widget auth data and issue a JWT."""
+
+    def __init__(self, user_repo: UserProfileRepository, jwt_secret: str, bot_token: str) -> None:
+        self._users = user_repo
+        self._jwt_secret = jwt_secret
+        self._bot_token = bot_token
+
+    async def execute(self, request: TelegramAuthRequest) -> str:
+        """Return a JWT access token or raise ValueError on invalid auth."""
+        data: dict[str, str | int] = {
+            "id": request.id,
+            "first_name": request.first_name,
+            "auth_date": request.auth_date,
+            "hash": request.hash,
+        }
+        if request.last_name is not None:
+            data["last_name"] = request.last_name
+        if request.username is not None:
+            data["username"] = request.username
+        if request.photo_url is not None:
+            data["photo_url"] = request.photo_url
+
+        if not verify_telegram_hash(data, self._bot_token):
+            raise ValueError("Invalid Telegram auth signature")
+
+        if time.time() - request.auth_date > _AUTH_DATE_MAX_AGE_SECONDS:
+            raise ValueError("Telegram auth data expired")
+
+        user = await self._users.get_by_telegram_id(request.id)
+        if user is None or not user.is_active:
+            raise ValueError("User not found or inactive")
+        if user.role.value not in (UserRole.ADMIN.value, UserRole.SUPERVISOR.value):
+            raise ValueError("Insufficient permissions")
+
+        from admin.infrastructure.auth import create_access_token  # avoid circular import
+
+        return create_access_token(user.telegram_id, user.role.value, self._jwt_secret)

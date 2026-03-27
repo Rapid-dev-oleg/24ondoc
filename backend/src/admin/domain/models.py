@@ -61,6 +61,20 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class TelegramAuthRequest(BaseModel):
+    id: int
+    first_name: str
+    last_name: str | None = None
+    username: str | None = None
+    photo_url: str | None = None
+    auth_date: int
+    hash: str
+
+
+class PublicConfigResponse(BaseModel):
+    telegram_bot_username: str
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
