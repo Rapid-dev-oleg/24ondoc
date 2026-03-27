@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str
     telegram_webhook_secret: str
+    telegram_webhook_base_url: str = "https://api.24ondoc.ru"
 
     # Chatwoot
     chatwoot_api_key: str

@@ -67,6 +67,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.ticket_repo = ticket_repo
     app.state.settings = settings
 
+    # Register Telegram webhook
+    webhook_url = f"{settings.telegram_webhook_base_url}/webhook/telegram"
+    await bot.set_webhook(
+        url=webhook_url,
+        secret_token=settings.telegram_webhook_secret,
+        drop_pending_updates=True,
+    )
+    logger.info("Telegram webhook registered", url=webhook_url)
+
     logger.info("Application started")
     yield
 
