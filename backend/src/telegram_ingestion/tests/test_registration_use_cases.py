@@ -6,7 +6,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from telegram_ingestion.application.ports import AgentRegistrationPort, VoiceSampleStoragePort
+from telegram_ingestion.application.ports import (
+    AgentRegistrationPort,
+    VoiceEnrollmentPort,
+    VoiceSampleStoragePort,
+)
 from telegram_ingestion.application.registration_use_cases import (
     AutoRegisterUserUseCase,
     SaveVoiceSampleUseCase,
@@ -274,6 +278,16 @@ class TestUpdateProfileFieldUseCase:
 # ---------------------------------------------------------------------------
 
 
+class InMemoryVoiceEnrollmentPort(VoiceEnrollmentPort):
+    def __init__(self, result: bool = True) -> None:
+        self._result = result
+        self.calls: list[tuple[int, bytes]] = []
+
+    async def enroll(self, agent_id: int, audio_bytes: bytes) -> bool:
+        self.calls.append((agent_id, audio_bytes))
+        return self._result
+
+
 class TestSaveVoiceSampleUseCase:
     async def test_saves_voice_and_updates_profile(self) -> None:
         repo = InMemoryUserProfileRepository()
@@ -281,9 +295,10 @@ class TestSaveVoiceSampleUseCase:
         await repo.save(_make_profile(telegram_id=10))
 
         uc = SaveVoiceSampleUseCase(repo, storage)
-        result = await uc.execute(telegram_id=10, data=b"audio_data", ext="ogg")
+        saved, enrolled = await uc.execute(telegram_id=10, data=b"audio_data", ext="ogg")
 
-        assert result is True
+        assert saved is True
+        assert enrolled is False
         assert 10 in storage.saved
         assert storage.saved[10] == (b"audio_data", "ogg")
 
@@ -299,14 +314,15 @@ class TestSaveVoiceSampleUseCase:
         assert saved is not None
         assert saved.voice_sample_url == "/tmp/voice/20.mp3"
 
-    async def test_returns_false_for_unknown_user(self) -> None:
+    async def test_returns_false_false_for_unknown_user(self) -> None:
         repo = InMemoryUserProfileRepository()
         storage = InMemoryVoiceSampleStorage()
         uc = SaveVoiceSampleUseCase(repo, storage)
 
-        result = await uc.execute(telegram_id=999, data=b"x", ext="ogg")
+        saved, enrolled = await uc.execute(telegram_id=999, data=b"x", ext="ogg")
 
-        assert result is False
+        assert saved is False
+        assert enrolled is False
         assert 999 not in storage.saved
 
     async def test_supports_wav_extension(self) -> None:
@@ -315,12 +331,13 @@ class TestSaveVoiceSampleUseCase:
         await repo.save(_make_profile(telegram_id=30))
 
         uc = SaveVoiceSampleUseCase(repo, storage)
-        result = await uc.execute(telegram_id=30, data=b"wav_data", ext="wav")
+        saved, enrolled = await uc.execute(telegram_id=30, data=b"wav_data", ext="wav")
 
-        assert result is True
-        saved = await repo.get_by_telegram_id(30)
-        assert saved is not None
-        assert saved.voice_sample_url == "/tmp/voice/30.wav"
+        assert saved is True
+        assert enrolled is False
+        repo_saved = await repo.get_by_telegram_id(30)
+        assert repo_saved is not None
+        assert repo_saved.voice_sample_url == "/tmp/voice/30.wav"
 
     async def test_overwrites_previous_sample(self) -> None:
         repo = InMemoryUserProfileRepository()
@@ -332,7 +349,44 @@ class TestSaveVoiceSampleUseCase:
         uc = SaveVoiceSampleUseCase(repo, storage)
         await uc.execute(telegram_id=40, data=b"new_audio", ext="ogg")
 
-        saved = await repo.get_by_telegram_id(40)
-        assert saved is not None
-        assert saved.voice_sample_url == "/tmp/voice/40.ogg"
+        repo_saved = await repo.get_by_telegram_id(40)
+        assert repo_saved is not None
+        assert repo_saved.voice_sample_url == "/tmp/voice/40.ogg"
         assert storage.saved[40] == (b"new_audio", "ogg")
+
+    async def test_with_enrollment_port_enrolled_true(self) -> None:
+        repo = InMemoryUserProfileRepository()
+        storage = InMemoryVoiceSampleStorage()
+        enrollment = InMemoryVoiceEnrollmentPort(result=True)
+        await repo.save(_make_profile(telegram_id=50, chatwoot_user_id=10))
+
+        uc = SaveVoiceSampleUseCase(repo, storage, enrollment=enrollment)
+        saved, enrolled = await uc.execute(telegram_id=50, data=b"audio", ext="ogg")
+
+        assert saved is True
+        assert enrolled is True
+        assert len(enrollment.calls) == 1
+        assert enrollment.calls[0] == (10, b"audio")
+
+    async def test_with_enrollment_port_enrolled_false(self) -> None:
+        repo = InMemoryUserProfileRepository()
+        storage = InMemoryVoiceSampleStorage()
+        enrollment = InMemoryVoiceEnrollmentPort(result=False)
+        await repo.save(_make_profile(telegram_id=60, chatwoot_user_id=20))
+
+        uc = SaveVoiceSampleUseCase(repo, storage, enrollment=enrollment)
+        saved, enrolled = await uc.execute(telegram_id=60, data=b"audio", ext="ogg")
+
+        assert saved is True
+        assert enrolled is False
+
+    async def test_without_enrollment_port_enrolled_is_false(self) -> None:
+        repo = InMemoryUserProfileRepository()
+        storage = InMemoryVoiceSampleStorage()
+        await repo.save(_make_profile(telegram_id=70))
+
+        uc = SaveVoiceSampleUseCase(repo, storage)
+        saved, enrolled = await uc.execute(telegram_id=70, data=b"audio", ext="ogg")
+
+        assert saved is True
+        assert enrolled is False

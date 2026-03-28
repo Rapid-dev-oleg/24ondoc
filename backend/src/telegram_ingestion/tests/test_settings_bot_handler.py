@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import io
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock as _AsyncMock
 
 from aiogram import Dispatcher
 from aiogram.enums import ChatType
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Chat, Message, Update, User
+from aiogram.types import File as _TgFile
+from aiogram.types import Voice as _Voice
 
 from telegram_ingestion.application.ports import VoiceSampleStoragePort
 from telegram_ingestion.application.registration_use_cases import (
@@ -319,3 +323,101 @@ class TestAutoRegisterOnStart:
         await dp.feed_update(bot, update)
 
         assert reg.called is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: voice sample handler status messages
+# ---------------------------------------------------------------------------
+
+
+class MockSaveVoiceUseCase:
+    """Configurable stub for SaveVoiceSampleUseCase."""
+
+    def __init__(self, saved: bool, enrolled: bool) -> None:
+        self._result = (saved, enrolled)
+        self.calls: list[tuple[int, bytes, str]] = []
+
+    async def execute(self, telegram_id: int, data: bytes, ext: str) -> tuple[bool, bool]:
+        self.calls.append((telegram_id, data, ext))
+        return self._result
+
+
+def _make_bot_for_voice(audio_bytes: bytes = b"audio") -> object:
+    tg_file = _TgFile(
+        file_id="f1", file_unique_id="u1", file_size=len(audio_bytes), file_path="v/f.ogg"
+    )
+    bot = make_mock_bot(bot_id=42)
+    bot.get_file = _AsyncMock(return_value=tg_file)
+    bot.download_file = _AsyncMock(return_value=io.BytesIO(audio_bytes))
+    return bot
+
+
+def _make_voice_update(user_id: int = 100, update_id: int = 10) -> Update:
+    voice = _Voice(
+        file_id="voice123",
+        file_unique_id="uniq123",
+        duration=3,
+        mime_type="audio/ogg",
+        file_size=500,
+    )
+    msg = Message(
+        message_id=update_id,
+        date=datetime.now(UTC),
+        chat=Chat(id=user_id, type=ChatType.PRIVATE),
+        from_user=User(id=user_id, is_bot=False, first_name="Tester"),
+        voice=voice,
+    )
+    return Update(update_id=update_id, message=msg)
+
+
+class TestVoiceSampleHandlerMessages:
+    def _make_dp(
+        self, save_voice: MockSaveVoiceUseCase
+    ) -> tuple[Dispatcher, MemoryStorage, StorageKey]:
+        storage = MemoryStorage()
+        repo = InMemoryUserProfileRepository()
+        user_port = AuthorizedUserPort()
+        update_profile = UpdateProfileFieldUseCase(repo)
+
+        router = create_settings_router(update_profile, save_voice, user_port)  # type: ignore[arg-type]
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        return dp, storage, key
+
+    async def test_profile_not_found_use_case_is_called(self) -> None:
+        save_voice = MockSaveVoiceUseCase(saved=False, enrolled=False)
+        dp, storage, key = self._make_dp(save_voice)
+        await storage.set_state(key, SettingsFSMStates.voice_sample.state)
+
+        bot = _make_bot_for_voice()
+        update = _make_voice_update(user_id=100)
+        await dp.feed_update(bot, update)
+
+        assert len(save_voice.calls) == 1
+
+    async def test_enrolled_true_transitions_to_menu(self) -> None:
+        save_voice = MockSaveVoiceUseCase(saved=True, enrolled=True)
+        dp, storage, key = self._make_dp(save_voice)
+        await storage.set_state(key, SettingsFSMStates.voice_sample.state)
+
+        bot = _make_bot_for_voice()
+        update = _make_voice_update(user_id=100)
+        await dp.feed_update(bot, update)
+
+        assert len(save_voice.calls) == 1
+        state = await storage.get_state(key)
+        assert state == SettingsFSMStates.menu.state
+
+    async def test_saved_not_enrolled_transitions_to_menu(self) -> None:
+        save_voice = MockSaveVoiceUseCase(saved=True, enrolled=False)
+        dp, storage, key = self._make_dp(save_voice)
+        await storage.set_state(key, SettingsFSMStates.voice_sample.state)
+
+        bot = _make_bot_for_voice()
+        update = _make_voice_update(user_id=100)
+        await dp.feed_update(bot, update)
+
+        assert len(save_voice.calls) == 1
+        state = await storage.get_state(key)
+        assert state == SettingsFSMStates.menu.state

@@ -62,6 +62,9 @@ class StubVoiceRepo(AgentVoiceSampleRepository):
     async def find_closest(self, embedding: list[float]) -> tuple[int, float] | None:
         return self._closest
 
+    async def save(self, agent_id: int, embedding: list[float]) -> None:
+        pass
+
 
 class StubNotificationPort(TelegramNotificationPort):
     def __init__(self) -> None:

@@ -52,6 +52,12 @@ _CRM_URL = "https://chat.24ondoc.ru"
 
 _TASKS_PAGE_SIZE = 5
 
+_MSG_VOICE_ENROLLED = "✅ Голосовой семпл добавлен в систему распознавания."
+_MSG_VOICE_SAVED_NOT_ENROLLED = (
+    "⚠️ Семпл сохранён, но не удалось добавить в систему распознавания."
+    " Попробуйте позже."
+)
+
 
 class TelegramFSMStates(StatesGroup):
     collecting = State()
@@ -861,12 +867,22 @@ def create_settings_router(
         if not isinstance(raw, io.BytesIO):
             await message.answer("❌ Не удалось скачать файл.")
             return
-        ok = await save_voice.execute(message.from_user.id, raw.read(), "ogg")
-        if ok:
-            await state.set_state(SettingsFSMStates.menu)
-            await message.answer("✅ Голосовой семпл сохранён.", reply_markup=_settings_keyboard())
-        else:
+        await message.answer("⏳ Обрабатываю голосовой семпл...")
+        saved, enrolled = await save_voice.execute(message.from_user.id, raw.read(), "ogg")
+        if not saved:
             await message.answer("❌ Профиль не найден.")
+            return
+        await state.set_state(SettingsFSMStates.menu)
+        if enrolled:
+            await message.answer(
+                _MSG_VOICE_ENROLLED,
+                reply_markup=_settings_keyboard(),
+            )
+        else:
+            await message.answer(
+                _MSG_VOICE_SAVED_NOT_ENROLLED,
+                reply_markup=_settings_keyboard(),
+            )
 
     _ALLOWED_AUDIO_EXTENSIONS = {"ogg", "mp3", "wav"}
 
@@ -887,12 +903,22 @@ def create_settings_router(
         if not isinstance(raw, io.BytesIO):
             await message.answer("❌ Не удалось скачать файл.")
             return
-        ok = await save_voice.execute(message.from_user.id, raw.read(), ext)
-        if ok:
-            await state.set_state(SettingsFSMStates.menu)
-            await message.answer("✅ Голосовой семпл сохранён.", reply_markup=_settings_keyboard())
-        else:
+        await message.answer("⏳ Обрабатываю голосовой семпл...")
+        saved, enrolled = await save_voice.execute(message.from_user.id, raw.read(), ext)
+        if not saved:
             await message.answer("❌ Профиль не найден.")
+            return
+        await state.set_state(SettingsFSMStates.menu)
+        if enrolled:
+            await message.answer(
+                _MSG_VOICE_ENROLLED,
+                reply_markup=_settings_keyboard(),
+            )
+        else:
+            await message.answer(
+                _MSG_VOICE_SAVED_NOT_ENROLLED,
+                reply_markup=_settings_keyboard(),
+            )
 
     return router
 

@@ -127,6 +127,40 @@ class IdentifyAgentByVoice:
 
 
 # ============================================================
+# EnrollVoiceSampleUseCase
+# ============================================================
+
+
+class EnrollVoiceSampleUseCase:
+    """
+    Use case: сохранить voice embedding агента в pgvector.
+
+    Шаги:
+    1. Извлечь embedding из аудио (VoiceEmbeddingPort)
+    2. Сохранить/перезаписать embedding в AgentVoiceSampleRepository
+    3. Вернуть True при успехе, False при любой ошибке
+    """
+
+    def __init__(
+        self,
+        embedding_port: VoiceEmbeddingPort,
+        voice_repo: AgentVoiceSampleRepository,
+    ) -> None:
+        self._embedding_port = embedding_port
+        self._voice_repo = voice_repo
+
+    async def execute(self, agent_id: int, audio_bytes: bytes) -> bool:
+        """Extract embedding and persist it. Returns True on success, False on any Exception."""
+        try:
+            embedding = await self._embedding_port.embed(audio_bytes)
+            await self._voice_repo.save(agent_id, embedding)
+            return True
+        except Exception:
+            logger.exception("EnrollVoiceSampleUseCase failed for agent_id %s", agent_id)
+            return False
+
+
+# ============================================================
 # Notification Port
 # ============================================================
 

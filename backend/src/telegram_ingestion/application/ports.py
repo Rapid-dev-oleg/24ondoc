@@ -57,3 +57,12 @@ class VoiceSampleStoragePort(ABC):
     async def save(self, telegram_id: int, data: bytes, ext: str) -> str:
         """Save audio bytes and return a path/URL string for storage in the user profile."""
         ...
+
+
+class VoiceEnrollmentPort(ABC):
+    """ACL port for enrolling a voice sample into the biometric recognition system."""
+
+    @abstractmethod
+    async def enroll(self, agent_id: int, audio_bytes: bytes) -> bool:
+        """Enroll audio_bytes for the given agent_id. Returns True on success."""
+        ...

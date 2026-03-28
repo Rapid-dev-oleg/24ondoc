@@ -8,7 +8,11 @@ import httpx
 import pytest
 
 from ..application.ports import AudioStoragePort, VoiceEmbeddingPort
-from ..application.use_cases import FetchAudioRecording, IdentifyAgentByVoice
+from ..application.use_cases import (
+    EnrollVoiceSampleUseCase,
+    FetchAudioRecording,
+    IdentifyAgentByVoice,
+)
 from ..domain.models import CallRecord, CallStatus
 from ..domain.repository import AgentVoiceSampleRepository, CallRecordRepository
 
@@ -58,9 +62,13 @@ class StubEmbeddingPort(VoiceEmbeddingPort):
 class StubVoiceRepo(AgentVoiceSampleRepository):
     def __init__(self, closest: tuple[int, float] | None = None) -> None:
         self._closest = closest
+        self.saved: list[tuple[int, list[float]]] = []
 
     async def find_closest(self, embedding: list[float]) -> tuple[int, float] | None:
         return self._closest
+
+    async def save(self, agent_id: int, embedding: list[float]) -> None:
+        self.saved.append((agent_id, embedding))
 
 
 def _make_call(call_id: str = "t2_001") -> CallRecord:
@@ -305,3 +313,54 @@ class TestMinIOAudioStorage:
 
         url = await storage.get_presigned_url("calls/t2_001.ogg")
         assert url == "http://minio/url"
+
+
+# ============================================================
+# EnrollVoiceSampleUseCase
+# ============================================================
+
+
+class FailingEmbeddingPort(VoiceEmbeddingPort):
+    async def embed(self, audio_bytes: bytes) -> list[float]:
+        raise RuntimeError("embedding service unavailable")
+
+
+class FailingSaveVoiceRepo(AgentVoiceSampleRepository):
+    async def find_closest(self, embedding: list[float]) -> tuple[int, float] | None:
+        return None
+
+    async def save(self, agent_id: int, embedding: list[float]) -> None:
+        raise RuntimeError("db unavailable")
+
+
+class TestEnrollVoiceSampleUseCase:
+    async def test_success_returns_true_and_saves_embedding(self) -> None:
+        embedding_port = StubEmbeddingPort(embedding=[0.5] * 384)
+        voice_repo = StubVoiceRepo()
+        uc = EnrollVoiceSampleUseCase(embedding_port, voice_repo)
+
+        result = await uc.execute(agent_id=7, audio_bytes=b"audio")
+
+        assert result is True
+        assert len(voice_repo.saved) == 1
+        assert voice_repo.saved[0][0] == 7
+        assert voice_repo.saved[0][1] == [0.5] * 384
+
+    async def test_embedding_error_returns_false(self) -> None:
+        embedding_port = FailingEmbeddingPort()
+        voice_repo = StubVoiceRepo()
+        uc = EnrollVoiceSampleUseCase(embedding_port, voice_repo)
+
+        result = await uc.execute(agent_id=1, audio_bytes=b"audio")
+
+        assert result is False
+        assert len(voice_repo.saved) == 0
+
+    async def test_save_error_returns_false(self) -> None:
+        embedding_port = StubEmbeddingPort()
+        voice_repo = FailingSaveVoiceRepo()
+        uc = EnrollVoiceSampleUseCase(embedding_port, voice_repo)
+
+        result = await uc.execute(agent_id=2, audio_bytes=b"audio")
+
+        assert result is False

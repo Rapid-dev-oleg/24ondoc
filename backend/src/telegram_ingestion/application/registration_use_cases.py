@@ -7,7 +7,7 @@ import string
 
 from ..domain.models import UserProfile, UserRole
 from ..domain.repository import UserProfileRepository
-from .ports import AgentRegistrationPort, VoiceSampleStoragePort
+from .ports import AgentRegistrationPort, VoiceEnrollmentPort, VoiceSampleStoragePort
 
 _CRM_EMAIL_DOMAIN = "24ondoc.ru"
 _PASSWORD_LENGTH = 12
@@ -86,25 +86,34 @@ class UpdateProfileFieldUseCase:
 
 
 class SaveVoiceSampleUseCase:
-    """Persist a voice sample and update the user's voice_sample_url."""
+    """Persist a voice sample, update the user's voice_sample_url, and optionally enroll it."""
 
     def __init__(
         self,
         user_repo: UserProfileRepository,
         storage: VoiceSampleStoragePort,
+        enrollment: VoiceEnrollmentPort | None = None,
     ) -> None:
         self._user_repo = user_repo
         self._storage = storage
+        self._enrollment = enrollment
 
-    async def execute(self, telegram_id: int, data: bytes, ext: str) -> bool:
+    async def execute(self, telegram_id: int, data: bytes, ext: str) -> tuple[bool, bool]:
         """Save bytes with given extension (ogg/mp3/wav) and update profile.
 
-        Returns True on success, False if user not found.
+        Returns (saved, enrolled):
+            saved=True if the sample was stored and the profile was updated,
+            enrolled=True if the sample was also enrolled in the recognition system.
         """
         profile = await self._user_repo.get_by_telegram_id(telegram_id)
         if profile is None:
-            return False
+            return False, False
         path = await self._storage.save(telegram_id, data, ext)
         updated = profile.model_copy(update={"voice_sample_url": path})
         await self._user_repo.save(updated)
-        return True
+
+        enrolled = False
+        if self._enrollment is not None:
+            enrolled = await self._enrollment.enroll(profile.chatwoot_user_id, data)
+
+        return True, enrolled
