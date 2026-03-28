@@ -53,6 +53,10 @@ CHATWOOT_BASE_URL: str = os.environ.get("CHATWOOT_BASE_URL", "http://chatwoot:30
 CHATWOOT_ACCOUNT_ID: int = int(os.environ.get("CHATWOOT_ACCOUNT_ID", "2"))
 DATABASE_URL: str | None = os.environ.get("DATABASE_URL")
 TEST_USER_ID: int = int(os.environ.get("E2E_TEST_USER_ID", "9999000001"))
+E2E_ALLOW_PRODUCTION: bool = os.environ.get("E2E_ALLOW_PRODUCTION", "").lower() in ("1", "true", "yes")
+
+_PRODUCTION_HOSTS = ("24ondoc.ru", "chat.24ondoc.ru")
+
 
 _WEBHOOK_PATH = "/webhook/telegram"
 _WEBHOOK_ENDPOINT = f"{WEBHOOK_URL}{_WEBHOOK_PATH}"
@@ -597,6 +601,17 @@ if __name__ == "__main__":
             missing.append(var)
     if missing:
         print(f"Ошибка: не установлены переменные окружения: {', '.join(missing)}")
+        sys.exit(2)
+
+    # Защита от запуска на продакшне
+    from urllib.parse import urlparse
+    parsed = urlparse(WEBHOOK_URL)
+    if parsed.hostname in _PRODUCTION_HOSTS and not E2E_ALLOW_PRODUCTION:
+        print(
+            f"Ошибка: WEBHOOK_URL указывает на продакшн ({parsed.hostname}).\n"
+            "E2E тест создаёт тестовых пользователей с именем 'E2ETest' и фиктивными ID.\n"
+            "Если вы уверены, установите E2E_ALLOW_PRODUCTION=1"
+        )
         sys.exit(2)
 
     sys.exit(run_e2e())
