@@ -53,9 +53,11 @@ class ChatwootClient(ChatwootPort):
         api_key: str,
         account_id: int,
         redis: AsyncRedis,
+        inbox_id: int = 1,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._account_id = account_id
+        self._inbox_id = inbox_id
         self._redis: AsyncRedis = redis
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
@@ -83,6 +85,7 @@ class ChatwootClient(ChatwootPort):
     async def create_conversation(self, command: CreateTicketCommand) -> SupportTicket | None:  # type: ignore[override]
         """POST /api/v1/accounts/{id}/conversations с retry 3 раза → Redis при неудаче."""
         body: dict[str, Any] = {
+            "inbox_id": self._inbox_id,
             "subject": command.title,
             "additional_attributes": {
                 "description": command.description,

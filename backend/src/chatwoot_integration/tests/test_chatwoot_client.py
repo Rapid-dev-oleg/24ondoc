@@ -17,7 +17,7 @@ from chatwoot_integration.infrastructure.chatwoot_client import ChatwootClient
 # ---------------------------------------------------------------------------
 
 
-def make_client(redis: AsyncMock | None = None) -> ChatwootClient:
+def make_client(redis: AsyncMock | None = None, inbox_id: int = 7) -> ChatwootClient:
     """Создаёт клиент с мок-Redis."""
     if redis is None:
         redis = AsyncMock()
@@ -26,6 +26,7 @@ def make_client(redis: AsyncMock | None = None) -> ChatwootClient:
         api_key="test-api-key",
         account_id=1,
         redis=redis,
+        inbox_id=inbox_id,
     )
 
 
@@ -69,8 +70,13 @@ async def test_create_conversation_success() -> None:
     )
 
     response_data = _chatwoot_conversation_response(task_id=99)
+    captured_requests: list[httpx.Request] = []
 
-    transport = httpx.MockTransport(lambda req: httpx.Response(200, json=response_data))
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_requests.append(req)
+        return httpx.Response(200, json=response_data)
+
+    transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         with patch.object(client, "_http", http):
             ticket = await client.create_conversation(command)
@@ -79,6 +85,11 @@ async def test_create_conversation_success() -> None:
     assert ticket.task_id == 99
     assert ticket.status == TicketStatus.OPEN
     assert ticket.source_session_id == command.source_session_id
+
+    # inbox_id должен быть передан в теле запроса
+    assert len(captured_requests) == 1
+    sent_body = json.loads(captured_requests[0].content)
+    assert sent_body["inbox_id"] == 7
 
 
 @pytest.mark.asyncio

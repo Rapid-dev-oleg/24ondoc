@@ -53,6 +53,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         api_key=settings.chatwoot_api_key,
         account_id=settings.chatwoot_support_account_id,
         redis=redis,
+        inbox_id=settings.chatwoot_inbox_id,
     )
 
     # STT adapter (bytes → text via OpenAI-compatible API / OpenRouter)
