@@ -81,9 +81,7 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
             "role": "agent",
             "confirmed": True,
         }
-        logger.debug(
-            "Chatwoot Platform: creating user name=%r email=%r", name, email
-        )
+        logger.debug("Chatwoot Platform: creating user name=%r email=%r", name, email)
         response = await self._platform_http.post(
             "/platform/api/v1/users",
             content=json.dumps(body),
@@ -101,9 +99,7 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
         user_id = int(str(data["id"]))
 
         account_body: dict[str, object] = {"user_id": user_id, "role": "agent"}
-        logger.debug(
-            "Chatwoot Platform: adding user %d to account %d", user_id, self._account_id
-        )
+        logger.debug("Chatwoot Platform: adding user %d to account %d", user_id, self._account_id)
         account_response = await self._platform_http.post(
             f"/platform/api/v1/accounts/{self._account_id}/account_users",
             content=json.dumps(account_body),
@@ -139,3 +135,32 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
             )
         data: dict[str, object] = response.json()
         return int(str(data["id"]))
+
+    async def create_contact(self, name: str, email: str) -> int | None:
+        """POST /api/v1/accounts/{id}/contacts — создать контакт для пользователя."""
+        body: dict[str, object] = {
+            "name": name,
+            "email": email,
+        }
+        try:
+            response = await self._http.post(
+                f"/api/v1/accounts/{self._account_id}/contacts",
+                content=json.dumps(body),
+            )
+            if response.status_code >= 400:
+                logger.warning(
+                    "Contact creation failed: %d %s", response.status_code, response.text[:200]
+                )
+                return None
+            data: dict[str, object] = response.json()
+            # Handle flat {"id": X}, {"payload": {"contact": {"id": X}}}, {"payload": {"id": X}}
+            if "payload" in data and isinstance(data["payload"], dict):
+                inner = data["payload"]
+                if "contact" in inner and isinstance(inner["contact"], dict):
+                    return int(str(inner["contact"]["id"]))
+                if "id" in inner:
+                    return int(str(inner["id"]))
+            return int(str(data["id"]))
+        except Exception:
+            logger.exception("Failed to create Chatwoot contact for %s", email)
+            return None

@@ -136,9 +136,7 @@ async def telegram_webhook(
     @dp.error()
     async def on_telegram_error(event: ErrorEvent) -> bool:
         if isinstance(event.exception, TelegramAPIError):
-            logger.warning(
-                "Telegram API error (non-fatal): %s", event.exception
-            )
+            logger.warning("Telegram API error (non-fatal): %s", event.exception)
             return True  # suppress — don't propagate to FastAPI
         return False  # re-raise non-Telegram errors
 

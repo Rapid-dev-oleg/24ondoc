@@ -417,7 +417,9 @@ def create_router(
                 await callback.answer("❌ Сессия не найдена.", show_alert=True)
                 return
 
-            ticket = await create_ticket.execute(fetched)
+            profile = await user_port.get_profile(callback.from_user.id)
+            contact_id = profile.chatwoot_contact_id if profile is not None else None
+            ticket = await create_ticket.execute(fetched, contact_id=contact_id)
             if ticket is None:
                 await callback.answer("❌ Ошибка создания задачи.", show_alert=True)
                 return

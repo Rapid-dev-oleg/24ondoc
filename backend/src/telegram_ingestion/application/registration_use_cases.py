@@ -53,11 +53,13 @@ class AutoRegisterUserUseCase:
         chatwoot_user_id = await self._agent_registration.create_chatwoot_agent(
             name, email, password
         )
+        chatwoot_contact_id = await self._agent_registration.create_contact(name, email)
 
         profile = UserProfile(
             telegram_id=telegram_id,
             chatwoot_user_id=chatwoot_user_id,
             chatwoot_account_id=self._account_id,
+            chatwoot_contact_id=chatwoot_contact_id,
             role=UserRole.AGENT,
             settings={"display_name": name, "email": email},
         )

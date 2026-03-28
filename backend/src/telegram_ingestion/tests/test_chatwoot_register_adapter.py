@@ -292,4 +292,4 @@ async def test_platform_api_logs_account_users_request(caplog: pytest.LogCapture
             await adapter.create_chatwoot_agent("Аккаунт", "acc@24ondoc.ru", "pass!")
 
     assert "55" in caplog.text  # user_id=55 упоминается в логах account linking
-    assert "2" in caplog.text   # account_id=2 упоминается в логах
+    assert "2" in caplog.text  # account_id=2 упоминается в логах

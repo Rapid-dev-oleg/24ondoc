@@ -21,6 +21,7 @@ class UserORM(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     chatwoot_user_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
     chatwoot_account_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    chatwoot_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     role: Mapped[str] = mapped_column(String(20), default="agent")
     phone_internal: Mapped[str | None] = mapped_column(String(20), nullable=True)
     voice_sample_url: Mapped[str | None] = mapped_column(String(255), nullable=True)

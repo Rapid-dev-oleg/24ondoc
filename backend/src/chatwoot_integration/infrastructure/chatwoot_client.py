@@ -85,7 +85,6 @@ class ChatwootClient(ChatwootPort):
     async def _create_contact(self, identifier: str, name: str) -> int:
         """POST /api/v1/accounts/{id}/contacts — создать контакт и вернуть contact_id."""
         body = {
-            "inbox_id": self._inbox_id,
             "identifier": identifier,
             "name": name,
         }
@@ -94,50 +93,52 @@ class ChatwootClient(ChatwootPort):
             content=json.dumps(body),
         )
         if response.status_code == 422:
+            # Контакт уже существует — найти его по identifier через search
             search_resp = await self._http.get(
-                f"{self._api_prefix}/contacts/filter",
-                params={"q": identifier},
-            )
-            if search_resp.status_code < 400:
-                results = search_resp.json()
-                payload = results.get("payload", results) if isinstance(results, dict) else results
-                if isinstance(payload, list) and payload:
-                    return int(payload[0]["id"])
-            search_resp2 = await self._http.get(
                 f"{self._api_prefix}/contacts/search",
                 params={"q": identifier},
             )
-            if search_resp2.status_code < 400:
-                results2 = search_resp2.json()
+            if search_resp.status_code < 400:
+                results2 = search_resp.json()
                 payload2 = (
-                    results2.get("payload", results2)
-                    if isinstance(results2, dict)
-                    else results2
+                    results2.get("payload", results2) if isinstance(results2, dict) else results2
                 )
                 if isinstance(payload2, list) and payload2:
                     return int(payload2[0]["id"])
             self._raise_for_status(response)
         self._raise_for_status(response)
         data: dict[str, Any] = response.json()
-        return int(data.get("payload", data).get("contact", data).get("id", data.get("id")))
+        # Handle: flat {"id": X}, {"payload": {"contact": {"id": X}}}, or {"payload": {"id": X}}
+        if "payload" in data and isinstance(data["payload"], dict):
+            inner: dict[str, Any] = data["payload"]
+            if "contact" in inner and isinstance(inner["contact"], dict):
+                return int(inner["contact"]["id"])
+            if "id" in inner:
+                return int(inner["id"])
+        return int(data["id"])
 
     async def create_conversation(self, command: CreateTicketCommand) -> SupportTicket | None:  # type: ignore[override]
         """POST /api/v1/accounts/{id}/conversations с retry 3 раза → Redis при неудаче."""
-        contact_identifier = f"session-{command.source_session_id or 'default'}"
-        try:
-            contact_id = await self._create_contact(
-                identifier=contact_identifier,
-                name=command.title[:100],
-            )
-        except Exception:
-            logger.exception("Failed to create/find Chatwoot contact for %s", contact_identifier)
-            await self._push_to_queue(
-                {
-                    "action": "create_conversation",
-                    "command": command.model_dump(mode="json"),
-                }
-            )
-            return None
+        if command.contact_id is not None:
+            contact_id = command.contact_id
+        else:
+            contact_identifier = f"session-{command.source_session_id or 'default'}"
+            try:
+                contact_id = await self._create_contact(
+                    identifier=contact_identifier,
+                    name=command.title[:100],
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to create/find Chatwoot contact for %s", contact_identifier
+                )
+                await self._push_to_queue(
+                    {
+                        "action": "create_conversation",
+                        "command": command.model_dump(mode="json"),
+                    }
+                )
+                return None
 
         body: dict[str, Any] = {
             "inbox_id": self._inbox_id,

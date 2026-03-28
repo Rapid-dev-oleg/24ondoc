@@ -27,6 +27,7 @@ class CreateTicketCommand(BaseModel):
     labels: list[str] = Field(default_factory=list)
     deadline: str | None = None
     source_session_id: uuid.UUID | None = None
+    contact_id: int | None = None
 
 
 class SupportTicket(BaseModel):

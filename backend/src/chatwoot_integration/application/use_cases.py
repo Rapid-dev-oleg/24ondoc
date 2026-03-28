@@ -18,7 +18,9 @@ class CreateTicketFromSession:
         self._chatwoot = chatwoot_port
         self._repo = ticket_repo
 
-    async def execute(self, session: DraftSession) -> SupportTicket | None:
+    async def execute(
+        self, session: DraftSession, contact_id: int | None = None
+    ) -> SupportTicket | None:
         if session.ai_result is None:
             return None
 
@@ -29,6 +31,7 @@ class CreateTicketFromSession:
             category=session.ai_result.category,
             deadline=session.ai_result.deadline,
             source_session_id=session.session_id,
+            contact_id=contact_id,
         )
 
         ticket = await self._chatwoot.create_conversation(command)
