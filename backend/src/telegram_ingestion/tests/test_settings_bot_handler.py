@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock as _AsyncMock
+from unittest.mock import MagicMock
 
 from aiogram import Dispatcher
 from aiogram.enums import ChatType
@@ -342,7 +343,7 @@ class MockSaveVoiceUseCase:
         return self._result
 
 
-def _make_bot_for_voice(audio_bytes: bytes = b"audio") -> object:
+def _make_bot_for_voice(audio_bytes: bytes = b"audio") -> MagicMock:
     tg_file = _TgFile(
         file_id="f1", file_unique_id="u1", file_size=len(audio_bytes), file_path="v/f.ogg"
     )
