@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-from aiogram import Dispatcher
+from aiogram import Dispatcher, Router
 from aiogram.enums import ChatType
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -663,7 +663,7 @@ class TestPreviewFlow:
         repo: InMemoryRepo,
         session: DraftSession,
         ai_raise_error: bool = False,
-    ) -> tuple[object, object]:
+    ) -> tuple[Router, InMemoryChatwootForCreate]:
         """Строит router с реальными use cases и mock-ботом."""
         mock_start = MagicMock(spec=StartSessionUseCase)
         mock_start.execute = AsyncMock(return_value=session)

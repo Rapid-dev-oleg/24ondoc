@@ -155,9 +155,7 @@ class InMemoryChatwoot(ChatwootPort):
         ticket = SupportTicket(
             task_id=len(self.created) + 1,
             title=getattr(cmd, "title", ""),
-            description=getattr(cmd, "description", None),
-            category=getattr(cmd, "category", None),
-            priority=getattr(cmd, "priority", None),
+            priority=getattr(cmd, "priority", None) or "medium",
         )
         self.created.append(ticket)
         return ticket

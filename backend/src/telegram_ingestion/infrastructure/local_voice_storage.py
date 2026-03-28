@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-import aiofiles
+import aiofiles  # type: ignore[import-untyped]
 
 from ..application.ports import VoiceSampleStoragePort
 
