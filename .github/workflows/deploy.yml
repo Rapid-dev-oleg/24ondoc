@@ -12,6 +12,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    needs: []
     environment: production
     steps:
       - name: Deploy via SSH
@@ -20,6 +21,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
           script: |
             set -e
             cd /app/24ondoc
@@ -34,12 +36,18 @@ jobs:
             docker compose up -d --no-deps backend
 
             echo "=== Waiting for health check ==="
-            sleep 10
-            docker compose ps backend | grep -q "healthy" && echo "Backend healthy" || {
-              echo "ERROR: Backend unhealthy, rolling back"
-              docker compose rollback backend 2>/dev/null || true
-              exit 1
-            }
+            for i in $(seq 1 12); do
+              sleep 5
+              if docker compose ps backend | grep -q "healthy"; then
+                echo "Backend healthy after $((i * 5))s"
+                break
+              fi
+              if [ "$i" -eq 12 ]; then
+                echo "ERROR: Backend unhealthy after 60s"
+                docker compose logs backend --tail=50
+                exit 1
+              fi
+            done
 
             echo "=== Checking all services ==="
             docker compose ps
