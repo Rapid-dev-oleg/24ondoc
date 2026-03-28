@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 
 from admin.application.use_cases import (
     CreateUserDirectUseCase,
-    DeactivateUserUseCase,
+    DeleteUserUseCase,
     GetSettingsUseCase,
     ListUsersUseCase,
     LoginWithTelegramUseCase,
@@ -175,7 +175,7 @@ async def update_user(
 
 
 @router.delete("/api/admin/users/{telegram_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def deactivate_user(telegram_id: int, request: Request, _: AdminPayload) -> None:
+async def delete_user(telegram_id: int, request: Request, _: AdminPayload) -> None:
     settings = get_settings()
     db_session = request.state.db_session
     chatwoot = ChatwootAdminClient(
@@ -184,7 +184,7 @@ async def deactivate_user(telegram_id: int, request: Request, _: AdminPayload) -
         account_id=settings.chatwoot_support_account_id,
         platform_api_key=settings.chatwoot_platform_api_key,
     )
-    uc = DeactivateUserUseCase(SQLAlchemyUserProfileRepository(db_session), chatwoot)
+    uc = DeleteUserUseCase(SQLAlchemyUserProfileRepository(db_session), chatwoot)
     found = await uc.execute(telegram_id)
     if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")

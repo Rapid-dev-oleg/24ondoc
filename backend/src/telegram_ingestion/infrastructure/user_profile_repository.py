@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,6 +61,9 @@ class SQLAlchemyUserProfileRepository(UserProfileRepository):
     async def list_active(self) -> list[UserProfile]:
         result = await self._session.execute(select(UserORM).where(UserORM.is_active.is_(True)))
         return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def delete_by_telegram_id(self, telegram_id: int) -> None:
+        await self._session.execute(sql_delete(UserORM).where(UserORM.telegram_id == telegram_id))
 
     @staticmethod
     def _to_domain(row: UserORM) -> UserProfile:

@@ -61,6 +61,9 @@ class InMemoryUserProfileRepository(UserProfileRepository):
     async def list_active(self) -> list[UserProfile]:
         return [p for p in self._store.values() if p.is_active]
 
+    async def delete_by_telegram_id(self, telegram_id: int) -> None:
+        self._store.pop(telegram_id, None)
+
 
 class InMemoryVoiceStorage(VoiceSampleStoragePort):
     def __init__(self) -> None:

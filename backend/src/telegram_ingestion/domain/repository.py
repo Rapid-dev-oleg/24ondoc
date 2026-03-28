@@ -48,3 +48,6 @@ class UserProfileRepository(ABC):
 
     @abstractmethod
     async def list_active(self) -> list[UserProfile]: ...
+
+    @abstractmethod
+    async def delete_by_telegram_id(self, telegram_id: int) -> None: ...

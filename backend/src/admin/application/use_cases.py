@@ -152,6 +152,22 @@ class DeactivateUserUseCase:
         return True
 
 
+class DeleteUserUseCase:
+    """Hard-delete a user from DB and remove agent from Chatwoot CRM."""
+
+    def __init__(self, user_repo: UserProfileRepository, chatwoot: ChatwootAdminPort) -> None:
+        self._users = user_repo
+        self._chatwoot = chatwoot
+
+    async def execute(self, telegram_id: int) -> bool:
+        user = await self._users.get_by_telegram_id(telegram_id)
+        if user is None:
+            return False
+        await self._chatwoot.delete_agent(user.chatwoot_user_id)
+        await self._users.delete_by_telegram_id(telegram_id)
+        return True
+
+
 class GetSettingsUseCase:
     """Return masked environment settings."""
 

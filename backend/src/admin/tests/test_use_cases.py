@@ -13,6 +13,7 @@ from admin.application.ports import ChatwootAdminPort, EnvSettingsPort, Telegram
 from admin.application.use_cases import (
     CreateUserDirectUseCase,
     DeactivateUserUseCase,
+    DeleteUserUseCase,
     GetSettingsUseCase,
     ListUsersUseCase,
     LoginWithTelegramUseCase,
@@ -54,6 +55,9 @@ class InMemoryUserProfileRepository(UserProfileRepository):
 
     async def list_active(self) -> list[UserProfile]:
         return [p for p in self._store.values() if p.is_active]
+
+    async def delete_by_telegram_id(self, telegram_id: int) -> None:
+        self._store.pop(telegram_id, None)
 
 
 class InMemoryChatwootAdminPort(ChatwootAdminPort):
@@ -381,6 +385,60 @@ class TestDeactivateUserUseCase:
     async def test_chatwoot_delete_not_called_for_missing_user(self) -> None:
         chatwoot = InMemoryChatwootAdminPort()
         uc = DeactivateUserUseCase(InMemoryUserProfileRepository(), chatwoot)
+        await uc.execute(999)
+        assert chatwoot.deleted_agent_ids == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: DeleteUserUseCase
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteUserUseCase:
+    async def test_hard_deletes_user_from_repo(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        user = _make_user(telegram_id=1, chatwoot_user_id=42)
+        await user_repo.save(user)
+        chatwoot = InMemoryChatwootAdminPort()
+
+        uc = DeleteUserUseCase(user_repo, chatwoot)
+        found = await uc.execute(1)
+
+        assert found is True
+        assert await user_repo.get_by_telegram_id(1) is None
+
+    async def test_returns_false_for_missing_user(self) -> None:
+        chatwoot = InMemoryChatwootAdminPort()
+        uc = DeleteUserUseCase(InMemoryUserProfileRepository(), chatwoot)
+        assert await uc.execute(999) is False
+
+    async def test_deletes_agent_from_chatwoot(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        user = _make_user(telegram_id=1, chatwoot_user_id=77)
+        await user_repo.save(user)
+        chatwoot = InMemoryChatwootAdminPort()
+
+        uc = DeleteUserUseCase(user_repo, chatwoot)
+        await uc.execute(1)
+
+        assert chatwoot.deleted_agent_ids == [77]
+
+    async def test_inactive_user_can_be_hard_deleted(self) -> None:
+        """Деактивированный юзер (невидимый в таблице) должен удаляться."""
+        user_repo = InMemoryUserProfileRepository()
+        user = _make_user(telegram_id=764347890, chatwoot_user_id=5, is_active=False)
+        await user_repo.save(user)
+        chatwoot = InMemoryChatwootAdminPort()
+
+        uc = DeleteUserUseCase(user_repo, chatwoot)
+        found = await uc.execute(764347890)
+
+        assert found is True
+        assert await user_repo.get_by_telegram_id(764347890) is None
+
+    async def test_chatwoot_delete_not_called_for_missing_user(self) -> None:
+        chatwoot = InMemoryChatwootAdminPort()
+        uc = DeleteUserUseCase(InMemoryUserProfileRepository(), chatwoot)
         await uc.execute(999)
         assert chatwoot.deleted_agent_ids == []
 
