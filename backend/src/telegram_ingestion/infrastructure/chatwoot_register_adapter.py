@@ -85,11 +85,9 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
             content=json.dumps(account_body),
         )
         if account_response.status_code >= 400:
-            logger.warning(
-                "Failed to add user %d to account %d: %s",
-                user_id,
-                self._account_id,
-                account_response.text,
+            raise RuntimeError(
+                f"Failed to add Chatwoot user {user_id} to account {self._account_id}: "
+                f"{account_response.status_code} {account_response.text}"
             )
         return user_id
 

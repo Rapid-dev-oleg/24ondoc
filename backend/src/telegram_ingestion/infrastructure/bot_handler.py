@@ -133,9 +133,16 @@ def create_router(
 
         if auto_register is not None:
             first_name = message.from_user.first_name or ""
-            profile, password, is_new = await auto_register.execute(
-                message.from_user.id, first_name
-            )
+            try:
+                profile, password, is_new = await auto_register.execute(
+                    message.from_user.id, first_name
+                )
+            except Exception:
+                logger.exception("Auto-registration failed for user %s", message.from_user.id)
+                await message.answer(
+                    "❌ Ошибка регистрации. Попробуйте позже или обратитесь к администратору."
+                )
+                return
             try:
                 if is_new:
                     email = profile.settings.get("email", f"{profile.telegram_id}@24ondoc.ru")
