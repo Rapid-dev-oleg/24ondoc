@@ -58,6 +58,15 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
             return await self._create_via_platform_api(name, email, password)
         return await self._create_via_application_api(name, email, password)
 
+    async def _delete_platform_user(self, user_id: int) -> None:
+        """DELETE /platform/api/v1/users/{id} — откат при ошибке привязки к аккаунту."""
+        assert self._platform_http is not None
+        try:
+            resp = await self._platform_http.delete(f"/platform/api/v1/users/{user_id}")
+            logger.info("Rollback: deleted orphaned Chatwoot user %d (status %d)", user_id, resp.status_code)
+        except Exception:
+            logger.exception("Rollback failed: could not delete orphaned Chatwoot user %d", user_id)
+
     async def _create_via_platform_api(self, name: str, email: str, password: str) -> int:
         """POST /platform/api/v1/users then add user to account."""
         assert self._platform_http is not None
@@ -68,9 +77,17 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
             "role": "agent",
             "confirmed": True,
         }
+        logger.debug(
+            "Chatwoot Platform: creating user name=%r email=%r", name, email
+        )
         response = await self._platform_http.post(
             "/platform/api/v1/users",
             content=json.dumps(body),
+        )
+        logger.debug(
+            "Chatwoot Platform user creation response: status=%d body=%s",
+            response.status_code,
+            response.text[:500],
         )
         if response.status_code >= 400:
             raise RuntimeError(
@@ -80,11 +97,20 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
         user_id = int(str(data["id"]))
 
         account_body: dict[str, object] = {"user_id": user_id, "role": "agent"}
+        logger.debug(
+            "Chatwoot Platform: adding user %d to account %d", user_id, self._account_id
+        )
         account_response = await self._platform_http.post(
             f"/platform/api/v1/accounts/{self._account_id}/account_users",
             content=json.dumps(account_body),
         )
+        logger.debug(
+            "Chatwoot Platform account_users response: status=%d body=%s",
+            account_response.status_code,
+            account_response.text[:500],
+        )
         if account_response.status_code >= 400:
+            await self._delete_platform_user(user_id)
             raise RuntimeError(
                 f"Failed to add Chatwoot user {user_id} to account {self._account_id}: "
                 f"{account_response.status_code} {account_response.text}"
