@@ -49,3 +49,11 @@ class SupportTicket(BaseModel):
     def reassign(self, telegram_id: int) -> None:
         self.assignee_telegram_id = telegram_id
         self.last_sync = datetime.now(UTC)
+
+
+class ChatwootAgent(BaseModel):
+    """Value Object: агент Chatwoot, созданный через Platform API."""
+
+    user_id: int
+    access_token: str = ""
+    sso_url: str = ""

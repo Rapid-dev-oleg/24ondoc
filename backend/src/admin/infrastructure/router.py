@@ -145,6 +145,7 @@ async def create_user(body: CreateUserRequest, request: Request, _: AdminPayload
         base_url=settings.chatwoot_base_url,
         api_key=settings.chatwoot_api_key,
         account_id=settings.chatwoot_support_account_id,
+        platform_api_key=settings.chatwoot_platform_api_key,
     )
     notify = TelegramNotifyAdapter(bot_token=settings.telegram_bot_token)
     uc = CreateUserDirectUseCase(

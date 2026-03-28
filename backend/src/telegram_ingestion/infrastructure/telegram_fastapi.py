@@ -112,6 +112,7 @@ async def telegram_webhook(
         base_url=settings.chatwoot_base_url,
         api_key=settings.chatwoot_api_key,
         account_id=settings.chatwoot_support_account_id,
+        platform_api_key=settings.chatwoot_platform_api_key,
     )
     auto_register = AutoRegisterUserUseCase(
         user_repo, chatwoot_register, settings.chatwoot_support_account_id

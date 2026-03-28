@@ -29,3 +29,16 @@ class TicketUpdated(DomainEvent):
 class TicketCreationFailed(DomainEvent):
     session_id: uuid.UUID = field(default_factory=uuid.uuid4)
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class AgentCreated(DomainEvent):
+    agent_id: int = 0
+    name: str = ""
+    email: str = ""
+
+
+@dataclass(frozen=True)
+class AgentTokenObtained(DomainEvent):
+    agent_id: int = 0
+    sso_url: str = ""

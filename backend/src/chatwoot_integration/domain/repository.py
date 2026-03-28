@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from .models import CreateTicketCommand, SupportTicket
+from .models import ChatwootAgent, CreateTicketCommand, SupportTicket
 
 
 class SupportTicketRepository(ABC):
@@ -41,3 +41,16 @@ class ChatwootPort(ABC):
     async def update_conversation_assignee(
         self, task_id: int, assignee_chatwoot_id: int
     ) -> None: ...
+
+
+class ChatwootPlatformPort(ABC):
+    """Platform API port для управления пользователями Chatwoot без паролей."""
+
+    @abstractmethod
+    async def create_user(self, name: str, email: str) -> ChatwootAgent: ...
+
+    @abstractmethod
+    async def add_to_account(self, user_id: int, account_id: int, role: str = "agent") -> None: ...
+
+    @abstractmethod
+    async def get_sso_url(self, user_id: int) -> str: ...
