@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 class ChatwootRegisterAdapter(AgentRegistrationPort):
     """Creates an agent in Chatwoot.
 
-    If platform_api_key is provided, uses Platform API (no password required —
-    user is created via /platform/api/v1/users and added to the account).
+    If platform_api_key is provided, uses Platform API
+    (user is created via /platform/api/v1/users and added to the account).
     Otherwise, falls back to Application API with the supplied password.
     """
 
@@ -51,19 +51,20 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
     async def create_chatwoot_agent(self, name: str, email: str, password: str) -> int:
         """Create agent in Chatwoot and return the external chatwoot_user_id.
 
-        Uses Platform API when platform_api_key is configured (password ignored).
-        Falls back to Application API with password when platform_api_key is not set.
+        Uses Platform API when platform_api_key is configured.
+        Falls back to Application API when platform_api_key is not set.
         """
         if self._platform_api_key and self._platform_http is not None:
-            return await self._create_via_platform_api(name, email)
+            return await self._create_via_platform_api(name, email, password)
         return await self._create_via_application_api(name, email, password)
 
-    async def _create_via_platform_api(self, name: str, email: str) -> int:
+    async def _create_via_platform_api(self, name: str, email: str, password: str) -> int:
         """POST /platform/api/v1/users then add user to account."""
         assert self._platform_http is not None
         body: dict[str, object] = {
             "name": name,
             "email": email,
+            "password": password,
             "role": "agent",
             "confirmed": True,
         }
