@@ -30,6 +30,10 @@ def make_client(redis: AsyncMock | None = None, inbox_id: int = 7) -> ChatwootCl
     )
 
 
+def _chatwoot_contact_response(contact_id: int = 10) -> dict[str, object]:
+    return {"payload": {"contact": {"id": contact_id, "name": "Test"}}}
+
+
 def _chatwoot_conversation_response(task_id: int = 42) -> dict[str, object]:
     return {
         "id": task_id,
@@ -69,12 +73,15 @@ async def test_create_conversation_success() -> None:
         source_session_id=uuid.uuid4(),
     )
 
-    response_data = _chatwoot_conversation_response(task_id=99)
+    contact_data = _chatwoot_contact_response(contact_id=10)
+    conversation_data = _chatwoot_conversation_response(task_id=99)
     captured_requests: list[httpx.Request] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
         captured_requests.append(req)
-        return httpx.Response(200, json=response_data)
+        if "/contacts" in str(req.url) and req.method == "POST":
+            return httpx.Response(200, json=contact_data)
+        return httpx.Response(200, json=conversation_data)
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
@@ -86,10 +93,11 @@ async def test_create_conversation_success() -> None:
     assert ticket.status == TicketStatus.OPEN
     assert ticket.source_session_id == command.source_session_id
 
-    # inbox_id должен быть передан в теле запроса
-    assert len(captured_requests) == 1
-    sent_body = json.loads(captured_requests[0].content)
-    assert sent_body["inbox_id"] == 7
+    # Должно быть 2 запроса: создание контакта + создание conversation
+    assert len(captured_requests) == 2
+    conv_body = json.loads(captured_requests[1].content)
+    assert conv_body["inbox_id"] == 7
+    assert conv_body["contact_id"] == 10
 
 
 @pytest.mark.asyncio
@@ -105,11 +113,14 @@ async def test_create_conversation_retry_on_5xx() -> None:
         category="other",
     )
 
-    call_count = 0
+    contact_data = _chatwoot_contact_response(contact_id=10)
+    conv_call_count = 0
 
     def handler(req: httpx.Request) -> httpx.Response:
-        nonlocal call_count
-        call_count += 1
+        nonlocal conv_call_count
+        if "/contacts" in str(req.url) and req.method == "POST":
+            return httpx.Response(200, json=contact_data)
+        conv_call_count += 1
         return httpx.Response(503, json={"error": "Service Unavailable"})
 
     transport = httpx.MockTransport(handler)
@@ -119,13 +130,46 @@ async def test_create_conversation_retry_on_5xx() -> None:
 
     # После 3 попыток — None, сообщение в Redis
     assert result is None
-    assert call_count == 3
+    assert conv_call_count == 3
     redis.rpush.assert_called_once()
     queue_call_args = redis.rpush.call_args
     assert "chatwoot:failed_queue" in queue_call_args[0][0]
     queued_payload = json.loads(queue_call_args[0][1])
     assert queued_payload["action"] == "create_conversation"
     assert queued_payload["command"]["title"] == "Тест"
+
+
+@pytest.mark.asyncio
+async def test_create_conversation_no_retry_on_4xx() -> None:
+    """create_conversation не должен ретраить 4xx ошибки."""
+    redis = AsyncMock()
+    client = make_client(redis)
+
+    command = CreateTicketCommand(
+        title="Тест",
+        description="Описание",
+        priority="low",
+        category="question",
+    )
+
+    contact_data = _chatwoot_contact_response(contact_id=10)
+    conv_call_count = 0
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        nonlocal conv_call_count
+        if "/contacts" in str(req.url) and req.method == "POST":
+            return httpx.Response(200, json=contact_data)
+        conv_call_count += 1
+        return httpx.Response(422, json={"error": "Unprocessable Entity"})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
+        with patch.object(client, "_http", http):
+            result = await client.create_conversation(command)
+
+    assert result is None
+    assert conv_call_count == 1  # не должен ретраить 4xx
+    redis.rpush.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -154,7 +198,7 @@ async def test_create_conversation_retry_on_network_error() -> None:
             result = await client.create_conversation(command)
 
     assert result is None
-    assert call_count == 3
+    # Контакт создание тоже failит → push to queue на первом шаге
     redis.rpush.assert_called_once()
 
 

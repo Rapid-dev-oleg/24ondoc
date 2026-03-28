@@ -10,6 +10,7 @@ import httpx
 from redis.asyncio import Redis as AsyncRedis
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
@@ -82,15 +83,69 @@ class ChatwootClient(ChatwootPort):
         except Exception:
             logger.exception("Failed to push to Redis queue: %s", payload)
 
+    async def _create_contact(self, identifier: str, name: str) -> int:
+        """POST /api/v1/accounts/{id}/contacts — создать контакт и вернуть contact_id."""
+        body = {
+            "inbox_id": self._inbox_id,
+            "identifier": identifier,
+            "name": name,
+        }
+        response = await self._http.post(
+            f"{self._api_prefix}/contacts",
+            content=json.dumps(body),
+        )
+        if response.status_code == 422:
+            search_resp = await self._http.get(
+                f"{self._api_prefix}/contacts/filter",
+                params={"q": identifier},
+            )
+            if search_resp.status_code < 400:
+                results = search_resp.json()
+                payload = results.get("payload", results) if isinstance(results, dict) else results
+                if isinstance(payload, list) and payload:
+                    return int(payload[0]["id"])
+            search_resp2 = await self._http.get(
+                f"{self._api_prefix}/contacts/search",
+                params={"q": identifier},
+            )
+            if search_resp2.status_code < 400:
+                results2 = search_resp2.json()
+                payload2 = results2.get("payload", results2) if isinstance(results2, dict) else results2
+                if isinstance(payload2, list) and payload2:
+                    return int(payload2[0]["id"])
+            self._raise_for_status(response)
+        self._raise_for_status(response)
+        data: dict[str, Any] = response.json()
+        return int(data.get("payload", data).get("contact", data).get("id", data.get("id")))
+
     async def create_conversation(self, command: CreateTicketCommand) -> SupportTicket | None:  # type: ignore[override]
         """POST /api/v1/accounts/{id}/conversations с retry 3 раза → Redis при неудаче."""
+        contact_identifier = f"session-{command.source_session_id or 'default'}"
+        try:
+            contact_id = await self._create_contact(
+                identifier=contact_identifier,
+                name=command.title[:100],
+            )
+        except Exception:
+            logger.exception("Failed to create/find Chatwoot contact for %s", contact_identifier)
+            await self._push_to_queue(
+                {
+                    "action": "create_conversation",
+                    "command": command.model_dump(mode="json"),
+                }
+            )
+            return None
+
         body: dict[str, Any] = {
             "inbox_id": self._inbox_id,
-            "subject": command.title,
+            "contact_id": contact_id,
             "additional_attributes": {
                 "description": command.description,
                 "category": command.category,
                 "deadline": command.deadline,
+            },
+            "message": {
+                "content": f"**{command.title}**\n\n{command.description}",
             },
             "labels": command.labels,
         }
@@ -117,7 +172,7 @@ class ChatwootClient(ChatwootPort):
             )
 
         retry_decorator = retry(
-            retry=retry_if_exception_type((_ChatwootAPIError, httpx.TransportError)),
+            retry=retry_if_exception(_is_retryable),
             stop=stop_after_attempt(_MAX_ATTEMPTS),
             wait=wait_exponential(multiplier=0.1, min=0.1, max=1),
             reraise=True,
@@ -128,7 +183,7 @@ class ChatwootClient(ChatwootPort):
             result: SupportTicket = await decorated()
             return result
         except Exception:
-            logger.warning("create_conversation failed after %d attempts, queuing.", attempt)
+            logger.exception("create_conversation failed after %d attempts, queuing.", attempt)
             await self._push_to_queue(
                 {
                     "action": "create_conversation",
@@ -152,7 +207,7 @@ class ChatwootClient(ChatwootPort):
             self._raise_for_status(response)
 
         retry_decorator = retry(
-            retry=retry_if_exception_type((_ChatwootAPIError, httpx.TransportError)),
+            retry=retry_if_exception(_is_retryable),
             stop=stop_after_attempt(_MAX_ATTEMPTS),
             wait=wait_exponential(multiplier=0.1, min=0.1, max=1),
             reraise=True,
@@ -162,7 +217,7 @@ class ChatwootClient(ChatwootPort):
         try:
             await decorated()
         except Exception:
-            logger.warning("update_conversation_status failed after %d attempts, queuing.", attempt)
+            logger.exception("update_conversation_status failed after %d attempts, queuing.", attempt)
             await self._push_to_queue(
                 {
                     "action": "update_conversation_status",
@@ -219,7 +274,7 @@ class ChatwootClient(ChatwootPort):
             self._raise_for_status(response)
 
         retry_decorator = retry(
-            retry=retry_if_exception_type((_ChatwootAPIError, httpx.TransportError)),
+            retry=retry_if_exception(_is_retryable),
             stop=stop_after_attempt(_MAX_ATTEMPTS),
             wait=wait_exponential(multiplier=0.1, min=0.1, max=1),
             reraise=True,
@@ -229,7 +284,7 @@ class ChatwootClient(ChatwootPort):
         try:
             await decorated()
         except Exception:
-            logger.warning(
+            logger.exception(
                 "update_conversation_assignee failed after %d attempts, queuing.", attempt
             )
             await self._push_to_queue(
@@ -255,7 +310,7 @@ class ChatwootClient(ChatwootPort):
             self._raise_for_status(response)
 
         retry_decorator = retry(
-            retry=retry_if_exception_type((_ChatwootAPIError, httpx.TransportError)),
+            retry=retry_if_exception(_is_retryable),
             stop=stop_after_attempt(_MAX_ATTEMPTS),
             wait=wait_exponential(multiplier=0.1, min=0.1, max=1),
             reraise=True,
@@ -265,7 +320,7 @@ class ChatwootClient(ChatwootPort):
         try:
             await decorated()
         except Exception:
-            logger.warning("add_message failed after %d attempts, queuing.", attempt)
+            logger.exception("add_message failed after %d attempts, queuing.", attempt)
             await self._push_to_queue(
                 {
                     "action": "add_message",
