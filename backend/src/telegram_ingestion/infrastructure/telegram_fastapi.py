@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.storage.redis import RedisStorage
-from aiogram.types import Update
+from aiogram.types import ErrorEvent, Update
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from ai_classification.infrastructure.openrouter_adapter import OpenRouterAdapter
@@ -131,6 +132,16 @@ async def telegram_webhook(
     # Dispatcher with Redis FSM storage (shared state across per-request instances)
     storage = RedisStorage(redis=redis)
     dp = Dispatcher(storage=storage)
+
+    @dp.error()
+    async def on_telegram_error(event: ErrorEvent) -> bool:
+        if isinstance(event.exception, TelegramAPIError):
+            logger.warning(
+                "Telegram API error (non-fatal): %s", event.exception
+            )
+            return True  # suppress — don't propagate to FastAPI
+        return False  # re-raise non-Telegram errors
+
     dp.include_router(
         create_router(
             start_session,
