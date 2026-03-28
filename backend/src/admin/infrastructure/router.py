@@ -144,14 +144,14 @@ async def create_user(body: CreateUserRequest, request: Request, _: AdminPayload
     chatwoot = ChatwootAdminClient(
         base_url=settings.chatwoot_base_url,
         api_key=settings.chatwoot_api_key,
-        account_id=settings.chatwoot_account_id,
+        account_id=settings.chatwoot_support_account_id,
     )
     notify = TelegramNotifyAdapter(bot_token=settings.telegram_bot_token)
     uc = CreateUserDirectUseCase(
         chatwoot=chatwoot,
         user_repo=SQLAlchemyUserProfileRepository(db_session),
         notify=notify,
-        account_id=settings.chatwoot_account_id,
+        account_id=settings.chatwoot_support_account_id,
     )
     try:
         return await uc.execute(body)

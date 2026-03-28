@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     chatwoot_client = ChatwootClient(
         base_url=settings.chatwoot_base_url,
         api_key=settings.chatwoot_api_key,
-        account_id=settings.chatwoot_account_id,
+        account_id=settings.chatwoot_support_account_id,
         redis=redis,
     )
 
@@ -120,6 +120,7 @@ async def db_session_middleware(request: Request, call_next: object) -> Response
             request.state.call_repo = CallRecordRepositoryImpl(session)
             request.state.ticket_repo = request.app.state.ticket_repo
             request.state.t2_webhook_secret = request.app.state.settings.t2_webhook_secret
+            request.state.chatwoot_webhook_token = request.app.state.settings.chatwoot_webhook_token
             response: Response = await _call_next(request)
     return response
 

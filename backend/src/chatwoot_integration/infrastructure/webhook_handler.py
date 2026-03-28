@@ -22,6 +22,21 @@ _STATUS_MAP: dict[str, TicketStatus] = {
 }
 
 
+def _verify_token(payload: dict[str, Any], request: Request) -> None:
+    """Проверяет токен вебхука из тела или заголовка запроса.
+
+    Chatwoot передаёт токен в поле 'token' тела или заголовке 'X-Chatwoot-Token'.
+    Raises HTTPException(401) если токен невалиден или отсутствует.
+    """
+    expected: str | None = getattr(request.state, "chatwoot_webhook_token", None)
+    received = payload.get("token") or request.headers.get("X-Chatwoot-Token")
+    if expected is None or received != expected:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing Chatwoot webhook token",
+        )
+
+
 async def process_webhook_event(
     payload: dict[str, Any],
     ticket_repo: SupportTicketRepository,
@@ -68,6 +83,8 @@ async def chatwoot_webhook(
     Репозиторий внедряется через request.state (настраивается в lifespan приложения).
     """
     payload: dict[str, Any] = await request.json()
+
+    _verify_token(payload, request)
 
     ticket_repo: SupportTicketRepository | None = getattr(request.state, "ticket_repo", None)
     if ticket_repo is None:

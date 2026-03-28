@@ -263,20 +263,29 @@ async def test_webhook_unknown_status_does_not_save() -> None:
     ticket_repo.save.assert_not_called()
 
 
+_VALID_TOKEN = "test-webhook-token"
+
+
 @pytest.mark.asyncio
 async def test_chatwoot_webhook_endpoint_no_repo_raises_503() -> None:
     """HTTP endpoint: repo недоступен → 503."""
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Request
 
     from chatwoot_integration.infrastructure.webhook_handler import router
 
     app = FastAPI()
     app.include_router(router)
+
+    @app.middleware("http")
+    async def inject_token(request: Request, call_next: object) -> object:
+        request.state.chatwoot_webhook_token = _VALID_TOKEN
+        return await call_next(request)  # type: ignore[operator]
+
     client = TestClient(app, raise_server_exceptions=False)
 
     response = client.post(
         "/webhook/chatwoot",
-        json={"event": "conversation_status_changed", "id": 1, "status": "resolved"},
+        json={"event": "conversation_status_changed", "id": 1, "status": "resolved", "token": _VALID_TOKEN},
     )
     assert response.status_code == 503
 
@@ -295,15 +304,67 @@ async def test_chatwoot_webhook_endpoint_with_repo_returns_ok() -> None:
     app.include_router(router)
 
     @app.middleware("http")
-    async def inject_repo(request: Request, call_next: object) -> object:
+    async def inject_state(request: Request, call_next: object) -> object:
         request.state.ticket_repo = ticket_repo
+        request.state.chatwoot_webhook_token = _VALID_TOKEN
         _next = call_next
         return await _next(request)  # type: ignore[operator]
 
     client = TestClient(app)
     response = client.post(
         "/webhook/chatwoot",
-        json={"event": "conversation_status_changed", "id": 99, "status": "resolved"},
+        json={"event": "conversation_status_changed", "id": 99, "status": "resolved", "token": _VALID_TOKEN},
     )
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_webhook_valid_token_returns_ok() -> None:
+    """HTTP endpoint: валидный токен в теле → 200 ok."""
+    from fastapi import FastAPI, Request
+
+    from chatwoot_integration.infrastructure.webhook_handler import router
+
+    ticket_repo = AsyncMock(spec=SupportTicketRepository)
+    ticket_repo.get_by_id = AsyncMock(return_value=None)
+
+    app = FastAPI()
+    app.include_router(router)
+
+    @app.middleware("http")
+    async def inject_state(request: Request, call_next: object) -> object:
+        request.state.ticket_repo = ticket_repo
+        request.state.chatwoot_webhook_token = _VALID_TOKEN
+        return await call_next(request)  # type: ignore[operator]
+
+    client = TestClient(app)
+    response = client.post(
+        "/webhook/chatwoot",
+        json={"event": "message_created", "id": 1, "token": _VALID_TOKEN},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_webhook_invalid_token_returns_401() -> None:
+    """HTTP endpoint: невалидный токен → 401."""
+    from fastapi import FastAPI, Request
+
+    from chatwoot_integration.infrastructure.webhook_handler import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    @app.middleware("http")
+    async def inject_token(request: Request, call_next: object) -> object:
+        request.state.chatwoot_webhook_token = _VALID_TOKEN
+        return await call_next(request)  # type: ignore[operator]
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post(
+        "/webhook/chatwoot",
+        json={"event": "conversation_status_changed", "id": 1, "status": "resolved", "token": "wrong-token"},
+    )
+    assert response.status_code == 401

@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     # Chatwoot
     chatwoot_api_key: str
     chatwoot_base_url: str = "http://chatwoot:3000"
-    chatwoot_account_id: int = 1
+    chatwoot_support_account_id: int = 2
+    chatwoot_webhook_token: str
+    chatwoot_platform_api_key: str | None = None
 
     # OpenRouter
     openrouter_api_key: str

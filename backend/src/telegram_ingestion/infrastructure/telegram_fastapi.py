@@ -111,10 +111,10 @@ async def telegram_webhook(
     chatwoot_register = ChatwootRegisterAdapter(
         base_url=settings.chatwoot_base_url,
         api_key=settings.chatwoot_api_key,
-        account_id=settings.chatwoot_account_id,
+        account_id=settings.chatwoot_support_account_id,
     )
     auto_register = AutoRegisterUserUseCase(
-        user_repo, chatwoot_register, settings.chatwoot_account_id
+        user_repo, chatwoot_register, settings.chatwoot_support_account_id
     )
     update_profile = UpdateProfileFieldUseCase(user_repo)
     voice_storage = LocalVoiceSampleStorage(base_dir="/data/voice_samples")
