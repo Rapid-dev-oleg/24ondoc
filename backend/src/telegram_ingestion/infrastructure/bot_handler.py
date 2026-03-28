@@ -53,7 +53,7 @@ _CRM_URL = "https://chat.24ondoc.ru"
 _TASKS_PAGE_SIZE = 5
 
 
-class TelegramFSMStates(StatesGroup):  # type: ignore[misc]
+class TelegramFSMStates(StatesGroup):
     collecting = State()
     analyzing = State()
     preview = State()
@@ -62,7 +62,7 @@ class TelegramFSMStates(StatesGroup):  # type: ignore[misc]
     adding_comment = State()
 
 
-class SettingsFSMStates(StatesGroup):  # type: ignore[misc]
+class SettingsFSMStates(StatesGroup):
     menu = State()
     edit_name = State()
     edit_email = State()

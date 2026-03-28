@@ -63,7 +63,11 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
         assert self._platform_http is not None
         try:
             resp = await self._platform_http.delete(f"/platform/api/v1/users/{user_id}")
-            logger.info("Rollback: deleted orphaned Chatwoot user %d (status %d)", user_id, resp.status_code)
+            logger.info(
+                "Rollback: deleted orphaned Chatwoot user %d (status %d)",
+                user_id,
+                resp.status_code,
+            )
         except Exception:
             logger.exception("Rollback failed: could not delete orphaned Chatwoot user %d", user_id)
 

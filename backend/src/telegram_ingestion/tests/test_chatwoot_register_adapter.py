@@ -10,6 +10,7 @@ import pytest
 
 from telegram_ingestion.infrastructure.chatwoot_register_adapter import ChatwootRegisterAdapter
 
+_ADAPTER_LOGGER = "telegram_ingestion.infrastructure.chatwoot_register_adapter"
 
 # ---------------------------------------------------------------------------
 # Хелперы
@@ -246,7 +247,7 @@ async def test_platform_api_logs_user_creation(caplog: pytest.LogCaptureFixture)
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         adapter._platform_http = http
-        with caplog.at_level(logging.DEBUG, logger="telegram_ingestion.infrastructure.chatwoot_register_adapter"):
+        with caplog.at_level(logging.DEBUG, logger=_ADAPTER_LOGGER):
             await adapter.create_chatwoot_agent("Логгер", "logger@24ondoc.ru", "pass!")
 
     log_text = caplog.text
@@ -268,7 +269,7 @@ async def test_platform_api_logs_response_status(caplog: pytest.LogCaptureFixtur
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         adapter._platform_http = http
-        with caplog.at_level(logging.DEBUG, logger="telegram_ingestion.infrastructure.chatwoot_register_adapter"):
+        with caplog.at_level(logging.DEBUG, logger=_ADAPTER_LOGGER):
             await adapter.create_chatwoot_agent("Статус", "status@24ondoc.ru", "pass!")
 
     assert "200" in caplog.text
@@ -287,7 +288,7 @@ async def test_platform_api_logs_account_users_request(caplog: pytest.LogCapture
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         adapter._platform_http = http
-        with caplog.at_level(logging.DEBUG, logger="telegram_ingestion.infrastructure.chatwoot_register_adapter"):
+        with caplog.at_level(logging.DEBUG, logger=_ADAPTER_LOGGER):
             await adapter.create_chatwoot_agent("Аккаунт", "acc@24ondoc.ru", "pass!")
 
     assert "55" in caplog.text  # user_id=55 упоминается в логах account linking

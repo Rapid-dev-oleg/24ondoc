@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-class ATSBase(DeclarativeBase):  # type: ignore[misc]
+class ATSBase(DeclarativeBase):
     pass
 
 

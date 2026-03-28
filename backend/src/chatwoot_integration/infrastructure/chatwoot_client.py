@@ -11,7 +11,6 @@ from redis.asyncio import Redis as AsyncRedis
 from tenacity import (
     retry,
     retry_if_exception,
-    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
@@ -110,7 +109,11 @@ class ChatwootClient(ChatwootPort):
             )
             if search_resp2.status_code < 400:
                 results2 = search_resp2.json()
-                payload2 = results2.get("payload", results2) if isinstance(results2, dict) else results2
+                payload2 = (
+                    results2.get("payload", results2)
+                    if isinstance(results2, dict)
+                    else results2
+                )
                 if isinstance(payload2, list) and payload2:
                     return int(payload2[0]["id"])
             self._raise_for_status(response)
@@ -217,7 +220,10 @@ class ChatwootClient(ChatwootPort):
         try:
             await decorated()
         except Exception:
-            logger.exception("update_conversation_status failed after %d attempts, queuing.", attempt)
+            logger.exception(
+                "update_conversation_status failed after %d attempts, queuing.",
+                attempt,
+            )
             await self._push_to_queue(
                 {
                     "action": "update_conversation_status",

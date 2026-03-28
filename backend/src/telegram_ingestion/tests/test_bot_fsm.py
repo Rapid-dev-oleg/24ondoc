@@ -131,7 +131,7 @@ class InMemoryChatwootForCreate(ChatwootPort):
         self.created: list[SupportTicket] = []
 
     async def create_conversation(self, command: object) -> SupportTicket:
-        cmd = command  # type: ignore[assignment]
+        cmd = command
         ticket = SupportTicket(task_id=len(self.created) + 1, title=getattr(cmd, "title", "Тест"))
         self.created.append(ticket)
         return ticket
