@@ -315,6 +315,13 @@ def create_router(
         if callback.from_user is None:
             await callback.answer()
             return
+        if draft_repo is not None:
+            session = await draft_repo.get_active_by_user(callback.from_user.id)
+            if session is None:
+                await callback.answer("❌ Сессия не найдена.")
+                return
+            session.start_editing()
+            await draft_repo.save(session)
         await state.set_state(TelegramFSMStates.collecting)
         await callback.answer()
         if isinstance(callback.message, Message):
