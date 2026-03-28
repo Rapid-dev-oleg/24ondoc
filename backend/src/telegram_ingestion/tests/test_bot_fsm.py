@@ -10,7 +10,17 @@ from aiogram import Dispatcher
 from aiogram.enums import ChatType
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Chat, Message, Update, User
+from aiogram.types import CallbackQuery, Chat, Message, Update, User
+
+from ai_classification.domain.models import (
+    Category,
+    ClassificationResult,
+    Priority,
+)
+from ai_classification.domain.repository import AIClassificationPort
+from chatwoot_integration.application.use_cases import CreateTicketFromSession
+from chatwoot_integration.domain.models import SupportTicket
+from chatwoot_integration.domain.repository import ChatwootPort, SupportTicketRepository
 
 from ..application.ports import STTPort, UserProfilePort
 from ..application.use_cases import (
@@ -84,6 +94,63 @@ class MockSTTPort(STTPort):
         return self._result
 
 
+class MockAIPort(AIClassificationPort):
+    def __init__(self, raise_error: bool = False) -> None:
+        self._raise_error = raise_error
+
+    async def classify(self, text: str) -> ClassificationResult:
+        if self._raise_error:
+            raise RuntimeError("AI service unavailable")
+        return ClassificationResult(
+            source_text=text,
+            title="Проблема с кнопкой",
+            description="Подробное описание",
+            category=Category.BUG,
+            priority=Priority.HIGH,
+        )
+
+
+class InMemorySupportTicketRepo(SupportTicketRepository):
+    def __init__(self) -> None:
+        self._store: dict[int, SupportTicket] = {}
+
+    async def get_by_id(self, task_id: int) -> SupportTicket | None:
+        return self._store.get(task_id)
+
+    async def save(self, ticket: SupportTicket) -> None:
+        self._store[ticket.task_id] = ticket
+
+    async def get_by_assignee(
+        self, telegram_id: int, status: str | None = None
+    ) -> list[SupportTicket]:
+        return []
+
+
+class InMemoryChatwootForCreate(ChatwootPort):
+    def __init__(self) -> None:
+        self.created: list[SupportTicket] = []
+
+    async def create_conversation(self, command: object) -> SupportTicket:
+        cmd = command  # type: ignore[assignment]
+        ticket = SupportTicket(task_id=len(self.created) + 1, title=getattr(cmd, "title", "Тест"))
+        self.created.append(ticket)
+        return ticket
+
+    async def update_conversation_status(self, task_id: int, status: str) -> None:
+        pass
+
+    async def get_conversations(
+        self, assignee_id: int, status: str = "open", page: int = 1
+    ) -> list[SupportTicket]:
+        return []
+
+    async def add_message(self, task_id: int, content: str, private: bool = True) -> None:
+        pass
+
+    async def update_conversation_assignee(self, task_id: int, assignee_chatwoot_id: int) -> None:
+        pass
+
+
 # ---------- aiogram test helpers ----------
 
 
@@ -107,6 +174,35 @@ def make_message(
 
 def make_update(message: Message, update_id: int = 1) -> Update:
     return Update(update_id=update_id, message=message)
+
+
+def make_callback(
+    user_id: int = 100,
+    data: str = "collect",
+    message_id: int = 10,
+) -> CallbackQuery:
+    msg = Message(
+        message_id=message_id,
+        date=datetime.now(UTC),
+        chat=Chat(id=user_id, type=ChatType.PRIVATE),
+        from_user=make_tg_user(user_id),
+        text="нажата кнопка",
+    )
+    return CallbackQuery(
+        id="cb_test",
+        from_user=make_tg_user(user_id),
+        chat_instance="ci",
+        data=data,
+        message=msg,
+    )
+
+
+def make_callback_update(
+    user_id: int = 100,
+    data: str = "collect",
+    update_id: int = 2,
+) -> Update:
+    return Update(update_id=update_id, callback_query=make_callback(user_id=user_id, data=data))
 
 
 def make_mock_bot(bot_id: int = 42) -> MagicMock:
@@ -554,3 +650,178 @@ class TestBotHandlers:
         state = await storage.get_state(key)
         # No awaiting_phone state — just stay at None
         assert state is None
+
+
+# ---------- Tests: Preview Flow (callback_collect → analyzing → preview) ----------
+
+
+class TestPreviewFlow:
+    """Тесты перехода collecting → preview через AI-анализ."""
+
+    def _build_router(
+        self,
+        repo: InMemoryRepo,
+        session: DraftSession,
+        ai_raise_error: bool = False,
+    ) -> tuple[object, object]:
+        """Строит router с реальными use cases и mock-ботом."""
+        mock_start = MagicMock(spec=StartSessionUseCase)
+        mock_start.execute = AsyncMock(return_value=session)
+        mock_add_text = MagicMock(spec=AddTextContentUseCase)
+        mock_add_voice = MagicMock(spec=AddVoiceContentUseCase)
+        mock_trigger = MagicMock(spec=TriggerAnalysisUseCase)
+        mock_trigger.execute = AsyncMock(return_value=session)
+        mock_cancel = MagicMock(spec=CancelSessionUseCase)
+        mock_cancel.execute = AsyncMock(return_value=True)
+        mock_user_port = MagicMock(spec=UserProfilePort)
+        mock_user_port.is_authorized = AsyncMock(return_value=True)
+        mock_user_port.get_profile = AsyncMock(return_value=None)
+
+        ai_port = MockAIPort(raise_error=ai_raise_error)
+        set_result = SetAnalysisResultUseCase(repo)
+        ticket_repo = InMemorySupportTicketRepo()
+        chatwoot = InMemoryChatwootForCreate()
+        create_ticket = CreateTicketFromSession(chatwoot, ticket_repo)
+
+        router = create_router(
+            mock_start,
+            mock_add_text,
+            mock_add_voice,
+            mock_trigger,
+            mock_cancel,
+            mock_user_port,
+            ai_port=ai_port,
+            set_analysis_result=set_result,
+            create_ticket=create_ticket,
+            draft_repo=repo,
+        )
+        return router, chatwoot
+
+    async def test_callback_collect_transitions_to_preview_on_success(self) -> None:
+        """При успешном AI-анализе состояние должно стать preview."""
+        repo = InMemoryRepo()
+        session = DraftSession(user_id=100)
+        session.add_content_block(ContentBlock(type="text", content="Тест проблема"))
+        session.start_analysis()
+        await repo.save(session)
+
+        storage = MemoryStorage()
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        await storage.set_state(key, TelegramFSMStates.collecting.state)
+        await storage.set_data(key, {"session_id": str(session.session_id)})
+
+        router, _ = self._build_router(repo, session)
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        bot = make_mock_bot(bot_id=42)
+
+        await dp.feed_update(bot, make_callback_update(user_id=100, data="collect"))
+
+        state = await storage.get_state(key)
+        assert state == TelegramFSMStates.preview.state
+
+    async def test_callback_collect_stores_ai_result_in_session(self) -> None:
+        """После успешного анализа ai_result должен быть сохранён в сессии."""
+        repo = InMemoryRepo()
+        session = DraftSession(user_id=100)
+        session.add_content_block(ContentBlock(type="text", content="Тест"))
+        session.start_analysis()
+        await repo.save(session)
+
+        storage = MemoryStorage()
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        await storage.set_state(key, TelegramFSMStates.collecting.state)
+        await storage.set_data(key, {"session_id": str(session.session_id)})
+
+        router, _ = self._build_router(repo, session)
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        await dp.feed_update(make_mock_bot(), make_callback_update(data="collect"))
+
+        updated = await repo.get_by_id(session.session_id)
+        assert updated is not None
+        assert updated.ai_result is not None
+        assert updated.ai_result.title == "Проблема с кнопкой"
+        assert updated.status == SessionStatus.PREVIEW
+
+    async def test_callback_collect_reverts_to_collecting_on_ai_error(self) -> None:
+        """При ошибке AI состояние должно вернуться в collecting."""
+        repo = InMemoryRepo()
+        session = DraftSession(user_id=100)
+        session.add_content_block(ContentBlock(type="text", content="Тест"))
+        session.start_analysis()
+        await repo.save(session)
+
+        storage = MemoryStorage()
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        await storage.set_state(key, TelegramFSMStates.collecting.state)
+        await storage.set_data(key, {"session_id": str(session.session_id)})
+
+        router, _ = self._build_router(repo, session, ai_raise_error=True)
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        await dp.feed_update(make_mock_bot(), make_callback_update(data="collect"))
+
+        state = await storage.get_state(key)
+        assert state == TelegramFSMStates.collecting.state
+
+    async def test_callback_create_crm_creates_ticket_and_clears_state(self) -> None:
+        """Нажатие create_crm должно создать тикет и очистить FSM состояние."""
+        repo = InMemoryRepo()
+        session = DraftSession(user_id=100)
+        session.add_content_block(ContentBlock(type="text", content="Задача"))
+        session.start_analysis()
+        ai_res = AIResult(
+            title="Тест задача",
+            description="Описание",
+            category="bug",
+            priority="high",
+        )
+        session.complete_analysis(ai_res)
+        await repo.save(session)
+
+        storage = MemoryStorage()
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        await storage.set_state(key, TelegramFSMStates.preview.state)
+        await storage.set_data(key, {"session_id": str(session.session_id)})
+
+        router, chatwoot = self._build_router(repo, session)
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        await dp.feed_update(make_mock_bot(), make_callback_update(data="create_crm"))
+
+        state = await storage.get_state(key)
+        assert state is None
+        assert len(chatwoot.created) == 1
+        assert chatwoot.created[0].title == "Тест задача"
+
+    async def test_reanalyze_callback_transitions_to_preview(self) -> None:
+        """Повторный анализ из preview тоже должен завершаться в preview."""
+        repo = InMemoryRepo()
+        session = DraftSession(user_id=100)
+        session.add_content_block(ContentBlock(type="text", content="Данные"))
+        session.start_analysis()
+        ai_res = AIResult(
+            title="Старый заголовок",
+            description="Старое описание",
+            category="bug",
+            priority="medium",
+        )
+        session.complete_analysis(ai_res)
+        # Re-start analysis for reanalyze flow
+        session.start_editing()
+        session.start_analysis()
+        await repo.save(session)
+
+        storage = MemoryStorage()
+        key = StorageKey(bot_id=42, chat_id=100, user_id=100)
+        await storage.set_state(key, TelegramFSMStates.preview.state)
+        await storage.set_data(key, {"session_id": str(session.session_id)})
+
+        router, _ = self._build_router(repo, session)
+        dp = Dispatcher(storage=storage)
+        dp.include_router(router)
+        await dp.feed_update(make_mock_bot(), make_callback_update(data="reanalyze"))
+
+        state = await storage.get_state(key)
+        assert state == TelegramFSMStates.preview.state

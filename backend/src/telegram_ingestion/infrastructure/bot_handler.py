@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import uuid
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
@@ -16,6 +17,9 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+
+from ai_classification.domain.repository import AIClassificationPort
+from chatwoot_integration.application.use_cases import CreateTicketFromSession
 
 from ..application.ports import UserProfilePort
 from ..application.registration_use_cases import (
@@ -33,9 +37,12 @@ from ..application.use_cases import (
     AddTextContentUseCase,
     AddVoiceContentUseCase,
     CancelSessionUseCase,
+    SetAnalysisResultUseCase,
     StartSessionUseCase,
     TriggerAnalysisUseCase,
 )
+from ..domain.models import AIResult, DraftSession
+from ..domain.repository import DraftSessionRepository
 
 _CRM_URL = "https://chat.24ondoc.ru"
 
@@ -78,6 +85,25 @@ def _preview_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _format_preview(session: DraftSession) -> str:
+    r = session.ai_result
+    if r is None:
+        return "❓ Результат анализа недоступен."
+    lines = [
+        "<b>📋 Preview задачи</b>",
+        "",
+        f"<b>Заголовок:</b> {r.title}",
+        f"<b>Описание:</b> {r.description}",
+        f"<b>Категория:</b> {r.category}",
+        f"<b>Приоритет:</b> {r.priority}",
+    ]
+    if r.deadline:
+        lines.append(f"<b>Дедлайн:</b> {r.deadline}")
+    if r.assignee_hint:
+        lines.append(f"<b>Исполнитель:</b> {r.assignee_hint}")
+    return "\n".join(lines)
+
+
 def create_router(
     start_session: StartSessionUseCase,
     add_text: AddTextContentUseCase,
@@ -86,6 +112,11 @@ def create_router(
     cancel_session: CancelSessionUseCase,
     user_port: UserProfilePort,
     auto_register: AutoRegisterUserUseCase | None = None,
+    *,
+    ai_port: AIClassificationPort | None = None,
+    set_analysis_result: SetAnalysisResultUseCase | None = None,
+    create_ticket: CreateTicketFromSession | None = None,
+    draft_repo: DraftSessionRepository | None = None,
 ) -> Router:
     """Create and configure the telegram ingestion router with injected use cases."""
     router = Router(name="telegram_ingestion")
@@ -204,6 +235,49 @@ def create_router(
         if isinstance(callback.message, Message):
             await callback.message.edit_text("⏳ Анализирую... Пожалуйста, подождите.")
 
+        if ai_port is None or set_analysis_result is None:
+            await state.set_state(TelegramFSMStates.collecting)
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(
+                    "❌ AI-анализ недоступен. Попробуйте позже.",
+                    reply_markup=_collect_keyboard(),
+                )
+            return
+
+        try:
+            text = session.assembled_text or ""
+            classification = await ai_port.classify(text)
+            ai_result = AIResult(
+                title=classification.title,
+                description=classification.description,
+                category=str(classification.category),
+                priority=str(classification.priority),
+                deadline=classification.deadline,
+                entities={
+                    "emails": classification.entities.emails,
+                    "phones": classification.entities.phones,
+                    "prices": classification.entities.prices,
+                    "dates": classification.entities.dates,
+                },
+                assignee_hint=classification.assignee_hint,
+            )
+            updated = await set_analysis_result.execute(session.session_id, ai_result)
+            if updated is None:
+                raise ValueError("Session not found after analysis")
+            await state.set_state(TelegramFSMStates.preview)
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(
+                    _format_preview(updated),
+                    reply_markup=_preview_keyboard(),
+                )
+        except Exception:
+            await state.set_state(TelegramFSMStates.collecting)
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(
+                    "❌ Ошибка анализа. Попробуйте снова.",
+                    reply_markup=_collect_keyboard(),
+                )
+
     @router.callback_query(F.data == "cancel")
     async def callback_cancel(callback: CallbackQuery, state: FSMContext) -> None:
         if callback.from_user is None:
@@ -241,6 +315,87 @@ def create_router(
         await callback.answer()
         if isinstance(callback.message, Message):
             await callback.message.edit_text("⏳ Переанализирую...")
+
+        if ai_port is None or set_analysis_result is None:
+            await state.set_state(TelegramFSMStates.preview)
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(
+                    "❌ AI-анализ недоступен. Попробуйте позже.",
+                    reply_markup=_preview_keyboard(),
+                )
+            return
+
+        try:
+            text = session.assembled_text or ""
+            classification = await ai_port.classify(text)
+            ai_result = AIResult(
+                title=classification.title,
+                description=classification.description,
+                category=str(classification.category),
+                priority=str(classification.priority),
+                deadline=classification.deadline,
+                entities={
+                    "emails": classification.entities.emails,
+                    "phones": classification.entities.phones,
+                    "prices": classification.entities.prices,
+                    "dates": classification.entities.dates,
+                },
+                assignee_hint=classification.assignee_hint,
+            )
+            updated = await set_analysis_result.execute(session.session_id, ai_result)
+            if updated is None:
+                raise ValueError("Session not found after analysis")
+            await state.set_state(TelegramFSMStates.preview)
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(
+                    _format_preview(updated),
+                    reply_markup=_preview_keyboard(),
+                )
+        except Exception:
+            await state.set_state(TelegramFSMStates.preview)
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(
+                    "❌ Ошибка анализа. Попробуйте снова.",
+                    reply_markup=_preview_keyboard(),
+                )
+
+    @router.callback_query(TelegramFSMStates.preview, F.data == "create_crm")
+    async def callback_create_crm(callback: CallbackQuery, state: FSMContext) -> None:
+        if callback.from_user is None:
+            await callback.answer()
+            return
+
+        if create_ticket is None or draft_repo is None:
+            await callback.answer("❌ CRM-интеграция недоступна.", show_alert=True)
+            return
+
+        data = await state.get_data()
+        session_id_str = data.get("session_id")
+        if session_id_str is None:
+            await callback.answer("❌ Сессия не найдена.", show_alert=True)
+            return
+
+        try:
+            session_id = uuid.UUID(session_id_str)
+            fetched = await draft_repo.get_by_id(session_id)
+            if fetched is None:
+                await callback.answer("❌ Сессия не найдена.", show_alert=True)
+                return
+
+            ticket = await create_ticket.execute(fetched)
+            if ticket is None:
+                await callback.answer("❌ Ошибка создания задачи.", show_alert=True)
+                return
+
+            await cancel_session.execute(callback.from_user.id)
+            await state.clear()
+            await callback.answer(f"✅ Задача #{ticket.task_id} создана в CRM!")
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(
+                    f"✅ Задача <b>#{ticket.task_id}</b> создана в CRM.\n{ticket.title}"
+                )
+        except Exception:
+            await callback.answer("❌ Ошибка создания задачи.", show_alert=True)
 
     return router
 
@@ -642,9 +797,7 @@ def create_settings_router(
             await message.answer("❌ Профиль не найден.")
             return
         await state.set_state(SettingsFSMStates.menu)
-        await message.answer(
-            f"✅ Имя обновлено: {message.text}", reply_markup=_settings_keyboard()
-        )
+        await message.answer(f"✅ Имя обновлено: {message.text}", reply_markup=_settings_keyboard())
 
     @router.message(SettingsFSMStates.edit_email, F.text)
     async def handle_new_email(message: Message, state: FSMContext) -> None:
@@ -674,9 +827,7 @@ def create_settings_router(
         ok = await save_voice.execute(message.from_user.id, raw.read(), "ogg")
         if ok:
             await state.set_state(SettingsFSMStates.menu)
-            await message.answer(
-                "✅ Голосовой семпл сохранён.", reply_markup=_settings_keyboard()
-            )
+            await message.answer("✅ Голосовой семпл сохранён.", reply_markup=_settings_keyboard())
         else:
             await message.answer("❌ Профиль не найден.")
 
@@ -702,9 +853,7 @@ def create_settings_router(
         ok = await save_voice.execute(message.from_user.id, raw.read(), ext)
         if ok:
             await state.set_state(SettingsFSMStates.menu)
-            await message.answer(
-                "✅ Голосовой семпл сохранён.", reply_markup=_settings_keyboard()
-            )
+            await message.answer("✅ Голосовой семпл сохранён.", reply_markup=_settings_keyboard())
         else:
             await message.answer("❌ Профиль не найден.")
 

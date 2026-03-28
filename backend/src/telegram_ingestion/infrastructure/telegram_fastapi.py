@@ -9,8 +9,13 @@ from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import Update
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
+from ai_classification.infrastructure.openrouter_adapter import OpenRouterAdapter
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
+from chatwoot_integration.application.use_cases import CreateTicketFromSession
 from chatwoot_integration.infrastructure.chatwoot_client import ChatwootClient
+from chatwoot_integration.infrastructure.ticket_repository import (
+    InMemorySupportTicketRepository,
+)
 from telegram_ingestion.application.registration_use_cases import (
     AutoRegisterUserUseCase,
     SaveVoiceSampleUseCase,
@@ -26,6 +31,7 @@ from telegram_ingestion.application.use_cases import (
     AddTextContentUseCase,
     AddVoiceContentUseCase,
     CancelSessionUseCase,
+    SetAnalysisResultUseCase,
     StartSessionUseCase,
     TriggerAnalysisUseCase,
 )
@@ -94,6 +100,7 @@ async def telegram_webhook(
     add_voice = AddVoiceContentUseCase(draft_repo, stt_port)
     trigger_analysis = TriggerAnalysisUseCase(draft_repo)
     cancel_session = CancelSessionUseCase(draft_repo)
+    set_analysis_result = SetAnalysisResultUseCase(draft_repo)
 
     get_my_tasks = GetMyTasksUseCase(user_port, chatwoot_client)
     update_task_status = UpdateTaskStatusUseCase(user_port, chatwoot_client)
@@ -106,10 +113,19 @@ async def telegram_webhook(
         api_key=settings.chatwoot_api_key,
         account_id=settings.chatwoot_account_id,
     )
-    auto_register = AutoRegisterUserUseCase(user_repo, chatwoot_register, settings.chatwoot_account_id)
+    auto_register = AutoRegisterUserUseCase(
+        user_repo, chatwoot_register, settings.chatwoot_account_id
+    )
     update_profile = UpdateProfileFieldUseCase(user_repo)
     voice_storage = LocalVoiceSampleStorage(base_dir="/data/voice_samples")
     save_voice = SaveVoiceSampleUseCase(user_repo, voice_storage)
+
+    # AI classification + CRM ticket creation
+    ai_port = OpenRouterAdapter(
+        api_key=settings.openrouter_api_key or settings.openai_api_key or ""
+    )
+    ticket_repo: InMemorySupportTicketRepository = request.app.state.ticket_repo
+    create_ticket = CreateTicketFromSession(chatwoot_client, ticket_repo)
 
     # Dispatcher with Redis FSM storage (shared state across per-request instances)
     storage = RedisStorage(redis=redis)
@@ -123,6 +139,10 @@ async def telegram_webhook(
             cancel_session,
             user_port,
             auto_register=auto_register,
+            ai_port=ai_port,
+            set_analysis_result=set_analysis_result,
+            create_ticket=create_ticket,
+            draft_repo=draft_repo,
         )
     )
     dp.include_router(
