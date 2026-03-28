@@ -133,12 +133,12 @@ services:
   whisper:
     image: onerahmet/openai-whisper-asr-webservice:latest
     environment:
-      - ASR_MODEL=large-v3
+      - ASR_MODEL=base
       - ASR_ENGINE=faster_whisper
     volumes:
       - whisper_cache:/root/.cache/whisper
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/docs"]
       interval: 60s
       timeout: 30s
       retries: 3
