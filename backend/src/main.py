@@ -56,8 +56,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         inbox_id=settings.chatwoot_inbox_id,
     )
 
-    # STT adapter (bytes → text via OpenAI-compatible API / OpenRouter)
-    stt_port = OpenRouterSTTAdapter(api_key=settings.openai_api_key or settings.openrouter_api_key)
+    # STT adapter: self-hosted Whisper primary, OpenAI API fallback
+    stt_port = OpenRouterSTTAdapter(
+        api_key=settings.openai_api_key or settings.openrouter_api_key,
+        whisper_url=settings.whisper_base_url,
+    )
 
     # In-memory SupportTicket cache (persists for process lifetime)
     ticket_repo = InMemorySupportTicketRepository()

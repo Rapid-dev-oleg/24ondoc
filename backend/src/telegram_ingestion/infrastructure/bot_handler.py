@@ -205,7 +205,15 @@ def create_router(
         if not isinstance(raw_file_io, io.BytesIO):
             await message.answer("❌ Не удалось скачать файл.")
             return
-        await add_voice.execute(message.from_user.id, file_id, raw_file_io.read())
+        try:
+            await add_voice.execute(message.from_user.id, file_id, raw_file_io.read())
+        except Exception:
+            logger.exception("Voice transcription failed for user %s", message.from_user.id)
+            await message.answer(
+                "❌ Не удалось транскрибировать голосовое сообщение. Попробуйте ещё раз.",
+                reply_markup=_collect_keyboard(),
+            )
+            return
         await message.answer(
             "🎤 Голосовое сообщение транскрибировано и добавлено.",
             reply_markup=_collect_keyboard(),
