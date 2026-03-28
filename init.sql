@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
     telegram_id BIGINT PRIMARY KEY,
     chatwoot_user_id INTEGER UNIQUE NOT NULL,
     chatwoot_account_id INTEGER NOT NULL,
+    chatwoot_contact_id INTEGER NULL,
     role VARCHAR(20) DEFAULT 'agent' CHECK (role IN ('agent', 'supervisor', 'admin')),
     phone_internal VARCHAR(20),
     voice_sample_url VARCHAR(255),

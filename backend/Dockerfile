@@ -30,14 +30,17 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages/ /usr/local/lib/pyth
 COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
 COPY src/ ./src/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./alembic.ini
+COPY entrypoint.sh ./entrypoint.sh
 
-RUN mkdir -p /app/data/voices && chown -R appuser:appuser /app
+RUN mkdir -p /app/data/voices && chown -R appuser:appuser /app && chmod +x /app/entrypoint.sh
 
 USER appuser
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/entrypoint.sh"]

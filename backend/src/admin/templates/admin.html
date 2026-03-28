@@ -396,7 +396,13 @@ function adminApp() {
       this.isLoadingUsers = true;
       try {
         const r = await this.api('GET', '/api/admin/users');
-        if (r && r.ok) this.users = await r.json();
+        if (r && r.ok) {
+          this.users = await r.json();
+        } else if (r) {
+          let d = {};
+          try { d = await r.json(); } catch (_) {}
+          this.toast(d.detail || 'Ошибка загрузки пользователей', 'error');
+        }
       } catch (e) {
         this.toast('Ошибка загрузки пользователей', 'error');
       } finally {
@@ -413,7 +419,8 @@ function adminApp() {
         };
         const r = await this.api('POST', '/api/admin/users', body);
         if (!r || !r.ok) {
-          const d = r ? await r.json() : {};
+          let d = {};
+          try { d = r ? await r.json() : {}; } catch (_) {}
           this.toast(d.detail || 'Ошибка создания', 'error');
           return;
         }
@@ -474,7 +481,9 @@ function adminApp() {
         if (this.settingsForm.telegram_bot_token) body.telegram_bot_token = this.settingsForm.telegram_bot_token;
         const r = await this.api('PATCH', '/api/admin/settings', body);
         if (!r || !r.ok) {
-          this.toast('Ошибка сохранения', 'error');
+          let d = {};
+          try { d = r ? await r.json() : {}; } catch (_) {}
+          this.toast(d.detail || 'Ошибка сохранения', 'error');
           return;
         }
         this.settings = await r.json();

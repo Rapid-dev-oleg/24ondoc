@@ -11,7 +11,7 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -105,6 +105,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return JSON 500 for all unhandled exceptions instead of Starlette's plain-text response."""
+    logger.error("Unhandled exception", path=request.url.path, exc_info=exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 @app.middleware("http")
