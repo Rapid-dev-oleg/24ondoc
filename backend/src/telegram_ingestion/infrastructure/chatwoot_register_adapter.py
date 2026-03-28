@@ -91,6 +91,14 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
             response.status_code,
             response.text[:500],
         )
+        if response.status_code == 422:
+            # Email уже занят — fallback на App API с идемпотентным поиском существующего агента
+            logger.warning(
+                "Chatwoot Platform user creation 422 for email %s (likely already exists), "
+                "falling back to Application API",
+                email,
+            )
+            return await self._create_via_application_api(name, email, password)
         if response.status_code >= 400:
             raise RuntimeError(
                 f"Chatwoot Platform user creation failed {response.status_code}: {response.text}"
@@ -122,6 +130,26 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
             return await self._create_via_application_api(name, email, password)
         return user_id
 
+    async def _find_agent_by_email(self, email: str) -> int | None:
+        """GET /api/v1/accounts/{id}/agents — ищет агента по email, возвращает ID или None."""
+        try:
+            response = await self._http.get(f"/api/v1/accounts/{self._account_id}/agents")
+            if response.status_code >= 400:
+                logger.warning(
+                    "Could not list agents to find existing by email: %d", response.status_code
+                )
+                return None
+            agents = response.json()
+            if not isinstance(agents, list):
+                return None
+            for agent in agents:
+                if isinstance(agent, dict) and agent.get("email") == email:
+                    return int(str(agent["id"]))
+            return None
+        except Exception:
+            logger.exception("Failed to search for existing agent with email %s", email)
+            return None
+
     async def _create_via_application_api(self, name: str, email: str, password: str) -> int:
         """POST /api/v1/accounts/{id}/agents with password field."""
         body: dict[str, object] = {
@@ -134,6 +162,16 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
             f"/api/v1/accounts/{self._account_id}/agents",
             content=json.dumps(body),
         )
+        if response.status_code == 422:
+            # Email already taken — ищем существующего агента для идемпотентности
+            existing_id = await self._find_agent_by_email(email)
+            if existing_id is not None:
+                logger.warning(
+                    "Agent with email %s already exists in Chatwoot (id=%d), reusing",
+                    email,
+                    existing_id,
+                )
+                return existing_id
         if response.status_code >= 400:
             raise RuntimeError(
                 f"Chatwoot agent creation failed {response.status_code}: {response.text}"

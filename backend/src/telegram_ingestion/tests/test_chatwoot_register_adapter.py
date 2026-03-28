@@ -174,10 +174,10 @@ async def test_platform_api_sends_correct_account_users_payload() -> None:
 
 @pytest.mark.asyncio
 async def test_platform_api_user_creation_error_raises() -> None:
-    """Ошибка создания платформ-юзера пробрасывается как RuntimeError."""
+    """Не-422 ошибка создания платформ-юзера пробрасывается как RuntimeError."""
     adapter = _make_adapter(platform_api_key="platform-key")
 
-    transport = httpx.MockTransport(lambda req: httpx.Response(422, text="Email taken"))
+    transport = httpx.MockTransport(lambda req: httpx.Response(500, text="Internal Server Error"))
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         adapter._platform_http = http
         with pytest.raises(RuntimeError, match="Platform user creation failed"):
@@ -340,3 +340,111 @@ async def test_platform_api_logs_account_users_request(caplog: pytest.LogCapture
 
     assert "55" in caplog.text  # user_id=55 упоминается в логах account linking
     assert "2" in caplog.text  # account_id=2 упоминается в логах
+
+
+# ---------------------------------------------------------------------------
+# Тесты: Идемпотентность — повторная регистрация с уже существующим email
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_application_api_email_taken_reuses_existing_agent() -> None:
+    """App API 422 (email занят) → находим существующего агента и возвращаем его ID."""
+    adapter = _make_adapter(platform_api_key=None)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and "/agents" in req.url.path:
+            return httpx.Response(422, text='{"error":"Email has already been taken"}')
+        if req.method == "GET" and "/agents" in req.url.path:
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 99, "email": "764347890@24ondoc.ru", "name": "Иван"},
+                    {"id": 100, "email": "other@24ondoc.ru", "name": "Other"},
+                ],
+            )
+        return httpx.Response(404, text="Not Found")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
+        adapter._http = http
+        result = await adapter.create_chatwoot_agent("Иван", "764347890@24ondoc.ru", "pass!")
+
+    assert result == 99
+
+
+@pytest.mark.asyncio
+async def test_application_api_email_taken_no_existing_raises() -> None:
+    """App API 422 + агент не найден в списке → RuntimeError."""
+    adapter = _make_adapter(platform_api_key=None)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and "/agents" in req.url.path:
+            return httpx.Response(422, text='{"error":"Email has already been taken"}')
+        if req.method == "GET" and "/agents" in req.url.path:
+            return httpx.Response(200, json=[{"id": 1, "email": "someone_else@24ondoc.ru"}])
+        return httpx.Response(404, text="Not Found")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
+        adapter._http = http
+        with pytest.raises(RuntimeError, match="422"):
+            await adapter.create_chatwoot_agent("Иван", "764347890@24ondoc.ru", "pass!")
+
+
+@pytest.mark.asyncio
+async def test_platform_api_user_creation_422_falls_back_to_application_api() -> None:
+    """Platform API 422 на создание пользователя → fallback на App API."""
+    adapter = _make_adapter(platform_api_key="platform-key")
+
+    def app_handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and "/agents" in req.url.path:
+            return httpx.Response(200, json=_agent_response(agent_id=55))
+        return httpx.Response(404, text="Not Found")
+
+    platform_transport = httpx.MockTransport(
+        lambda req: httpx.Response(422, text='{"error":"Email has already been taken"}')
+    )
+    app_transport = httpx.MockTransport(app_handler)
+    async with (
+        httpx.AsyncClient(transport=platform_transport, base_url="http://chatwoot:3000") as ph,
+        httpx.AsyncClient(transport=app_transport, base_url="http://chatwoot:3000") as ah,
+    ):
+        adapter._platform_http = ph
+        adapter._http = ah
+        result = await adapter.create_chatwoot_agent("Иван", "764347890@24ondoc.ru", "pass!")
+
+    assert result == 55
+
+
+@pytest.mark.asyncio
+async def test_full_idempotency_platform_422_app_422_existing_agent() -> None:
+    """Platform API 422 → App API 422 → найден существующий агент → возвращает его ID.
+
+    Воспроизводит сценарий DEV-98: orphaned Chatwoot user после неудачного rollback.
+    """
+    adapter = _make_adapter(platform_api_key="platform-key")
+
+    def app_handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and "/agents" in req.url.path:
+            return httpx.Response(422, text='{"error":"Email has already been taken"}')
+        if req.method == "GET" and "/agents" in req.url.path:
+            return httpx.Response(
+                200,
+                json=[{"id": 42, "email": "764347890@24ondoc.ru", "name": "Иван"}],
+            )
+        return httpx.Response(404, text="Not Found")
+
+    platform_transport = httpx.MockTransport(
+        lambda req: httpx.Response(422, text='{"error":"Email has already been taken"}')
+    )
+    app_transport = httpx.MockTransport(app_handler)
+    async with (
+        httpx.AsyncClient(transport=platform_transport, base_url="http://chatwoot:3000") as ph,
+        httpx.AsyncClient(transport=app_transport, base_url="http://chatwoot:3000") as ah,
+    ):
+        adapter._platform_http = ph
+        adapter._http = ah
+        result = await adapter.create_chatwoot_agent("Иван", "764347890@24ondoc.ru", "pass!")
+
+    assert result == 42
