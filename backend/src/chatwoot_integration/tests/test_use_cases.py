@@ -287,7 +287,9 @@ async def test_chatwoot_webhook_endpoint_no_repo_raises_503() -> None:
         "/webhook/chatwoot",
         json={
             "event": "conversation_status_changed",
-            "id": 1, "status": "resolved", "token": _VALID_TOKEN,
+            "id": 1,
+            "status": "resolved",
+            "token": _VALID_TOKEN,
         },
     )
     assert response.status_code == 503
@@ -318,7 +320,9 @@ async def test_chatwoot_webhook_endpoint_with_repo_returns_ok() -> None:
         "/webhook/chatwoot",
         json={
             "event": "conversation_status_changed",
-            "id": 99, "status": "resolved", "token": _VALID_TOKEN,
+            "id": 99,
+            "status": "resolved",
+            "token": _VALID_TOKEN,
         },
     )
     assert response.status_code == 200
@@ -373,7 +377,9 @@ async def test_webhook_invalid_token_returns_401() -> None:
         "/webhook/chatwoot",
         json={
             "event": "conversation_status_changed",
-            "id": 1, "status": "resolved", "token": "wrong-token",
+            "id": 1,
+            "status": "resolved",
+            "token": "wrong-token",
         },
     )
     assert response.status_code == 401

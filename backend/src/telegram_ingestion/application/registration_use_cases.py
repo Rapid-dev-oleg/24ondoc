@@ -41,9 +41,7 @@ class AutoRegisterUserUseCase:
         self._agent_registration = agent_registration
         self._account_id = account_id
 
-    async def execute(
-        self, telegram_id: int, first_name: str
-    ) -> tuple[UserProfile, str, bool]:
+    async def execute(self, telegram_id: int, first_name: str) -> tuple[UserProfile, str, bool]:
         existing = await self._user_repo.get_by_telegram_id(telegram_id)
         if existing is not None:
             return existing, "", False
@@ -74,9 +72,7 @@ class UpdateProfileFieldUseCase:
     def __init__(self, user_repo: UserProfileRepository) -> None:
         self._user_repo = user_repo
 
-    async def execute(
-        self, telegram_id: int, field: str, value: str
-    ) -> UserProfile | None:
+    async def execute(self, telegram_id: int, field: str, value: str) -> UserProfile | None:
         profile = await self._user_repo.get_by_telegram_id(telegram_id)
         if profile is None:
             return None

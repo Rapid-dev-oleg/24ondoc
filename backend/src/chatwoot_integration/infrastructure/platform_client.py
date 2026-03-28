@@ -100,9 +100,7 @@ class ChatwootPlatformClient(ChatwootPlatformPort):
             await self._push_to_queue({"action": "create_user", "name": name, "email": email})
             raise
 
-    async def add_to_account(
-        self, user_id: int, account_id: int, role: str = "agent"
-    ) -> None:
+    async def add_to_account(self, user_id: int, account_id: int, role: str = "agent") -> None:
         """POST /platform/api/v1/accounts/{id}/account_users — добавить пользователя в аккаунт."""
         body: dict[str, Any] = {"user_id": user_id, "role": role}
 
@@ -163,7 +161,5 @@ class ChatwootPlatformClient(ChatwootPlatformPort):
             sso_url: str = await decorated()
             return sso_url
         except Exception:
-            logger.warning(
-                "get_sso_url failed after %d attempts for user_id=%d", attempt, user_id
-            )
+            logger.warning("get_sso_url failed after %d attempts for user_id=%d", attempt, user_id)
             raise

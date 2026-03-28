@@ -412,9 +412,7 @@ class TestE2EFullFlow:
 
         await dp.feed_update(
             bot,
-            _make_update(
-                _make_message(user_id=100, text="Не работает кнопка входа", message_id=3)
-            ),
+            _make_update(_make_message(user_id=100, text="Не работает кнопка входа", message_id=3)),
         )
 
         session = await draft_repo.get_active_by_user(100)

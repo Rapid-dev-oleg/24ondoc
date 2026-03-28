@@ -246,7 +246,12 @@ class TestAutoRegisterOnStart:
         cancel = CancelSessionUseCase(draft_repo)
 
         router = create_router(
-            start_session, add_text, add_voice, trigger, cancel, user_port,
+            start_session,
+            add_text,
+            add_voice,
+            trigger,
+            cancel,
+            user_port,
             auto_register=auto_register,
         )
         storage = MemoryStorage()
@@ -297,7 +302,12 @@ class TestAutoRegisterOnStart:
         cancel = CancelSessionUseCase(draft_repo)
 
         router = create_router(
-            start_session, add_text, add_voice, trigger, cancel, user_port,
+            start_session,
+            add_text,
+            add_voice,
+            trigger,
+            cancel,
+            user_port,
             auto_register=auto_register,
         )
         storage = MemoryStorage()

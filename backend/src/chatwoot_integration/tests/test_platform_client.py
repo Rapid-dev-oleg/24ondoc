@@ -169,9 +169,7 @@ async def test_add_to_account_success() -> None:
     """add_to_account выполняется без исключений при 200."""
     client = make_client()
 
-    transport = httpx.MockTransport(
-        lambda req: httpx.Response(200, json=_account_user_response())
-    )
+    transport = httpx.MockTransport(lambda req: httpx.Response(200, json=_account_user_response()))
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         with patch.object(client, "_http", http):
             await client.add_to_account(user_id=10, account_id=2, role="agent")

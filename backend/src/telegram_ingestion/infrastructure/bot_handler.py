@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import io
+import logging
 import uuid
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -43,6 +45,8 @@ from ..application.use_cases import (
 )
 from ..domain.models import AIResult, DraftSession
 from ..domain.repository import DraftSessionRepository
+
+logger = logging.getLogger(__name__)
 
 _CRM_URL = "https://chat.24ondoc.ru"
 
@@ -132,21 +136,24 @@ def create_router(
             profile, password, is_new = await auto_register.execute(
                 message.from_user.id, first_name
             )
-            if is_new:
-                email = profile.settings.get("email", f"{profile.telegram_id}@24ondoc.ru")
-                await message.answer(
-                    "✅ Вы успешно зарегистрированы в системе 24ondoc!\n\n"
-                    f"📧 Email: <code>{email}</code>\n"
-                    f"🔑 Пароль: <code>{password}</code>\n"
-                    f"🔗 CRM: {_CRM_URL}\n\n"
-                    "Для смены пароля: войдите в CRM → Настройки профиля → Пароль.\n\n"
-                    "Используйте /settings для настройки профиля."
-                )
-            else:
-                await message.answer(
-                    "👋 Добро пожаловать в 24ondoc!\n"
-                    "Используйте /new_task чтобы создать новую задачу."
-                )
+            try:
+                if is_new:
+                    email = profile.settings.get("email", f"{profile.telegram_id}@24ondoc.ru")
+                    await message.answer(
+                        "✅ Вы успешно зарегистрированы в системе 24ondoc!\n\n"
+                        f"📧 Email: <code>{email}</code>\n"
+                        f"🔑 Пароль: <code>{password}</code>\n"
+                        f"🔗 CRM: {_CRM_URL}\n\n"
+                        "Для смены пароля: войдите в CRM → Настройки профиля → Пароль.\n\n"
+                        "Используйте /settings для настройки профиля."
+                    )
+                else:
+                    await message.answer(
+                        "👋 Добро пожаловать в 24ondoc!\n"
+                        "Используйте /new_task чтобы создать новую задачу."
+                    )
+            except TelegramAPIError:
+                logger.warning("Failed to send /start reply to chat %s", message.chat.id)
         elif await user_port.is_authorized(message.from_user.id):
             await message.answer(
                 "👋 Добро пожаловать в 24ondoc!\nИспользуйте /new_task чтобы создать новую задачу."
@@ -162,15 +169,21 @@ def create_router(
             return
         session = await start_session.execute(message.from_user.id)
         if session is None:
-            await message.answer("❌ Вы не авторизованы. Обратитесь к администратору.")
+            try:
+                await message.answer("❌ Вы не авторизованы. Обратитесь к администратору.")
+            except TelegramAPIError:
+                logger.warning("Failed to send /new_task reply to chat %s", message.chat.id)
             return
         await state.set_state(TelegramFSMStates.collecting)
         await state.update_data(session_id=str(session.session_id))
-        await message.answer(
-            "📝 Опишите задачу. Отправляйте текст, голосовые сообщения, фото и файлы.\n"
-            "Нажмите '📎 Собрать' когда закончите.",
-            reply_markup=_collect_keyboard(),
-        )
+        try:
+            await message.answer(
+                "📝 Опишите задачу. Отправляйте текст, голосовые сообщения, фото и файлы.\n"
+                "Нажмите '📎 Собрать' когда закончите.",
+                reply_markup=_collect_keyboard(),
+            )
+        except TelegramAPIError:
+            logger.warning("Failed to send /new_task reply to chat %s", message.chat.id)
 
     @router.message(TelegramFSMStates.collecting, F.text)
     async def handle_text(message: Message, state: FSMContext) -> None:
