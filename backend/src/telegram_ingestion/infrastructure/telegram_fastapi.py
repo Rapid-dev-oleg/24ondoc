@@ -11,7 +11,6 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
 from chatwoot_integration.infrastructure.chatwoot_client import ChatwootClient
-from telegram_ingestion.application.auth_use_case import AuthByPhoneUseCase, RegisterPhoneUseCase
 from telegram_ingestion.application.tasks_use_cases import (
     AddTaskCommentUseCase,
     GetMyTasksUseCase,
@@ -32,9 +31,6 @@ from telegram_ingestion.infrastructure.bot_handler import (
 )
 from telegram_ingestion.infrastructure.draft_session_repository import (
     SQLAlchemyRedisDraftSessionRepository,
-)
-from telegram_ingestion.infrastructure.pending_user_repository import (
-    SQLAlchemyPendingUserRepository,
 )
 from telegram_ingestion.infrastructure.user_profile_port import UserProfilePortAdapter
 from telegram_ingestion.infrastructure.user_profile_repository import (
@@ -81,7 +77,6 @@ async def telegram_webhook(
     user_repo = SQLAlchemyUserProfileRepository(db_session)
     user_port = UserProfilePortAdapter(user_repo)
     call_repo = CallRecordRepositoryImpl(db_session)
-    pending_repo = SQLAlchemyPendingUserRepository(db_session)
 
     # Per-request use cases
     start_session = StartSessionUseCase(draft_repo, user_port)
@@ -89,8 +84,6 @@ async def telegram_webhook(
     add_voice = AddVoiceContentUseCase(draft_repo, stt_port)
     trigger_analysis = TriggerAnalysisUseCase(draft_repo)
     cancel_session = CancelSessionUseCase(draft_repo)
-    auth_by_phone = AuthByPhoneUseCase(pending_repo, user_repo)
-    register_phone_uc = RegisterPhoneUseCase(pending_repo, user_port)
 
     get_my_tasks = GetMyTasksUseCase(user_port, chatwoot_client)
     update_task_status = UpdateTaskStatusUseCase(user_port, chatwoot_client)
@@ -107,8 +100,6 @@ async def telegram_webhook(
             add_voice,
             trigger_analysis,
             cancel_session,
-            auth_by_phone,
-            register_phone_uc,
             user_port,
         )
     )

@@ -9,22 +9,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from admin.application.use_cases import (
-    AddPendingUseCase,
-    CreateOperatorUseCase,
+    CreateUserDirectUseCase,
     DeactivateUserUseCase,
-    DeletePendingUseCase,
     GetSettingsUseCase,
-    ListPendingUseCase,
     ListUsersUseCase,
     LoginWithTelegramUseCase,
     UpdateSettingsUseCase,
     UpdateUserUseCase,
 )
 from admin.domain.models import (
-    AddPendingRequest,
     CreateUserRequest,
     LoginRequest,
-    PendingUserResponse,
     PublicConfigResponse,
     SettingsResponse,
     TelegramAuthRequest,
@@ -36,10 +31,8 @@ from admin.domain.models import (
 from admin.infrastructure.auth import create_access_token, require_admin_role
 from admin.infrastructure.chatwoot_admin_client import ChatwootAdminClient
 from admin.infrastructure.env_settings import DotEnvSettingsPort
+from admin.infrastructure.telegram_notify import TelegramNotifyAdapter
 from config import get_settings
-from telegram_ingestion.infrastructure.pending_user_repository import (
-    SQLAlchemyPendingUserRepository,
-)
 from telegram_ingestion.infrastructure.user_profile_repository import (
     SQLAlchemyUserProfileRepository,
 )
@@ -139,20 +132,13 @@ async def login_telegram(body: TelegramAuthRequest, request: Request) -> TokenRe
 @router.get("/api/admin/users", response_model=list[UserResponse])
 async def list_users(request: Request, _: AdminPayload) -> list[UserResponse]:
     db_session = request.state.db_session
-    uc = ListUsersUseCase(
-        SQLAlchemyUserProfileRepository(db_session),
-        SQLAlchemyPendingUserRepository(db_session),
-    )
+    uc = ListUsersUseCase(SQLAlchemyUserProfileRepository(db_session))
     result: list[UserResponse] = await uc.execute()
     return result
 
 
-@router.post(
-    "/api/admin/users", response_model=PendingUserResponse, status_code=status.HTTP_201_CREATED
-)
-async def create_user(
-    body: CreateUserRequest, request: Request, _: AdminPayload
-) -> PendingUserResponse:
+@router.post("/api/admin/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_user(body: CreateUserRequest, request: Request, _: AdminPayload) -> UserResponse:
     settings = get_settings()
     db_session = request.state.db_session
     chatwoot = ChatwootAdminClient(
@@ -160,13 +146,17 @@ async def create_user(
         api_key=settings.chatwoot_api_key,
         account_id=settings.chatwoot_account_id,
     )
-    uc = CreateOperatorUseCase(
+    notify = TelegramNotifyAdapter(bot_token=settings.telegram_bot_token)
+    uc = CreateUserDirectUseCase(
         chatwoot=chatwoot,
-        pending_repo=SQLAlchemyPendingUserRepository(db_session),
+        user_repo=SQLAlchemyUserProfileRepository(db_session),
+        notify=notify,
         account_id=settings.chatwoot_account_id,
     )
     try:
         return await uc.execute(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
@@ -190,41 +180,6 @@ async def deactivate_user(telegram_id: int, request: Request, _: AdminPayload) -
     found = await uc.execute(telegram_id)
     if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-
-# ---------------------------------------------------------------------------
-# Pending users
-# ---------------------------------------------------------------------------
-
-
-@router.get("/api/admin/pending", response_model=list[PendingUserResponse])
-async def list_pending(request: Request, _: AdminPayload) -> list[PendingUserResponse]:
-    db_session = request.state.db_session
-    uc = ListPendingUseCase(SQLAlchemyPendingUserRepository(db_session))
-    result: list[PendingUserResponse] = await uc.execute()
-    return result
-
-
-@router.post(
-    "/api/admin/pending",
-    response_model=PendingUserResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def add_pending(
-    body: AddPendingRequest, request: Request, _: AdminPayload
-) -> PendingUserResponse:
-    db_session = request.state.db_session
-    uc = AddPendingUseCase(SQLAlchemyPendingUserRepository(db_session))
-    return await uc.execute(body)
-
-
-@router.delete("/api/admin/pending/{phone}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_pending(phone: str, request: Request, _: AdminPayload) -> None:
-    db_session = request.state.db_session
-    uc = DeletePendingUseCase(SQLAlchemyPendingUserRepository(db_session))
-    found = await uc.execute(phone)
-    if not found:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending user not found")
 
 
 # ---------------------------------------------------------------------------

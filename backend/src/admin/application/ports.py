@@ -26,3 +26,12 @@ class EnvSettingsPort(ABC):
     def update_setting(self, key: str, value: str) -> None:
         """Write a new value for the env var to the backing store."""
         ...
+
+
+class TelegramNotificationPort(ABC):
+    """Port for sending messages to Telegram users via Bot API."""
+
+    @abstractmethod
+    async def send_message(self, telegram_id: int, text: str) -> None:
+        """Send a text message to the given Telegram user."""
+        ...

@@ -9,14 +9,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from admin.application.ports import ChatwootAdminPort, EnvSettingsPort
+from admin.application.ports import ChatwootAdminPort, EnvSettingsPort, TelegramNotificationPort
 from admin.application.use_cases import (
-    AddPendingUseCase,
-    CreateOperatorUseCase,
+    CreateUserDirectUseCase,
     DeactivateUserUseCase,
-    DeletePendingUseCase,
     GetSettingsUseCase,
-    ListPendingUseCase,
     ListUsersUseCase,
     LoginWithTelegramUseCase,
     UpdateSettingsUseCase,
@@ -25,15 +22,14 @@ from admin.application.use_cases import (
     verify_telegram_hash,
 )
 from admin.domain.models import (
-    AddPendingRequest,
     CreateUserRequest,
     TelegramAuthRequest,
     UpdateSettingsRequest,
     UpdateUserRequest,
 )
 from admin.infrastructure.auth import create_access_token, decode_access_token
-from telegram_ingestion.domain.models import PendingUser, UserProfile, UserRole
-from telegram_ingestion.domain.repository import PendingUserRepository, UserProfileRepository
+from telegram_ingestion.domain.models import UserProfile, UserRole
+from telegram_ingestion.domain.repository import UserProfileRepository
 
 # ---------------------------------------------------------------------------
 # In-memory stubs (reused across tests)
@@ -60,23 +56,6 @@ class InMemoryUserProfileRepository(UserProfileRepository):
         return [p for p in self._store.values() if p.is_active]
 
 
-class InMemoryPendingUserRepository(PendingUserRepository):
-    def __init__(self) -> None:
-        self._store: dict[str, PendingUser] = {}
-
-    async def get_by_phone(self, phone: str) -> PendingUser | None:
-        return self._store.get(phone)
-
-    async def save(self, pending: PendingUser) -> None:
-        self._store[pending.phone] = pending
-
-    async def delete(self, phone: str) -> None:
-        self._store.pop(phone, None)
-
-    async def list_all(self) -> list[PendingUser]:
-        return list(self._store.values())
-
-
 class InMemoryChatwootAdminPort(ChatwootAdminPort):
     def __init__(self, next_id: int = 100) -> None:
         self._next_id = next_id
@@ -100,6 +79,14 @@ class InMemoryEnvSettingsPort(EnvSettingsPort):
         self._data[key] = value
 
 
+class InMemoryTelegramNotificationPort(TelegramNotificationPort):
+    def __init__(self) -> None:
+        self.sent: list[tuple[int, str]] = []
+
+    async def send_message(self, telegram_id: int, text: str) -> None:
+        self.sent.append((telegram_id, text))
+
+
 def _make_user(
     telegram_id: int = 1,
     chatwoot_user_id: int = 10,
@@ -116,16 +103,6 @@ def _make_user(
     )
 
 
-def _make_pending(phone: str = "79001234567", chatwoot_user_id: int = 20) -> PendingUser:
-    return PendingUser(
-        phone=phone,
-        chatwoot_user_id=chatwoot_user_id,
-        chatwoot_account_id=1,
-        role=UserRole.AGENT,
-        created_at=datetime.now(UTC),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Tests: _mask_value
 # ---------------------------------------------------------------------------
@@ -133,11 +110,9 @@ def _make_pending(phone: str = "79001234567", chatwoot_user_id: int = 20) -> Pen
 
 class TestMaskValue:
     def test_masks_long_value(self) -> None:
-        # "sk-abcdefgh1234" is 15 chars → 11 stars + last 4
         assert _mask_value("sk-abcdefgh1234") == "***********1234"
 
     def test_exactly_4_chars_fully_hidden(self) -> None:
-        # Values <= 4 chars are fully masked to not expose the full short secret
         assert _mask_value("abcd") == "****"
 
     def test_less_than_4_chars(self) -> None:
@@ -177,84 +152,111 @@ class TestJWT:
 
 
 class TestListUsersUseCase:
-    async def test_returns_active_users_and_pending(self) -> None:
+    async def test_returns_active_users(self) -> None:
         user_repo = InMemoryUserProfileRepository()
-        pending_repo = InMemoryPendingUserRepository()
-
         user = _make_user(telegram_id=1)
-        pending = _make_pending(phone="79001234567")
         await user_repo.save(user)
-        await pending_repo.save(pending)
 
-        uc = ListUsersUseCase(user_repo, pending_repo)
+        uc = ListUsersUseCase(user_repo)
         result = await uc.execute()
 
-        assert len(result) == 2
-        active = [r for r in result if not r.is_pending]
-        pend = [r for r in result if r.is_pending]
-        assert len(active) == 1
-        assert len(pend) == 1
-        assert active[0].telegram_id == 1
-        assert pend[0].phone == "79001234567"
+        assert len(result) == 1
+        assert result[0].telegram_id == 1
+        assert result[0].is_pending is False
 
     async def test_inactive_user_excluded(self) -> None:
         user_repo = InMemoryUserProfileRepository()
-        pending_repo = InMemoryPendingUserRepository()
-
         inactive = _make_user(telegram_id=2, is_active=False)
         await user_repo.save(inactive)
 
-        uc = ListUsersUseCase(user_repo, pending_repo)
+        uc = ListUsersUseCase(user_repo)
         result = await uc.execute()
         assert result == []
 
-    async def test_empty_repositories(self) -> None:
-        uc = ListUsersUseCase(InMemoryUserProfileRepository(), InMemoryPendingUserRepository())
+    async def test_empty_repository(self) -> None:
+        uc = ListUsersUseCase(InMemoryUserProfileRepository())
         assert await uc.execute() == []
 
 
 # ---------------------------------------------------------------------------
-# Tests: CreateOperatorUseCase
+# Tests: CreateUserDirectUseCase
 # ---------------------------------------------------------------------------
 
 
-class TestCreateOperatorUseCase:
-    async def test_creates_agent_and_saves_pending(self) -> None:
+class TestCreateUserDirectUseCase:
+    async def test_creates_user_in_chatwoot_and_repo(self) -> None:
         chatwoot = InMemoryChatwootAdminPort(next_id=200)
-        pending_repo = InMemoryPendingUserRepository()
+        user_repo = InMemoryUserProfileRepository()
+        notify = InMemoryTelegramNotificationPort()
 
-        uc = CreateOperatorUseCase(chatwoot, pending_repo, account_id=1)
-        req = CreateUserRequest(phone="+79001234567", name="John", email="j@test.com")
+        uc = CreateUserDirectUseCase(chatwoot, user_repo, notify, account_id=2)
+        req = CreateUserRequest(telegram_id=12345, name="John", email="j@test.com")
         result = await uc.execute(req)
 
-        assert result.phone == "79001234567"
+        assert result.telegram_id == 12345
         assert result.chatwoot_user_id == 200
-        assert len(chatwoot.calls) == 1
-        assert chatwoot.calls[0]["name"] == "John"
+        assert result.chatwoot_account_id == 2
+        assert result.is_pending is False
 
-        saved = await pending_repo.get_by_phone("79001234567")
+        saved = await user_repo.get_by_telegram_id(12345)
         assert saved is not None
         assert saved.chatwoot_user_id == 200
 
-    async def test_phone_normalized(self) -> None:
+        assert len(chatwoot.calls) == 1
+        assert chatwoot.calls[0]["name"] == "John"
+
+    async def test_sends_telegram_notification(self) -> None:
         chatwoot = InMemoryChatwootAdminPort(next_id=300)
-        pending_repo = InMemoryPendingUserRepository()
+        user_repo = InMemoryUserProfileRepository()
+        notify = InMemoryTelegramNotificationPort()
 
-        uc = CreateOperatorUseCase(chatwoot, pending_repo, account_id=1)
-        req = CreateUserRequest(phone="89001234567", name="Jane", email="jane@test.com")
-        result = await uc.execute(req)
+        uc = CreateUserDirectUseCase(chatwoot, user_repo, notify, account_id=2)
+        req = CreateUserRequest(telegram_id=99999, name="Jane", email="jane@test.com")
+        await uc.execute(req)
 
-        assert result.phone == "79001234567"
+        assert len(notify.sent) == 1
+        tg_id, text = notify.sent[0]
+        assert tg_id == 99999
+        assert "jane@test.com" in text
+        assert "Jane" in text
+
+    async def test_raises_if_user_already_exists(self) -> None:
+        chatwoot = InMemoryChatwootAdminPort(next_id=400)
+        user_repo = InMemoryUserProfileRepository()
+        notify = InMemoryTelegramNotificationPort()
+        await user_repo.save(_make_user(telegram_id=555))
+
+        uc = CreateUserDirectUseCase(chatwoot, user_repo, notify, account_id=2)
+        req = CreateUserRequest(telegram_id=555, name="X", email="x@x.com")
+        with pytest.raises(ValueError, match="already exists"):
+            await uc.execute(req)
 
     async def test_chatwoot_error_propagates(self) -> None:
         class FailingChatwoot(ChatwootAdminPort):
             async def create_agent(self, name: str, email: str, role: str) -> int:
                 raise RuntimeError("Chatwoot unavailable")
 
-        uc = CreateOperatorUseCase(FailingChatwoot(), InMemoryPendingUserRepository(), account_id=1)
-        req = CreateUserRequest(phone="79000000000", name="X", email="x@x.com")
+        notify = InMemoryTelegramNotificationPort()
+        uc = CreateUserDirectUseCase(
+            FailingChatwoot(), InMemoryUserProfileRepository(), notify, account_id=2
+        )
+        req = CreateUserRequest(telegram_id=111, name="X", email="x@x.com")
         with pytest.raises(RuntimeError, match="Chatwoot unavailable"):
             await uc.execute(req)
+
+    async def test_notification_not_sent_on_chatwoot_error(self) -> None:
+        class FailingChatwoot(ChatwootAdminPort):
+            async def create_agent(self, name: str, email: str, role: str) -> int:
+                raise RuntimeError("Chatwoot unavailable")
+
+        notify = InMemoryTelegramNotificationPort()
+        uc = CreateUserDirectUseCase(
+            FailingChatwoot(), InMemoryUserProfileRepository(), notify, account_id=2
+        )
+        req = CreateUserRequest(telegram_id=222, name="Y", email="y@y.com")
+        with pytest.raises(RuntimeError):
+            await uc.execute(req)
+        assert len(notify.sent) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -316,89 +318,6 @@ class TestDeactivateUserUseCase:
     async def test_returns_false_for_missing_user(self) -> None:
         uc = DeactivateUserUseCase(InMemoryUserProfileRepository())
         assert await uc.execute(999) is False
-
-
-# ---------------------------------------------------------------------------
-# Tests: ListPendingUseCase
-# ---------------------------------------------------------------------------
-
-
-class TestListPendingUseCase:
-    async def test_returns_all_pending(self) -> None:
-        pending_repo = InMemoryPendingUserRepository()
-        await pending_repo.save(_make_pending("79001111111", 10))
-        await pending_repo.save(_make_pending("79002222222", 20))
-
-        uc = ListPendingUseCase(pending_repo)
-        result = await uc.execute()
-
-        assert len(result) == 2
-        phones = {r.phone for r in result}
-        assert phones == {"79001111111", "79002222222"}
-
-    async def test_empty(self) -> None:
-        uc = ListPendingUseCase(InMemoryPendingUserRepository())
-        assert await uc.execute() == []
-
-
-# ---------------------------------------------------------------------------
-# Tests: AddPendingUseCase
-# ---------------------------------------------------------------------------
-
-
-class TestAddPendingUseCase:
-    async def test_adds_and_normalizes_phone(self) -> None:
-        pending_repo = InMemoryPendingUserRepository()
-        uc = AddPendingUseCase(pending_repo)
-        req = AddPendingRequest(
-            phone="+7 900 123-45-67", chatwoot_user_id=50, chatwoot_account_id=1
-        )
-        result = await uc.execute(req)
-
-        assert result.phone == "79001234567"
-        assert result.chatwoot_user_id == 50
-
-    async def test_overwrites_existing_phone(self) -> None:
-        pending_repo = InMemoryPendingUserRepository()
-        await pending_repo.save(_make_pending("79001234567", chatwoot_user_id=10))
-
-        uc = AddPendingUseCase(pending_repo)
-        req = AddPendingRequest(phone="79001234567", chatwoot_user_id=99, chatwoot_account_id=1)
-        result = await uc.execute(req)
-
-        assert result.chatwoot_user_id == 99
-        saved = await pending_repo.get_by_phone("79001234567")
-        assert saved is not None and saved.chatwoot_user_id == 99
-
-
-# ---------------------------------------------------------------------------
-# Tests: DeletePendingUseCase
-# ---------------------------------------------------------------------------
-
-
-class TestDeletePendingUseCase:
-    async def test_deletes_existing(self) -> None:
-        pending_repo = InMemoryPendingUserRepository()
-        await pending_repo.save(_make_pending("79001234567"))
-
-        uc = DeletePendingUseCase(pending_repo)
-        found = await uc.execute("79001234567")
-
-        assert found is True
-        assert await pending_repo.get_by_phone("79001234567") is None
-
-    async def test_normalizes_phone_before_delete(self) -> None:
-        pending_repo = InMemoryPendingUserRepository()
-        await pending_repo.save(_make_pending("79001234567"))
-
-        uc = DeletePendingUseCase(pending_repo)
-        found = await uc.execute("+79001234567")
-
-        assert found is True
-
-    async def test_returns_false_for_missing(self) -> None:
-        uc = DeletePendingUseCase(InMemoryPendingUserRepository())
-        assert await uc.execute("79009999999") is False
 
 
 # ---------------------------------------------------------------------------

@@ -91,7 +91,7 @@
       <div class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div class="max-w-7xl mx-auto px-4">
           <div class="flex gap-1">
-            <template x-for="tab in ['users', 'pending', 'settings']" :key="tab">
+            <template x-for="tab in ['users', 'settings']" :key="tab">
               <button @click="switchTab(tab)"
                       :class="activeTab === tab ? 'border-b-2 border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
                       class="px-4 py-3 text-sm font-medium transition-colors capitalize">
@@ -125,7 +125,6 @@
                 <thead class="bg-gray-50 dark:bg-gray-700">
                   <tr>
                     <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Telegram ID</th>
-                    <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Телефон</th>
                     <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Chatwoot ID</th>
                     <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Роль</th>
                     <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Статус</th>
@@ -140,39 +139,27 @@
                     <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
                       <td class="px-4 py-3 text-gray-900 dark:text-white font-mono">
                         <span x-text="u.telegram_id || '—'"></span>
-                        <template x-if="u.is_pending">
-                          <span class="ml-1 text-xs bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300 px-1.5 py-0.5 rounded">pending</span>
-                        </template>
                       </td>
-                      <td class="px-4 py-3 text-gray-600 dark:text-gray-300 font-mono" x-text="u.phone || '—'"></td>
                       <td class="px-4 py-3 text-gray-600 dark:text-gray-300 font-mono" x-text="u.chatwoot_user_id"></td>
                       <td class="px-4 py-3">
-                        <template x-if="!u.is_pending">
-                          <select @change="updateRole(u.telegram_id, $event.target.value)"
-                                  :value="u.role"
-                                  class="text-xs border border-gray-200 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-                            <option value="agent">agent</option>
-                            <option value="supervisor">supervisor</option>
-                            <option value="admin">admin</option>
-                          </select>
-                        </template>
-                        <template x-if="u.is_pending">
-                          <span class="text-xs text-gray-500 dark:text-gray-400" x-text="u.role"></span>
-                        </template>
+                        <select @change="updateRole(u.telegram_id, $event.target.value)"
+                                :value="u.role"
+                                class="text-xs border border-gray-200 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                          <option value="agent">agent</option>
+                          <option value="supervisor">supervisor</option>
+                          <option value="admin">admin</option>
+                        </select>
                       </td>
                       <td class="px-4 py-3">
-                        <template x-if="u.is_pending">
-                          <span class="text-xs bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300 px-2 py-1 rounded-full">Ожидает регистрации</span>
-                        </template>
-                        <template x-if="!u.is_pending && u.is_active">
+                        <template x-if="u.is_active">
                           <span class="text-xs bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 px-2 py-1 rounded-full">Активен</span>
                         </template>
-                        <template x-if="!u.is_pending && !u.is_active">
+                        <template x-if="!u.is_active">
                           <span class="text-xs bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 px-2 py-1 rounded-full">Неактивен</span>
                         </template>
                       </td>
                       <td class="px-4 py-3 text-right">
-                        <template x-if="!u.is_pending && u.is_active">
+                        <template x-if="u.is_active">
                           <button @click="deactivateUser(u.telegram_id)"
                                   class="text-xs text-red-600 hover:text-red-700 dark:text-red-400 font-medium">
                             Деактивировать
@@ -185,47 +172,6 @@
               </table>
             </div>
           </template>
-        </div>
-
-        <!-- ── Pending tab ── -->
-        <div x-show="activeTab === 'pending'" x-transition>
-          <div class="flex items-center justify-between mb-4">
-            <h2 class="text-xl font-semibold text-gray-900 dark:text-white">Ожидающие регистрации</h2>
-            <button @click="showAddPendingModal = true"
-                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
-              + Добавить номер
-            </button>
-          </div>
-
-          <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
-            <table class="w-full text-sm">
-              <thead class="bg-gray-50 dark:bg-gray-700">
-                <tr>
-                  <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Телефон</th>
-                  <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Chatwoot ID</th>
-                  <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Роль</th>
-                  <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Добавлен</th>
-                  <th class="px-4 py-3 text-right font-medium text-gray-600 dark:text-gray-300">Удалить</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
-                <template x-if="pending.length === 0">
-                  <tr><td colspan="5" class="px-4 py-8 text-center text-gray-400">Нет записей</td></tr>
-                </template>
-                <template x-for="p in pending" :key="p.phone">
-                  <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                    <td class="px-4 py-3 font-mono text-gray-900 dark:text-white" x-text="p.phone"></td>
-                    <td class="px-4 py-3 font-mono text-gray-600 dark:text-gray-300" x-text="p.chatwoot_user_id"></td>
-                    <td class="px-4 py-3 text-gray-600 dark:text-gray-300" x-text="p.role"></td>
-                    <td class="px-4 py-3 text-gray-500 dark:text-gray-400" x-text="new Date(p.created_at).toLocaleDateString('ru')"></td>
-                    <td class="px-4 py-3 text-right">
-                      <button @click="deletePending(p.phone)" class="text-xs text-red-600 hover:text-red-700 dark:text-red-400 font-medium">Удалить</button>
-                    </td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-          </div>
         </div>
 
         <!-- ── Settings tab ── -->
@@ -271,16 +217,16 @@
         <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Добавить оператора</h3>
         <form @submit.prevent="addUser()" class="space-y-3">
           <div>
+            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Telegram ID</label>
+            <input type="number" x-model="addUserForm.telegram_id" required class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="123456789">
+          </div>
+          <div>
             <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Имя</label>
             <input type="text" x-model="addUserForm.name" required class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="Иван Иванов">
           </div>
           <div>
             <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Email</label>
             <input type="email" x-model="addUserForm.email" required class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="ivan@example.com">
-          </div>
-          <div>
-            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Телефон</label>
-            <input type="tel" x-model="addUserForm.phone" required class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="+79001234567">
           </div>
           <div>
             <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Роль</label>
@@ -302,40 +248,6 @@
     </div>
   </template>
 
-  <!-- ─── MODAL: Add Pending ─── -->
-  <template x-if="showAddPendingModal">
-    <div class="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-4" @click.self="showAddPendingModal = false">
-      <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md p-6">
-        <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Добавить телефон</h3>
-        <form @submit.prevent="addPending()" class="space-y-3">
-          <div>
-            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Телефон</label>
-            <input type="tel" x-model="addPendingForm.phone" required class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="+79001234567">
-          </div>
-          <div>
-            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Chatwoot User ID</label>
-            <input type="number" x-model="addPendingForm.chatwoot_user_id" required class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm">
-          </div>
-          <div>
-            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Chatwoot Account ID</label>
-            <input type="number" x-model="addPendingForm.chatwoot_account_id" required class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm" value="1">
-          </div>
-          <div>
-            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Роль</label>
-            <select x-model="addPendingForm.role" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none text-sm">
-              <option value="agent">Agent</option>
-              <option value="supervisor">Supervisor</option>
-              <option value="admin">Admin</option>
-            </select>
-          </div>
-          <div class="flex gap-2 pt-2">
-            <button type="submit" :disabled="isLoading" class="flex-1 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">Добавить</button>
-            <button type="button" @click="showAddPendingModal = false" class="flex-1 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg transition-colors">Отмена</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  </template>
 
 <script>
 function adminApp() {
@@ -349,17 +261,14 @@ function adminApp() {
 
     // Data
     users: [],
-    pending: [],
     settings: { openrouter_api_key: '', telegram_bot_token: '' },
 
     // Modal flags
     showAddUserModal: false,
-    showAddPendingModal: false,
 
     // Forms
     loginForm: { telegram_id: '', password: '' },
-    addUserForm: { name: '', email: '', phone: '', role: 'agent' },
-    addPendingForm: { phone: '', chatwoot_user_id: '', chatwoot_account_id: 1, role: 'agent' },
+    addUserForm: { telegram_id: '', name: '', email: '', role: 'agent' },
     settingsForm: { openrouter_api_key: '', telegram_bot_token: '' },
 
     // Toast list
@@ -480,7 +389,6 @@ function adminApp() {
 
     async loadTab(tab) {
       if (tab === 'users') await this.loadUsers();
-      else if (tab === 'pending') await this.loadPending();
       else if (tab === 'settings') await this.loadSettings();
     },
 
@@ -499,16 +407,20 @@ function adminApp() {
     async addUser() {
       this.isLoading = true;
       try {
-        const r = await this.api('POST', '/api/admin/users', { ...this.addUserForm });
+        const body = {
+          ...this.addUserForm,
+          telegram_id: parseInt(this.addUserForm.telegram_id),
+        };
+        const r = await this.api('POST', '/api/admin/users', body);
         if (!r || !r.ok) {
           const d = r ? await r.json() : {};
           this.toast(d.detail || 'Ошибка создания', 'error');
           return;
         }
         this.showAddUserModal = false;
-        this.addUserForm = { name: '', email: '', phone: '', role: 'agent' };
+        this.addUserForm = { telegram_id: '', name: '', email: '', role: 'agent' };
         await this.loadUsers();
-        this.toast('Оператор создан');
+        this.toast('Оператор создан, уведомление отправлено в Telegram');
       } catch (e) {
         this.toast('Ошибка сети', 'error');
       } finally {
@@ -540,54 +452,6 @@ function adminApp() {
         }
         await this.loadUsers();
         this.toast('Пользователь деактивирован');
-      } catch (e) {
-        this.toast('Ошибка сети', 'error');
-      }
-    },
-
-    async loadPending() {
-      try {
-        const r = await this.api('GET', '/api/admin/pending');
-        if (r && r.ok) this.pending = await r.json();
-      } catch (e) {
-        this.toast('Ошибка загрузки', 'error');
-      }
-    },
-
-    async addPending() {
-      this.isLoading = true;
-      try {
-        const r = await this.api('POST', '/api/admin/pending', {
-          ...this.addPendingForm,
-          chatwoot_user_id: parseInt(this.addPendingForm.chatwoot_user_id),
-          chatwoot_account_id: parseInt(this.addPendingForm.chatwoot_account_id),
-        });
-        if (!r || !r.ok) {
-          const d = r ? await r.json() : {};
-          this.toast(d.detail || 'Ошибка добавления', 'error');
-          return;
-        }
-        this.showAddPendingModal = false;
-        this.addPendingForm = { phone: '', chatwoot_user_id: '', chatwoot_account_id: 1, role: 'agent' };
-        await this.loadPending();
-        this.toast('Номер добавлен');
-      } catch (e) {
-        this.toast('Ошибка сети', 'error');
-      } finally {
-        this.isLoading = false;
-      }
-    },
-
-    async deletePending(phone) {
-      if (!confirm(`Удалить ${phone}?`)) return;
-      try {
-        const r = await this.api('DELETE', `/api/admin/pending/${encodeURIComponent(phone)}`);
-        if (!r || !r.ok) {
-          this.toast('Ошибка удаления', 'error');
-          return;
-        }
-        await this.loadPending();
-        this.toast('Запись удалена');
       } catch (e) {
         this.toast('Ошибка сети', 'error');
       }
@@ -632,7 +496,7 @@ function adminApp() {
     },
 
     tabLabel(tab) {
-      return { users: 'Пользователи', pending: 'Pending', settings: 'Настройки' }[tab] || tab;
+      return { users: 'Пользователи', settings: 'Настройки' }[tab] || tab;
     },
 
     toggleTheme() {

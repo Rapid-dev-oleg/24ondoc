@@ -10,7 +10,7 @@ from telegram_ingestion.domain.models import UserRole
 
 
 class CreateUserRequest(BaseModel):
-    phone: str
+    telegram_id: int
     name: str
     email: str
     role: UserRole = UserRole.AGENT

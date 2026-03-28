@@ -4,22 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import secrets
 import time
 
-from admin.application.ports import ChatwootAdminPort, EnvSettingsPort
+from admin.application.ports import ChatwootAdminPort, EnvSettingsPort, TelegramNotificationPort
 from admin.domain.models import (
-    AddPendingRequest,
     CreateUserRequest,
-    PendingUserResponse,
     SettingsResponse,
     TelegramAuthRequest,
     UpdateSettingsRequest,
     UpdateUserRequest,
     UserResponse,
 )
-from telegram_ingestion.application.auth_use_case import normalize_phone
-from telegram_ingestion.domain.models import PendingUser, UserRole
-from telegram_ingestion.domain.repository import PendingUserRepository, UserProfileRepository
+from telegram_ingestion.domain.models import UserProfile, UserRole
+from telegram_ingestion.domain.repository import UserProfileRepository
 
 
 def _mask_value(value: str) -> str:
@@ -30,83 +28,81 @@ def _mask_value(value: str) -> str:
 
 
 class ListUsersUseCase:
-    """Return all active users and all pending users combined."""
+    """Return all active users."""
 
-    def __init__(
-        self,
-        user_repo: UserProfileRepository,
-        pending_repo: PendingUserRepository,
-    ) -> None:
+    def __init__(self, user_repo: UserProfileRepository) -> None:
         self._users = user_repo
-        self._pending = pending_repo
 
     async def execute(self) -> list[UserResponse]:
         users = await self._users.list_active()
-        pending_users = await self._pending.list_all()
-
-        result: list[UserResponse] = []
-        for u in users:
-            result.append(
-                UserResponse(
-                    telegram_id=u.telegram_id,
-                    phone=u.phone_internal,
-                    chatwoot_user_id=u.chatwoot_user_id,
-                    chatwoot_account_id=u.chatwoot_account_id,
-                    role=u.role,
-                    is_active=u.is_active,
-                    is_pending=False,
-                    created_at=u.created_at,
-                )
+        return [
+            UserResponse(
+                telegram_id=u.telegram_id,
+                chatwoot_user_id=u.chatwoot_user_id,
+                chatwoot_account_id=u.chatwoot_account_id,
+                role=u.role,
+                is_active=u.is_active,
+                is_pending=False,
+                created_at=u.created_at,
             )
-        for p in pending_users:
-            result.append(
-                UserResponse(
-                    telegram_id=None,
-                    phone=p.phone,
-                    chatwoot_user_id=p.chatwoot_user_id,
-                    chatwoot_account_id=p.chatwoot_account_id,
-                    role=p.role,
-                    is_active=None,
-                    is_pending=True,
-                    created_at=p.created_at,
-                )
-            )
-        return result
+            for u in users
+        ]
 
 
-class CreateOperatorUseCase:
-    """Create an operator in Chatwoot and register them in pending_users."""
+class CreateUserDirectUseCase:
+    """Create user in Chatwoot + users table directly, then notify via Telegram."""
 
     def __init__(
         self,
         chatwoot: ChatwootAdminPort,
-        pending_repo: PendingUserRepository,
+        user_repo: UserProfileRepository,
+        notify: TelegramNotificationPort,
         account_id: int,
     ) -> None:
         self._chatwoot = chatwoot
-        self._pending = pending_repo
+        self._users = user_repo
+        self._notify = notify
         self._account_id = account_id
 
-    async def execute(self, request: CreateUserRequest) -> PendingUserResponse:
+    async def execute(self, request: CreateUserRequest) -> UserResponse:
+        existing = await self._users.get_by_telegram_id(request.telegram_id)
+        if existing is not None:
+            raise ValueError(f"User {request.telegram_id} already exists")
+
         chatwoot_user_id = await self._chatwoot.create_agent(
             name=request.name,
             email=request.email,
             role=request.role.value,
         )
-        phone = normalize_phone(request.phone)
-        pending = PendingUser(
-            phone=phone,
+
+        profile = UserProfile(
+            telegram_id=request.telegram_id,
             chatwoot_user_id=chatwoot_user_id,
             chatwoot_account_id=self._account_id,
             role=request.role,
         )
-        await self._pending.save(pending)
-        return PendingUserResponse(
-            phone=pending.phone,
-            chatwoot_user_id=pending.chatwoot_user_id,
-            chatwoot_account_id=pending.chatwoot_account_id,
-            role=pending.role,
-            created_at=pending.created_at,
+        await self._users.save(profile)
+
+        password = secrets.token_urlsafe(12)
+        text = (
+            "✅ Вы зарегистрированы в системе 24ondoc!\n\n"
+            f"Имя: {request.name}\n"
+            f"Email: {request.email}\n"
+            f"Роль: {request.role.value}\n\n"
+            f"Временный пароль Chatwoot: {password}\n"
+            "На email придёт приглашение для активации аккаунта.\n\n"
+            "Используйте /new_task в боте для создания задач."
+        )
+        await self._notify.send_message(request.telegram_id, text)
+
+        return UserResponse(
+            telegram_id=profile.telegram_id,
+            chatwoot_user_id=profile.chatwoot_user_id,
+            chatwoot_account_id=profile.chatwoot_account_id,
+            role=profile.role,
+            is_active=profile.is_active,
+            is_pending=False,
+            created_at=profile.created_at,
         )
 
 
@@ -130,7 +126,6 @@ class UpdateUserUseCase:
             await self._users.save(user)
         return UserResponse(
             telegram_id=user.telegram_id,
-            phone=user.phone_internal,
             chatwoot_user_id=user.chatwoot_user_id,
             chatwoot_account_id=user.chatwoot_account_id,
             role=user.role,
@@ -152,65 +147,6 @@ class DeactivateUserUseCase:
             return False
         user = user.model_copy(update={"is_active": False})
         await self._users.save(user)
-        return True
-
-
-class ListPendingUseCase:
-    """Return all pending users."""
-
-    def __init__(self, pending_repo: PendingUserRepository) -> None:
-        self._pending = pending_repo
-
-    async def execute(self) -> list[PendingUserResponse]:
-        pending_users = await self._pending.list_all()
-        return [
-            PendingUserResponse(
-                phone=p.phone,
-                chatwoot_user_id=p.chatwoot_user_id,
-                chatwoot_account_id=p.chatwoot_account_id,
-                role=p.role,
-                created_at=p.created_at,
-            )
-            for p in pending_users
-        ]
-
-
-class AddPendingUseCase:
-    """Add a phone to pending_users directly (without Chatwoot)."""
-
-    def __init__(self, pending_repo: PendingUserRepository) -> None:
-        self._pending = pending_repo
-
-    async def execute(self, request: AddPendingRequest) -> PendingUserResponse:
-        phone = normalize_phone(request.phone)
-        pending = PendingUser(
-            phone=phone,
-            chatwoot_user_id=request.chatwoot_user_id,
-            chatwoot_account_id=request.chatwoot_account_id,
-            role=request.role,
-        )
-        await self._pending.save(pending)
-        return PendingUserResponse(
-            phone=pending.phone,
-            chatwoot_user_id=pending.chatwoot_user_id,
-            chatwoot_account_id=pending.chatwoot_account_id,
-            role=pending.role,
-            created_at=pending.created_at,
-        )
-
-
-class DeletePendingUseCase:
-    """Remove a pending user by phone."""
-
-    def __init__(self, pending_repo: PendingUserRepository) -> None:
-        self._pending = pending_repo
-
-    async def execute(self, phone: str) -> bool:
-        normalized = normalize_phone(phone)
-        existing = await self._pending.get_by_phone(normalized)
-        if existing is None:
-            return False
-        await self._pending.delete(normalized)
         return True
 
 
