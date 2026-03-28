@@ -147,8 +147,10 @@ def upgrade() -> None:
     )
 
     op.execute(
+        "DROP TRIGGER IF EXISTS update_draft_sessions_updated_at ON draft_sessions"
+    )
+    op.execute(
         """
-        DROP TRIGGER IF EXISTS update_draft_sessions_updated_at ON draft_sessions;
         CREATE TRIGGER update_draft_sessions_updated_at
             BEFORE UPDATE ON draft_sessions
             FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()
