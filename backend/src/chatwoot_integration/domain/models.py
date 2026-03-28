@@ -40,6 +40,7 @@ class SupportTicket(BaseModel):
     priority: str = "medium"
     title: str = ""
     permalink: str = ""
+    labels: list[str] = Field(default_factory=list)
     last_sync: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def update_status(self, new_status: TicketStatus) -> None:
@@ -48,6 +49,21 @@ class SupportTicket(BaseModel):
 
     def reassign(self, telegram_id: int) -> None:
         self.assignee_telegram_id = telegram_id
+        self.last_sync = datetime.now(UTC)
+
+    def update_fields(
+        self,
+        priority: str | None = None,
+        labels: list[str] | None = None,
+        assignee_chatwoot_id: int | None = None,
+    ) -> None:
+        """Синхронизирует поля из conversation_updated вебхука."""
+        if priority is not None:
+            self.priority = priority
+        if labels is not None:
+            self.labels = labels
+        if assignee_chatwoot_id is not None:
+            self.assignee_chatwoot_id = assignee_chatwoot_id
         self.last_sync = datetime.now(UTC)
 
 

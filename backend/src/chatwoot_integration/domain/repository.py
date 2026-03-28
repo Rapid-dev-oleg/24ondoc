@@ -54,3 +54,10 @@ class ChatwootPlatformPort(ABC):
 
     @abstractmethod
     async def get_sso_url(self, user_id: int) -> str: ...
+
+
+class TelegramNotifyPort(ABC):
+    """Port для отправки уведомлений агенту в Telegram."""
+
+    @abstractmethod
+    async def notify_agent(self, telegram_id: int, message: str) -> None: ...

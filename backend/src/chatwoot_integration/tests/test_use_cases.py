@@ -174,12 +174,12 @@ async def test_webhook_status_changed_unknown_ticket() -> None:
 
 @pytest.mark.asyncio
 async def test_webhook_unknown_event_ignored() -> None:
-    """Webhook: неизвестные события игнорируются."""
+    """Webhook: полностью неизвестные события игнорируются."""
     from chatwoot_integration.infrastructure.webhook_handler import process_webhook_event
 
     ticket_repo = AsyncMock(spec=SupportTicketRepository)
 
-    payload = {"event": "message_created", "id": 1}
+    payload = {"event": "some_future_event", "id": 1}
 
     await process_webhook_event(payload=payload, ticket_repo=ticket_repo)
 
