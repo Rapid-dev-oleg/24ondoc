@@ -34,7 +34,9 @@ def _account_user_response() -> dict[str, object]:
     return {"id": 1, "user_id": 10, "role": "agent"}
 
 
-def _sso_response(url: str = "https://chatwoot.example.com/auth/sign_in?token=xyz") -> dict[str, object]:
+def _sso_response(
+    url: str = "https://chatwoot.example.com/auth/sign_in?token=xyz",
+) -> dict[str, object]:
     return {"url": url}
 
 
@@ -133,7 +135,7 @@ async def test_create_user_queues_on_persistent_failure() -> None:
     transport = httpx.MockTransport(lambda req: httpx.Response(500, text="Error"))
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         with patch.object(client, "_http", http):
-            with pytest.raises(Exception):
+            with pytest.raises(Exception, match="Platform API"):
                 await client.create_user("X", "x@example.com")
 
     redis.rpush.assert_called_once()
@@ -150,7 +152,7 @@ async def test_create_user_raises_on_4xx() -> None:
     transport = httpx.MockTransport(lambda req: httpx.Response(422, text="Unprocessable Entity"))
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         with patch.object(client, "_http", http):
-            with pytest.raises(Exception):
+            with pytest.raises(Exception, match="Platform API"):
                 await client.create_user("X", "x@example.com")
 
     # При ошибке — пишется в очередь
@@ -266,7 +268,7 @@ async def test_add_to_account_queues_on_failure() -> None:
     transport = httpx.MockTransport(lambda req: httpx.Response(500, text="Error"))
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         with patch.object(client, "_http", http):
-            with pytest.raises(Exception):
+            with pytest.raises(Exception, match="Platform API"):
                 await client.add_to_account(user_id=10, account_id=2)
 
     redis.rpush.assert_called_once()
@@ -341,7 +343,7 @@ async def test_get_sso_url_raises_on_persistent_failure() -> None:
     transport = httpx.MockTransport(lambda req: httpx.Response(500, text="Error"))
     async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
         with patch.object(client, "_http", http):
-            with pytest.raises(Exception):
+            with pytest.raises(Exception, match="Platform API"):
                 await client.get_sso_url(user_id=1)
 
 

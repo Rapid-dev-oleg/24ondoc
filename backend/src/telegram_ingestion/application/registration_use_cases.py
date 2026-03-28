@@ -16,7 +16,7 @@ _PASSWORD_SPECIALS = "!@#$%^&*"
 
 
 def _generate_password() -> str:
-    """Generate a random 12-char password with guaranteed digit + special char (required by Chatwoot)."""
+    """Generate a random 12-char password with digit + special char."""
     special = secrets.choice(_PASSWORD_SPECIALS)
     digit = secrets.choice(string.digits)
     rest = [secrets.choice(_PASSWORD_ALPHABET) for _ in range(_PASSWORD_LENGTH - 2)]

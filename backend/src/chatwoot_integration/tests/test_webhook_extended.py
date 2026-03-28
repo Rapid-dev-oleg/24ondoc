@@ -16,7 +16,6 @@ from chatwoot_integration.domain.models import SupportTicket, TicketStatus
 from chatwoot_integration.domain.repository import SupportTicketRepository, TelegramNotifyPort
 from chatwoot_integration.infrastructure.webhook_handler import process_webhook_event
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные функции
 # ---------------------------------------------------------------------------

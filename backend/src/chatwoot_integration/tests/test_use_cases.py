@@ -285,7 +285,10 @@ async def test_chatwoot_webhook_endpoint_no_repo_raises_503() -> None:
 
     response = client.post(
         "/webhook/chatwoot",
-        json={"event": "conversation_status_changed", "id": 1, "status": "resolved", "token": _VALID_TOKEN},
+        json={
+            "event": "conversation_status_changed",
+            "id": 1, "status": "resolved", "token": _VALID_TOKEN,
+        },
     )
     assert response.status_code == 503
 
@@ -313,7 +316,10 @@ async def test_chatwoot_webhook_endpoint_with_repo_returns_ok() -> None:
     client = TestClient(app)
     response = client.post(
         "/webhook/chatwoot",
-        json={"event": "conversation_status_changed", "id": 99, "status": "resolved", "token": _VALID_TOKEN},
+        json={
+            "event": "conversation_status_changed",
+            "id": 99, "status": "resolved", "token": _VALID_TOKEN,
+        },
     )
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
@@ -365,6 +371,9 @@ async def test_webhook_invalid_token_returns_401() -> None:
     client = TestClient(app, raise_server_exceptions=False)
     response = client.post(
         "/webhook/chatwoot",
-        json={"event": "conversation_status_changed", "id": 1, "status": "resolved", "token": "wrong-token"},
+        json={
+            "event": "conversation_status_changed",
+            "id": 1, "status": "resolved", "token": "wrong-token",
+        },
     )
     assert response.status_code == 401

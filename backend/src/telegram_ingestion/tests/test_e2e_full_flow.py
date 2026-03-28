@@ -17,7 +17,6 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from aiogram import Dispatcher
 from aiogram.enums import ChatType
 from aiogram.fsm.storage.base import StorageKey
@@ -555,8 +554,6 @@ class TestE2EFullFlow:
     # Шаг 7: Полный флоу целиком — все 6 шагов подряд
     async def test_step7_full_e2e_flow(self) -> None:
         """Полный E2E: /start → /new_task → текст → голос → collect → create_crm."""
-        from telegram_ingestion.domain.models import AIResult, ContentBlock
-
         draft_repo = InMemoryDraftRepo()
         user_repo = InMemoryUserRepo()
         chatwoot = InMemoryChatwoot()
