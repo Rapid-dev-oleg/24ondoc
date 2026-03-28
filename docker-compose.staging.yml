@@ -1,0 +1,187 @@
+# docker-compose.staging.yml
+# Изолированный staging environment для E2E тестирования.
+# Не содержит nginx, certbot, pg-backup — только сервисы для тестирования.
+#
+# Использование:
+#   cp .env.staging.example .env.staging
+#   # отредактируйте .env.staging (минимум: TELEGRAM_BOT_TOKEN для тестового бота)
+#   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+#   docker compose -f docker-compose.staging.yml --env-file .env.staging ps
+#
+# E2E тесты:
+#   WEBHOOK_URL=http://localhost:8100 \
+#   CHATWOOT_BASE_URL=http://localhost:3100 \
+#   TELEGRAM_WEBHOOK_SECRET=staging-webhook-secret \
+#   CHATWOOT_API_KEY=<your-staging-chatwoot-key> \
+#   python scripts/e2e_test.py
+
+services:
+  # --- PostgreSQL 15 + pgvector (staging) ---
+  postgres-staging:
+    image: pgvector/pgvector:pg15
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - staging_postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - staging
+
+  # --- Redis 7 (staging) ---
+  redis-staging:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - staging_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - staging
+
+  # --- Chatwoot CRM (staging) ---
+  chatwoot-staging:
+    image: chatwoot/chatwoot:latest
+    command: bundle exec rails s -p 3000 -b '0.0.0.0'
+    environment:
+      - RAILS_ENV=production
+      - SECRET_KEY_BASE=${CHATWOOT_SECRET_KEY_BASE}
+      - FRONTEND_URL=${CHATWOOT_FRONTEND_URL:-http://localhost:3100}
+      - POSTGRES_HOST=postgres-staging
+      - POSTGRES_PORT=5432
+      - POSTGRES_DATABASE=chatwoot_staging
+      - POSTGRES_USERNAME=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REDIS_URL=redis://redis-staging:6379/0
+      - RAILS_LOG_TO_STDOUT=true
+    ports:
+      - "3100:3000"
+    volumes:
+      - staging_chatwoot_data:/app/storage
+    depends_on:
+      postgres-staging:
+        condition: service_healthy
+      redis-staging:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/auth/sign_in"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - staging
+
+  chatwoot-worker-staging:
+    image: chatwoot/chatwoot:latest
+    command: bundle exec sidekiq -C config/sidekiq.yml
+    environment:
+      - RAILS_ENV=production
+      - SECRET_KEY_BASE=${CHATWOOT_SECRET_KEY_BASE}
+      - POSTGRES_HOST=postgres-staging
+      - POSTGRES_PORT=5432
+      - POSTGRES_DATABASE=chatwoot_staging
+      - POSTGRES_USERNAME=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REDIS_URL=redis://redis-staging:6379/0
+    volumes:
+      - staging_chatwoot_data:/app/storage
+    depends_on:
+      postgres-staging:
+        condition: service_healthy
+      redis-staging:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - staging
+
+  # --- Backend (staging) ---
+  backend-staging:
+    build:
+      context: ./backend
+      target: runtime
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-staging/${POSTGRES_DB}
+      - REDIS_URL=redis://redis-staging:6379/1
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
+      - TELEGRAM_WEBHOOK_BASE_URL=${TELEGRAM_WEBHOOK_BASE_URL:-http://localhost:8100}
+      - T2_WEBHOOK_SECRET=${T2_WEBHOOK_SECRET}
+      - CHATWOOT_API_KEY=${CHATWOOT_API_KEY}
+      - CHATWOOT_BASE_URL=http://chatwoot-staging:3000
+      - CHATWOOT_ACCOUNT_ID=${CHATWOOT_ACCOUNT_ID}
+      - CHATWOOT_SUPPORT_ACCOUNT_ID=${CHATWOOT_SUPPORT_ACCOUNT_ID:-2}
+      - CHATWOOT_WEBHOOK_TOKEN=${CHATWOOT_WEBHOOK_TOKEN}
+      - CHATWOOT_INBOX_ID=${CHATWOOT_INBOX_ID:-1}
+      - CHATWOOT_PLATFORM_API_KEY=${CHATWOOT_PLATFORM_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - WHISPER_BASE_URL=${WHISPER_BASE_URL:-http://whisper:9000}
+      - MINIO_ENDPOINT=minio-staging:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME:-}
+    ports:
+      - "8100:8000"
+    volumes:
+      - staging_voice_samples:/app/data/voices
+    depends_on:
+      postgres-staging:
+        condition: service_healthy
+      redis-staging:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - staging
+
+  # --- MinIO (staging) ---
+  minio-staging:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
+    ports:
+      - "9100:9000"
+      - "9101:9001"
+    volumes:
+      - staging_minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - staging
+
+volumes:
+  staging_postgres_data:
+  staging_redis_data:
+  staging_chatwoot_data:
+  staging_voice_samples:
+  staging_minio_data:
+
+networks:
+  staging:

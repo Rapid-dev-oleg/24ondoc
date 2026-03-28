@@ -1,4 +1,5 @@
-.PHONY: up down build test lint format logs ps health
+.PHONY: up down build test lint format logs ps health \
+       staging-up staging-down staging-build staging-logs staging-ps staging-e2e staging-reset
 
 up:
 	docker compose up -d
@@ -26,3 +27,30 @@ ps:
 
 health:
 	docker compose ps --format "table {{.Name}}\t{{.Status}}"
+
+# --- Staging environment ---
+
+staging-up:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+
+staging-down:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging down
+
+staging-build:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging build
+
+staging-logs:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging logs -f --tail=100
+
+staging-ps:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging ps
+
+staging-e2e:
+	@echo "Running E2E tests against staging..."
+	WEBHOOK_URL=http://localhost:8100 \
+	CHATWOOT_BASE_URL=http://localhost:3100 \
+	python scripts/e2e_test.py
+
+staging-reset:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging down -v
+	@echo "Staging volumes removed. Run 'make staging-up' to recreate."
