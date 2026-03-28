@@ -111,10 +111,15 @@ class ChatwootRegisterAdapter(AgentRegistrationPort):
         )
         if account_response.status_code >= 400:
             await self._delete_platform_user(user_id)
-            raise RuntimeError(
-                f"Failed to add Chatwoot user {user_id} to account {self._account_id}: "
-                f"{account_response.status_code} {account_response.text}"
+            logger.warning(
+                "Failed to add Chatwoot user %d to account %d (%d %s), "
+                "falling back to Application API",
+                user_id,
+                self._account_id,
+                account_response.status_code,
+                account_response.text[:200],
             )
+            return await self._create_via_application_api(name, email, password)
         return user_id
 
     async def _create_via_application_api(self, name: str, email: str, password: str) -> int:

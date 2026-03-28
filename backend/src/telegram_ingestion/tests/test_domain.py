@@ -98,3 +98,14 @@ class TestDraftSession:
     def test_default_source_type_is_manual(self) -> None:
         session = make_session()
         assert session.source_type == SourceType.MANUAL
+
+    def test_start_analysis_idempotent_from_analyzing_state(self) -> None:
+        """start_analysis() не падает если сессия уже в ANALYZING — позволяет retry."""
+        session = make_session()
+        session.add_content_block(make_content_block("первый блок"))
+        session.start_analysis()
+        assert session.status == SessionStatus.ANALYZING
+        # Повторный вызов должен работать (retry после ошибки AI-классификации)
+        session.start_analysis()
+        assert session.status == SessionStatus.ANALYZING
+        assert session.assembled_text is not None

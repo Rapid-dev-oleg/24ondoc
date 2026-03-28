@@ -102,7 +102,11 @@ class DraftSession(BaseModel):
         return self.assembled_text
 
     def start_analysis(self) -> None:
-        if self.status not in (SessionStatus.COLLECTING, SessionStatus.EDITING):
+        if self.status not in (
+            SessionStatus.COLLECTING,
+            SessionStatus.EDITING,
+            SessionStatus.ANALYZING,
+        ):
             raise ValueError(f"Cannot start analysis in status: {self.status}")
         self.assembled_text = self.assemble_text()
         self.status = SessionStatus.ANALYZING

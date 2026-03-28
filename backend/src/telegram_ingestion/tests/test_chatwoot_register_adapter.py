@@ -185,26 +185,35 @@ async def test_platform_api_user_creation_error_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_platform_api_account_link_error_raises() -> None:
-    """Ошибка привязки к аккаунту пробрасывается как RuntimeError."""
+async def test_platform_api_account_link_error_falls_back_to_application_api() -> None:
+    """Ошибка привязки к аккаунту (403) → rollback → fallback на Application API."""
     adapter = _make_adapter(platform_api_key="platform-key")
-    deleted_ids: list[int] = []
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def platform_handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/platform/api/v1/users":
             return httpx.Response(200, json=_user_response(user_id=15))
         if "/account_users" in req.url.path:
-            return httpx.Response(403, text="Forbidden")
+            return httpx.Response(403, text='{"error":"Non permissible resource"}')
         if req.method == "DELETE":
-            deleted_ids.append(int(req.url.path.split("/")[-1]))
             return httpx.Response(200, text="")
         return httpx.Response(404, text="Not Found")
 
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
-        adapter._platform_http = http
-        with pytest.raises(RuntimeError, match="Failed to add Chatwoot user"):
-            await adapter.create_chatwoot_agent("Y", "y@24ondoc.ru", "pass!")
+    def app_handler(req: httpx.Request) -> httpx.Response:
+        if "/agents" in req.url.path:
+            return httpx.Response(200, json=_agent_response(agent_id=77))
+        return httpx.Response(404, text="Not Found")
+
+    platform_transport = httpx.MockTransport(platform_handler)
+    app_transport = httpx.MockTransport(app_handler)
+    async with (
+        httpx.AsyncClient(transport=platform_transport, base_url="http://chatwoot:3000") as ph,
+        httpx.AsyncClient(transport=app_transport, base_url="http://chatwoot:3000") as ah,
+    ):
+        adapter._platform_http = ph
+        adapter._http = ah
+        result = await adapter.create_chatwoot_agent("Y", "y@24ondoc.ru", "pass!")
+
+    assert result == 77
 
 
 @pytest.mark.asyncio
@@ -213,7 +222,7 @@ async def test_platform_api_rollback_on_account_link_failure() -> None:
     adapter = _make_adapter(platform_api_key="platform-key")
     deleted_paths: list[str] = []
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def platform_handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/platform/api/v1/users":
             return httpx.Response(200, json=_user_response(user_id=33))
         if "/account_users" in req.url.path:
@@ -223,15 +232,53 @@ async def test_platform_api_rollback_on_account_link_failure() -> None:
             return httpx.Response(200, text="")
         return httpx.Response(404, text="Not Found")
 
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport, base_url="http://chatwoot:3000") as http:
-        adapter._platform_http = http
-        with pytest.raises(RuntimeError):
-            await adapter.create_chatwoot_agent("Z", "z@24ondoc.ru", "pass!")
+    def app_handler(req: httpx.Request) -> httpx.Response:
+        if "/agents" in req.url.path:
+            return httpx.Response(200, json=_agent_response(agent_id=88))
+        return httpx.Response(404, text="Not Found")
+
+    platform_transport = httpx.MockTransport(platform_handler)
+    app_transport = httpx.MockTransport(app_handler)
+    async with (
+        httpx.AsyncClient(transport=platform_transport, base_url="http://chatwoot:3000") as ph,
+        httpx.AsyncClient(transport=app_transport, base_url="http://chatwoot:3000") as ah,
+    ):
+        adapter._platform_http = ph
+        adapter._http = ah
+        await adapter.create_chatwoot_agent("Z", "z@24ondoc.ru", "pass!")
 
     assert any("/platform/api/v1/users/33" in p for p in deleted_paths), (
         f"Rollback DELETE not called; captured paths: {deleted_paths}"
     )
+
+
+@pytest.mark.asyncio
+async def test_platform_api_account_link_and_fallback_both_fail_raises() -> None:
+    """Ошибка привязки к аккаунту + ошибка Application API → RuntimeError."""
+    adapter = _make_adapter(platform_api_key="platform-key")
+
+    def platform_handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/platform/api/v1/users":
+            return httpx.Response(200, json=_user_response(user_id=20))
+        if "/account_users" in req.url.path:
+            return httpx.Response(403, text='{"error":"Non permissible resource"}')
+        if req.method == "DELETE":
+            return httpx.Response(200, text="")
+        return httpx.Response(404, text="Not Found")
+
+    def app_handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, text="Unprocessable Entity")
+
+    platform_transport = httpx.MockTransport(platform_handler)
+    app_transport = httpx.MockTransport(app_handler)
+    async with (
+        httpx.AsyncClient(transport=platform_transport, base_url="http://chatwoot:3000") as ph,
+        httpx.AsyncClient(transport=app_transport, base_url="http://chatwoot:3000") as ah,
+    ):
+        adapter._platform_http = ph
+        adapter._http = ah
+        with pytest.raises(RuntimeError):
+            await adapter.create_chatwoot_agent("W", "w@24ondoc.ru", "pass!")
 
 
 @pytest.mark.asyncio
