@@ -88,10 +88,12 @@ class TestGeneratePassword:
         pwd = _generate_password()
         assert len(pwd) == 12
 
-    def test_only_alphanumeric(self) -> None:
+    def test_contains_special_character(self) -> None:
+        # Chatwoot Platform API requires at least one special character
+        specials = set("!@#$%^&*")
         for _ in range(20):
             pwd = _generate_password()
-            assert pwd.isalnum(), f"Non-alphanumeric chars in: {pwd}"
+            assert any(c in specials for c in pwd), f"No special char in: {pwd}"
 
     def test_passwords_are_unique(self) -> None:
         passwords = {_generate_password() for _ in range(50)}

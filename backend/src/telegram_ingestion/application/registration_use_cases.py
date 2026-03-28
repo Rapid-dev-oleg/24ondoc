@@ -11,12 +11,18 @@ from .ports import AgentRegistrationPort, VoiceSampleStoragePort
 
 _CRM_EMAIL_DOMAIN = "24ondoc.ru"
 _PASSWORD_LENGTH = 12
-_PASSWORD_ALPHABET = string.ascii_letters + string.digits
+_PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*"
+_PASSWORD_SPECIALS = "!@#$%^&*"
 
 
 def _generate_password() -> str:
-    """Generate a random 12-char alphanumeric password."""
-    return "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(_PASSWORD_LENGTH))
+    """Generate a random 12-char password with at least one special character (required by Chatwoot)."""
+    # Guarantee at least one special character so Chatwoot Platform API accepts the password
+    special = secrets.choice(_PASSWORD_SPECIALS)
+    rest = [secrets.choice(_PASSWORD_ALPHABET) for _ in range(_PASSWORD_LENGTH - 1)]
+    chars = rest + [special]
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
 
 
 class AutoRegisterUserUseCase:
