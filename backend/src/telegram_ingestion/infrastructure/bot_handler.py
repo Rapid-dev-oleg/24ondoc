@@ -18,6 +18,11 @@ from aiogram.types import (
 )
 
 from ..application.ports import UserProfilePort
+from ..application.registration_use_cases import (
+    AutoRegisterUserUseCase,
+    SaveVoiceSampleUseCase,
+    UpdateProfileFieldUseCase,
+)
 from ..application.tasks_use_cases import (
     AddTaskCommentUseCase,
     GetMyTasksUseCase,
@@ -32,6 +37,8 @@ from ..application.use_cases import (
     TriggerAnalysisUseCase,
 )
 
+_CRM_URL = "https://chat.24ondoc.ru"
+
 _TASKS_PAGE_SIZE = 5
 
 
@@ -42,6 +49,13 @@ class TelegramFSMStates(StatesGroup):  # type: ignore[misc]
     tasks_list = State()
     task_detail = State()
     adding_comment = State()
+
+
+class SettingsFSMStates(StatesGroup):  # type: ignore[misc]
+    menu = State()
+    edit_name = State()
+    edit_email = State()
+    voice_sample = State()
 
 
 def _collect_keyboard() -> InlineKeyboardMarkup:
@@ -71,6 +85,7 @@ def create_router(
     trigger_analysis: TriggerAnalysisUseCase,
     cancel_session: CancelSessionUseCase,
     user_port: UserProfilePort,
+    auto_register: AutoRegisterUserUseCase | None = None,
 ) -> Router:
     """Create and configure the telegram ingestion router with injected use cases."""
     router = Router(name="telegram_ingestion")
@@ -80,7 +95,28 @@ def create_router(
         if message.from_user is None:
             return
         await state.clear()
-        if await user_port.is_authorized(message.from_user.id):
+
+        if auto_register is not None:
+            first_name = message.from_user.first_name or ""
+            profile, password, is_new = await auto_register.execute(
+                message.from_user.id, first_name
+            )
+            if is_new:
+                email = profile.settings.get("email", f"{profile.telegram_id}@24ondoc.ru")
+                await message.answer(
+                    "✅ Вы успешно зарегистрированы в системе 24ondoc!\n\n"
+                    f"📧 Email: <code>{email}</code>\n"
+                    f"🔑 Пароль: <code>{password}</code>\n"
+                    f"🔗 CRM: {_CRM_URL}\n\n"
+                    "Для смены пароля: войдите в CRM → Настройки профиля → Пароль.\n\n"
+                    "Используйте /settings для настройки профиля."
+                )
+            else:
+                await message.answer(
+                    "👋 Добро пожаловать в 24ondoc!\n"
+                    "Используйте /new_task чтобы создать новую задачу."
+                )
+        elif await user_port.is_authorized(message.from_user.id):
             await message.answer(
                 "👋 Добро пожаловать в 24ondoc!\nИспользуйте /new_task чтобы создать новую задачу."
             )
@@ -500,6 +536,177 @@ def create_tasks_router(
         if isinstance(callback.message, Message):
             text = f"📋 Ваши задачи ({len(tasks)} шт.):" if tasks else "📭 У вас нет задач."
             await callback.message.edit_text(text, reply_markup=keyboard if tasks else None)
+
+    return router
+
+
+# ---------- Settings Router ----------
+
+
+def _settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Изменить имя", callback_data="settings_name")],
+            [InlineKeyboardButton(text="📧 Изменить email", callback_data="settings_email")],
+            [InlineKeyboardButton(text="🎤 Голосовой семпл", callback_data="settings_voice")],
+            [
+                InlineKeyboardButton(
+                    text="🔑 Данные для входа в CRM",
+                    callback_data="settings_credentials",
+                )
+            ],
+        ]
+    )
+
+
+def create_settings_router(
+    update_profile: UpdateProfileFieldUseCase,
+    save_voice: SaveVoiceSampleUseCase,
+    user_port: UserProfilePort,
+) -> Router:
+    """Создаёт роутер для /settings flow."""
+    router = Router(name="settings")
+
+    @router.message(Command("settings"))
+    async def cmd_settings(message: Message, state: FSMContext) -> None:
+        if message.from_user is None:
+            return
+        if not await user_port.is_authorized(message.from_user.id):
+            await message.answer("🔒 Вы не авторизованы.")
+            return
+        await state.set_state(SettingsFSMStates.menu)
+        await message.answer("⚙️ Настройки профиля:", reply_markup=_settings_keyboard())
+
+    @router.callback_query(SettingsFSMStates.menu, F.data == "settings_name")
+    async def cb_settings_name(callback: CallbackQuery, state: FSMContext) -> None:
+        await state.set_state(SettingsFSMStates.edit_name)
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text("✏️ Введите новое имя:")
+
+    @router.callback_query(SettingsFSMStates.menu, F.data == "settings_email")
+    async def cb_settings_email(callback: CallbackQuery, state: FSMContext) -> None:
+        await state.set_state(SettingsFSMStates.edit_email)
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text("📧 Введите новый email:")
+
+    @router.callback_query(SettingsFSMStates.menu, F.data == "settings_voice")
+    async def cb_settings_voice(callback: CallbackQuery, state: FSMContext) -> None:
+        await state.set_state(SettingsFSMStates.voice_sample)
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                "🎤 Отправьте голосовое сообщение или аудиофайл (ogg, mp3, wav):"
+            )
+
+    @router.callback_query(SettingsFSMStates.menu, F.data == "settings_credentials")
+    async def cb_settings_credentials(callback: CallbackQuery, state: FSMContext) -> None:
+        if callback.from_user is None:
+            await callback.answer()
+            return
+        profile = await user_port.get_profile(callback.from_user.id)
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            if profile is None:
+                await callback.message.edit_text("❌ Профиль не найден.")
+                return
+            email = profile.settings.get("email", f"{profile.telegram_id}@24ondoc.ru")
+            await callback.message.edit_text(
+                f"🔑 Данные для входа в CRM:\n\n"
+                f"📧 Email: <code>{email}</code>\n"
+                f"🔗 CRM: {_CRM_URL}\n\n"
+                "Для смены пароля войдите в CRM → Настройки профиля → Пароль.",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="◀ Назад", callback_data="settings_back")]
+                    ]
+                ),
+            )
+
+    @router.callback_query(F.data == "settings_back")
+    async def cb_settings_back(callback: CallbackQuery, state: FSMContext) -> None:
+        await state.set_state(SettingsFSMStates.menu)
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                "⚙️ Настройки профиля:", reply_markup=_settings_keyboard()
+            )
+
+    @router.message(SettingsFSMStates.edit_name, F.text)
+    async def handle_new_name(message: Message, state: FSMContext) -> None:
+        if message.from_user is None or message.text is None:
+            return
+        updated = await update_profile.execute(message.from_user.id, "display_name", message.text)
+        if updated is None:
+            await message.answer("❌ Профиль не найден.")
+            return
+        await state.set_state(SettingsFSMStates.menu)
+        await message.answer(
+            f"✅ Имя обновлено: {message.text}", reply_markup=_settings_keyboard()
+        )
+
+    @router.message(SettingsFSMStates.edit_email, F.text)
+    async def handle_new_email(message: Message, state: FSMContext) -> None:
+        if message.from_user is None or message.text is None:
+            return
+        updated = await update_profile.execute(message.from_user.id, "email", message.text)
+        if updated is None:
+            await message.answer("❌ Профиль не найден.")
+            return
+        await state.set_state(SettingsFSMStates.menu)
+        await message.answer(
+            f"✅ Email обновлён: {message.text}", reply_markup=_settings_keyboard()
+        )
+
+    @router.message(SettingsFSMStates.voice_sample, F.voice)
+    async def handle_voice_sample(message: Message, state: FSMContext, bot: Bot) -> None:
+        if message.from_user is None or message.voice is None:
+            return
+        tg_file = await bot.get_file(message.voice.file_id)
+        if tg_file.file_path is None:
+            await message.answer("❌ Не удалось получить файл.")
+            return
+        raw = await bot.download_file(tg_file.file_path)
+        if not isinstance(raw, io.BytesIO):
+            await message.answer("❌ Не удалось скачать файл.")
+            return
+        ok = await save_voice.execute(message.from_user.id, raw.read(), "ogg")
+        if ok:
+            await state.set_state(SettingsFSMStates.menu)
+            await message.answer(
+                "✅ Голосовой семпл сохранён.", reply_markup=_settings_keyboard()
+            )
+        else:
+            await message.answer("❌ Профиль не найден.")
+
+    _ALLOWED_AUDIO_EXTENSIONS = {"ogg", "mp3", "wav"}
+
+    @router.message(SettingsFSMStates.voice_sample, F.document)
+    async def handle_audio_document(message: Message, state: FSMContext, bot: Bot) -> None:
+        if message.from_user is None or message.document is None:
+            return
+        file_name = message.document.file_name or ""
+        ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+        if ext not in _ALLOWED_AUDIO_EXTENSIONS:
+            await message.answer("❌ Поддерживаются только ogg, mp3, wav файлы.")
+            return
+        tg_file = await bot.get_file(message.document.file_id)
+        if tg_file.file_path is None:
+            await message.answer("❌ Не удалось получить файл.")
+            return
+        raw = await bot.download_file(tg_file.file_path)
+        if not isinstance(raw, io.BytesIO):
+            await message.answer("❌ Не удалось скачать файл.")
+            return
+        ok = await save_voice.execute(message.from_user.id, raw.read(), ext)
+        if ok:
+            await state.set_state(SettingsFSMStates.menu)
+            await message.answer(
+                "✅ Голосовой семпл сохранён.", reply_markup=_settings_keyboard()
+            )
+        else:
+            await message.answer("❌ Профиль не найден.")
 
     return router
 

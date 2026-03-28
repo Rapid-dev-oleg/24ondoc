@@ -35,3 +35,21 @@ class UserProfilePort(ABC):
     async def list_active_agents(self) -> list[UserProfile]:
         """Return list of all active agent profiles."""
         ...
+
+
+class AgentRegistrationPort(ABC):
+    """Port for creating agents in external CRM (Chatwoot)."""
+
+    @abstractmethod
+    async def create_chatwoot_agent(self, name: str, email: str, password: str) -> int:
+        """Create agent in Chatwoot and return the external chatwoot_user_id."""
+        ...
+
+
+class VoiceSampleStoragePort(ABC):
+    """Port for persisting voice sample audio files."""
+
+    @abstractmethod
+    async def save(self, telegram_id: int, data: bytes, ext: str) -> str:
+        """Save audio bytes and return a path/URL string for storage in the user profile."""
+        ...

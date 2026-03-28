@@ -11,6 +11,11 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
 from chatwoot_integration.infrastructure.chatwoot_client import ChatwootClient
+from telegram_ingestion.application.registration_use_cases import (
+    AutoRegisterUserUseCase,
+    SaveVoiceSampleUseCase,
+    UpdateProfileFieldUseCase,
+)
 from telegram_ingestion.application.tasks_use_cases import (
     AddTaskCommentUseCase,
     GetMyTasksUseCase,
@@ -27,11 +32,16 @@ from telegram_ingestion.application.use_cases import (
 from telegram_ingestion.infrastructure.bot_handler import (
     create_call_notification_router,
     create_router,
+    create_settings_router,
     create_tasks_router,
+)
+from telegram_ingestion.infrastructure.chatwoot_register_adapter import (
+    ChatwootRegisterAdapter,
 )
 from telegram_ingestion.infrastructure.draft_session_repository import (
     SQLAlchemyRedisDraftSessionRepository,
 )
+from telegram_ingestion.infrastructure.local_voice_storage import LocalVoiceSampleStorage
 from telegram_ingestion.infrastructure.user_profile_port import UserProfilePortAdapter
 from telegram_ingestion.infrastructure.user_profile_repository import (
     SQLAlchemyUserProfileRepository,
@@ -90,6 +100,17 @@ async def telegram_webhook(
     reassign_task = ReassignTaskUseCase(user_port, chatwoot_client)
     add_task_comment = AddTaskCommentUseCase(chatwoot_client)
 
+    # Registration + profile use cases
+    chatwoot_register = ChatwootRegisterAdapter(
+        base_url=settings.chatwoot_base_url,
+        api_key=settings.chatwoot_api_key,
+        account_id=settings.chatwoot_account_id,
+    )
+    auto_register = AutoRegisterUserUseCase(user_repo, chatwoot_register, settings.chatwoot_account_id)
+    update_profile = UpdateProfileFieldUseCase(user_repo)
+    voice_storage = LocalVoiceSampleStorage(base_dir="/data/voice_samples")
+    save_voice = SaveVoiceSampleUseCase(user_repo, voice_storage)
+
     # Dispatcher with Redis FSM storage (shared state across per-request instances)
     storage = RedisStorage(redis=redis)
     dp = Dispatcher(storage=storage)
@@ -101,6 +122,7 @@ async def telegram_webhook(
             trigger_analysis,
             cancel_session,
             user_port,
+            auto_register=auto_register,
         )
     )
     dp.include_router(
@@ -108,6 +130,7 @@ async def telegram_webhook(
             get_my_tasks, update_task_status, reassign_task, add_task_comment, user_port
         )
     )
+    dp.include_router(create_settings_router(update_profile, save_voice, user_port))
     dp.include_router(create_call_notification_router(call_repo))
 
     update = Update.model_validate(update_data)
