@@ -15,7 +15,6 @@ from telegram_ingestion.application.registration_use_cases import (
     AutoRegisterUserUseCase,
     SaveVoiceSampleUseCase,
     UpdateProfileFieldUseCase,
-    _generate_password,
 )
 from telegram_ingestion.domain.models import UserProfile, UserRole
 from telegram_ingestion.domain.repository import UserProfileRepository
@@ -83,35 +82,6 @@ def _make_profile(telegram_id: int = 1, chatwoot_user_id: int = 10) -> UserProfi
 
 
 # ---------------------------------------------------------------------------
-# Tests: _generate_password
-# ---------------------------------------------------------------------------
-
-
-class TestGeneratePassword:
-    def test_length_is_12(self) -> None:
-        pwd = _generate_password()
-        assert len(pwd) == 12
-
-    def test_contains_special_character(self) -> None:
-        # Chatwoot Platform API requires at least one special character
-        specials = set("!@#$%^&*")
-        for _ in range(20):
-            pwd = _generate_password()
-            assert any(c in specials for c in pwd), f"No special char in: {pwd}"
-
-    def test_contains_digit(self) -> None:
-        # Chatwoot Platform API requires at least one digit
-        for _ in range(20):
-            pwd = _generate_password()
-            assert any(c.isdigit() for c in pwd), f"No digit in: {pwd}"
-
-    def test_passwords_are_unique(self) -> None:
-        passwords = {_generate_password() for _ in range(50)}
-        # With 62^12 possibilities, collisions are astronomically unlikely
-        assert len(passwords) == 50
-
-
-# ---------------------------------------------------------------------------
 # Tests: AutoRegisterUserUseCase
 # ---------------------------------------------------------------------------
 
@@ -125,7 +95,7 @@ class TestAutoRegisterUserUseCase:
         profile, password, is_new = await uc.execute(telegram_id=42, first_name="Алиса")
 
         assert is_new is True
-        assert len(password) == 12
+        assert password == "Temp_Password"
         assert profile.telegram_id == 42
         assert profile.chatwoot_user_id == 200
         assert profile.settings["display_name"] == "Алиса"
@@ -189,7 +159,7 @@ class TestAutoRegisterUserUseCase:
 
         assert len(reg.calls) == 1
         call = reg.calls[0]
-        assert len(call["password"]) == 12
+        assert call["password"] == "Temp_Password"
         assert call["email"] == "88@24ondoc.ru"
 
     async def test_account_id_stored_correctly(self) -> None:

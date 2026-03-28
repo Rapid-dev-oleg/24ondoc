@@ -2,27 +2,12 @@
 
 from __future__ import annotations
 
-import secrets
-import string
-
 from ..domain.models import UserProfile, UserRole
 from ..domain.repository import UserProfileRepository
 from .ports import AgentRegistrationPort, VoiceEnrollmentPort, VoiceSampleStoragePort
 
 _CRM_EMAIL_DOMAIN = "24ondoc.ru"
-_PASSWORD_LENGTH = 12
-_PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*"
-_PASSWORD_SPECIALS = "!@#$%^&*"
-
-
-def _generate_password() -> str:
-    """Generate a random 12-char password with digit + special char."""
-    special = secrets.choice(_PASSWORD_SPECIALS)
-    digit = secrets.choice(string.digits)
-    rest = [secrets.choice(_PASSWORD_ALPHABET) for _ in range(_PASSWORD_LENGTH - 2)]
-    chars = rest + [special, digit]
-    secrets.SystemRandom().shuffle(chars)
-    return "".join(chars)
+_TEMP_PASSWORD = "Temp_Password"
 
 
 class AutoRegisterUserUseCase:
@@ -48,7 +33,7 @@ class AutoRegisterUserUseCase:
 
         name = first_name.strip() or str(telegram_id)
         email = f"{telegram_id}@{_CRM_EMAIL_DOMAIN}"
-        password = _generate_password()
+        password = _TEMP_PASSWORD
 
         chatwoot_user_id = await self._agent_registration.create_chatwoot_agent(
             name, email, password
