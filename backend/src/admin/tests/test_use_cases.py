@@ -60,12 +60,19 @@ class InMemoryChatwootAdminPort(ChatwootAdminPort):
     def __init__(self, next_id: int = 100) -> None:
         self._next_id = next_id
         self.calls: list[dict[str, str]] = []
+        self.deleted_agent_ids: list[int] = []
+        self.delete_raises: Exception | None = None
 
     async def create_agent(self, name: str, email: str, role: str) -> int:
         self.calls.append({"name": name, "email": email, "role": role})
         result = self._next_id
         self._next_id += 1
         return result
+
+    async def delete_agent(self, chatwoot_user_id: int) -> None:
+        if self.delete_raises is not None:
+            raise self.delete_raises
+        self.deleted_agent_ids.append(chatwoot_user_id)
 
 
 class InMemoryEnvSettingsPort(EnvSettingsPort):
@@ -236,6 +243,9 @@ class TestCreateUserDirectUseCase:
             async def create_agent(self, name: str, email: str, role: str) -> int:
                 raise RuntimeError("Chatwoot unavailable")
 
+            async def delete_agent(self, chatwoot_user_id: int) -> None:
+                pass
+
         notify = InMemoryTelegramNotificationPort()
         uc = CreateUserDirectUseCase(
             FailingChatwoot(), InMemoryUserProfileRepository(), notify, account_id=2
@@ -248,6 +258,9 @@ class TestCreateUserDirectUseCase:
         class FailingChatwoot(ChatwootAdminPort):
             async def create_agent(self, name: str, email: str, role: str) -> int:
                 raise RuntimeError("Chatwoot unavailable")
+
+            async def delete_agent(self, chatwoot_user_id: int) -> None:
+                pass
 
         notify = InMemoryTelegramNotificationPort()
         uc = CreateUserDirectUseCase(
@@ -304,10 +317,11 @@ class TestUpdateUserUseCase:
 class TestDeactivateUserUseCase:
     async def test_deactivates_existing_user(self) -> None:
         user_repo = InMemoryUserProfileRepository()
-        user = _make_user(is_active=True)
+        user = _make_user(is_active=True, chatwoot_user_id=42)
         await user_repo.save(user)
+        chatwoot = InMemoryChatwootAdminPort()
 
-        uc = DeactivateUserUseCase(user_repo)
+        uc = DeactivateUserUseCase(user_repo, chatwoot)
         found = await uc.execute(1)
 
         assert found is True
@@ -316,8 +330,59 @@ class TestDeactivateUserUseCase:
         assert saved.is_active is False
 
     async def test_returns_false_for_missing_user(self) -> None:
-        uc = DeactivateUserUseCase(InMemoryUserProfileRepository())
+        chatwoot = InMemoryChatwootAdminPort()
+        uc = DeactivateUserUseCase(InMemoryUserProfileRepository(), chatwoot)
         assert await uc.execute(999) is False
+
+    async def test_deletes_agent_from_chatwoot(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        user = _make_user(is_active=True, chatwoot_user_id=77)
+        await user_repo.save(user)
+        chatwoot = InMemoryChatwootAdminPort()
+
+        uc = DeactivateUserUseCase(user_repo, chatwoot)
+        await uc.execute(1)
+
+        assert chatwoot.deleted_agent_ids == [77]
+
+    async def test_chatwoot_404_does_not_raise(self) -> None:
+        """Если Chatwoot вернул 404 (агент уже удалён) — ошибка не должна выбрасываться."""
+        user_repo = InMemoryUserProfileRepository()
+        user = _make_user(is_active=True, chatwoot_user_id=99)
+        await user_repo.save(user)
+
+        class NotFoundChatwoot(ChatwootAdminPort):
+            async def create_agent(self, name: str, email: str, role: str) -> int:
+                return 0
+
+            async def delete_agent(self, chatwoot_user_id: int) -> None:
+                pass  # 404 — тихо игнорируем
+
+        uc = DeactivateUserUseCase(user_repo, NotFoundChatwoot())
+        found = await uc.execute(1)
+        assert found is True
+
+    async def test_is_active_false_even_if_chatwoot_errors(self) -> None:
+        """Локальная деактивация должна произойти до вызова Chatwoot."""
+        user_repo = InMemoryUserProfileRepository()
+        user = _make_user(is_active=True, chatwoot_user_id=55)
+        await user_repo.save(user)
+        chatwoot = InMemoryChatwootAdminPort()
+        chatwoot.delete_raises = RuntimeError("Chatwoot down")
+
+        uc = DeactivateUserUseCase(user_repo, chatwoot)
+        with pytest.raises(RuntimeError, match="Chatwoot down"):
+            await uc.execute(1)
+
+        saved = await user_repo.get_by_telegram_id(1)
+        assert saved is not None
+        assert saved.is_active is False
+
+    async def test_chatwoot_delete_not_called_for_missing_user(self) -> None:
+        chatwoot = InMemoryChatwootAdminPort()
+        uc = DeactivateUserUseCase(InMemoryUserProfileRepository(), chatwoot)
+        await uc.execute(999)
+        assert chatwoot.deleted_agent_ids == []
 
 
 # ---------------------------------------------------------------------------

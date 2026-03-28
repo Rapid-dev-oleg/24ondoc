@@ -136,10 +136,11 @@ class UpdateUserUseCase:
 
 
 class DeactivateUserUseCase:
-    """Set is_active=False for a user (soft delete)."""
+    """Set is_active=False for a user (soft delete) and remove agent from Chatwoot CRM."""
 
-    def __init__(self, user_repo: UserProfileRepository) -> None:
+    def __init__(self, user_repo: UserProfileRepository, chatwoot: ChatwootAdminPort) -> None:
         self._users = user_repo
+        self._chatwoot = chatwoot
 
     async def execute(self, telegram_id: int) -> bool:
         user = await self._users.get_by_telegram_id(telegram_id)
@@ -147,6 +148,7 @@ class DeactivateUserUseCase:
             return False
         user = user.model_copy(update={"is_active": False})
         await self._users.save(user)
+        await self._chatwoot.delete_agent(user.chatwoot_user_id)
         return True
 
 

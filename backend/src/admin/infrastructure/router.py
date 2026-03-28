@@ -176,8 +176,15 @@ async def update_user(
 
 @router.delete("/api/admin/users/{telegram_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def deactivate_user(telegram_id: int, request: Request, _: AdminPayload) -> None:
+    settings = get_settings()
     db_session = request.state.db_session
-    uc = DeactivateUserUseCase(SQLAlchemyUserProfileRepository(db_session))
+    chatwoot = ChatwootAdminClient(
+        base_url=settings.chatwoot_base_url,
+        api_key=settings.chatwoot_api_key,
+        account_id=settings.chatwoot_support_account_id,
+        platform_api_key=settings.chatwoot_platform_api_key,
+    )
+    uc = DeactivateUserUseCase(SQLAlchemyUserProfileRepository(db_session), chatwoot)
     found = await uc.execute(telegram_id)
     if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")

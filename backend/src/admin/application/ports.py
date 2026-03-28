@@ -6,11 +6,16 @@ from abc import ABC, abstractmethod
 
 
 class ChatwootAdminPort(ABC):
-    """Port for creating agents in Chatwoot via admin API."""
+    """Port for creating and deleting agents in Chatwoot via admin API."""
 
     @abstractmethod
     async def create_agent(self, name: str, email: str, role: str) -> int:
         """Create an agent in Chatwoot, return chatwoot_user_id."""
+        ...
+
+    @abstractmethod
+    async def delete_agent(self, chatwoot_user_id: int) -> None:
+        """Delete an agent from Chatwoot. If already gone (404), do nothing."""
         ...
 
 

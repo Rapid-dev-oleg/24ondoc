@@ -107,3 +107,15 @@ class ChatwootAdminClient(ChatwootAdminPort):
             )
         data: dict[str, object] = response.json()
         return int(str(data["id"]))
+
+    async def delete_agent(self, chatwoot_user_id: int) -> None:
+        """Delete agent via Application API. 404 is silently ignored."""
+        response = await self._http.delete(
+            f"/api/v1/accounts/{self._account_id}/agents/{chatwoot_user_id}"
+        )
+        if response.status_code == 404:
+            return
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Chatwoot agent deletion failed {response.status_code}: {response.text}"
+            )
