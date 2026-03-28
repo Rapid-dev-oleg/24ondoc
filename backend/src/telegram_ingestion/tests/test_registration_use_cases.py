@@ -95,6 +95,12 @@ class TestGeneratePassword:
             pwd = _generate_password()
             assert any(c in specials for c in pwd), f"No special char in: {pwd}"
 
+    def test_contains_digit(self) -> None:
+        # Chatwoot Platform API requires at least one digit
+        for _ in range(20):
+            pwd = _generate_password()
+            assert any(c.isdigit() for c in pwd), f"No digit in: {pwd}"
+
     def test_passwords_are_unique(self) -> None:
         passwords = {_generate_password() for _ in range(50)}
         # With 62^12 possibilities, collisions are astronomically unlikely
