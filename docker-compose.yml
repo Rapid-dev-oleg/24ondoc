@@ -166,8 +166,6 @@ services:
       /bin/sh -c "
       echo \"postgres:5432:*:$${PGADMIN_DB_USER}:$${PGADMIN_DB_PASSWORD}\" > /tmp/pgpass &&
       chmod 600 /tmp/pgpass &&
-      cp /tmp/pgpass /pgadmin4/pgpass &&
-      chown pgadmin:pgadmin /pgadmin4/pgpass &&
       /entrypoint.sh
       "
     depends_on:
