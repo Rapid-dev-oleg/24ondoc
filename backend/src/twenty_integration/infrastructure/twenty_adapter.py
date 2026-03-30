@@ -116,7 +116,7 @@ class TwentyRestAdapter(TwentyCRMPort):
             }
 
             if due_at is not None:
-                payload["dueAt"] = due_at.isoformat()
+                payload["dueAt"] = due_at.strftime("%Y-%m-%dT%H:%M:%SZ")
 
             if assignee_id is not None:
                 payload["assigneeId"] = assignee_id

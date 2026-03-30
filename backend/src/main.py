@@ -30,21 +30,26 @@ from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
 logger = structlog.get_logger(__name__)
 
 
-class _NullProcessCall:
-    """No-op placeholder for ProcessCallWebhook until full wiring is available."""
-
-    async def execute(self, call_id: str) -> None:
-        logger.debug("ATS2 ProcessCall stub: call_id=%s (not wired yet)", call_id)
+from ai_classification.infrastructure.openrouter_adapter import OpenRouterAdapter
 
 
-class _NullCallRepo:
-    """No-op placeholder for CallRecordRepository in ATS2 poller startup."""
+class _PollerCallRepo:
+    """CallRecordRepository wrapper for ATS2 poller (uses its own session per operation)."""
 
-    async def get_by_id(self, call_id: str) -> None:
-        return None
+    def __init__(self, session_factory: async_sessionmaker) -> None:  # type: ignore[type-arg]
+        self._session_factory = session_factory
+
+    async def get_by_id(self, call_id: str) -> object | None:
+        async with self._session_factory() as session:
+            async with session.begin():
+                repo = CallRecordRepositoryImpl(session)
+                return await repo.get_by_id(call_id)
 
     async def save(self, record: object) -> None:
-        logger.debug("ATS2 CallRepo stub: saving record (not wired yet)")
+        async with self._session_factory() as session:
+            async with session.begin():
+                repo = CallRecordRepositoryImpl(session)
+                await repo.save(record)  # type: ignore[arg-type]
 
     async def get_pending(self, limit: int = 10, source: object = None) -> list:  # type: ignore[type-arg]
         return []
@@ -55,7 +60,8 @@ class _NullCallRepo:
 
 def _create_ats2_poller(
     settings: Settings,
-    session_factory: object,
+    session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    twenty_adapter: TwentyRestAdapter | None = None,
 ) -> ATS2PollerService | None:
     """Create ATS2PollerService if ATS2_ENABLED=true, else return None."""
     if not settings.ats2_enabled:
@@ -65,18 +71,32 @@ def _create_ats2_poller(
         access_token=settings.ats2_access_token,
         refresh_token=settings.ats2_refresh_token,
         base_url=settings.ats2_base_url,
+        proxy_url=settings.ats2_proxy_url,
     )
     ats2_client = ATS2RestClient(
         auth_manager=auth_manager,
         base_url=settings.ats2_base_url,
+        proxy_url=settings.ats2_proxy_url,
     )
     mapper = ATS2TranscriptionMapper()
+    call_repo = _PollerCallRepo(session_factory)
+
+    ai_port = OpenRouterAdapter(
+        api_key=settings.openrouter_api_key or settings.openai_api_key or ""
+    )
+
+    stt_port = OpenRouterSTTAdapter(
+        api_key=settings.openai_api_key or settings.openrouter_api_key,
+        whisper_url=settings.whisper_base_url,
+    )
 
     return ATS2PollerService(
         ats2_client=ats2_client,
-        call_repo=_NullCallRepo(),  # type: ignore[arg-type]
-        process_call_webhook=_NullProcessCall(),  # type: ignore[arg-type]
+        call_repo=call_repo,  # type: ignore[arg-type]
         transcription_mapper=mapper,
+        ai_port=ai_port,
+        twenty_port=twenty_adapter if settings.twenty_api_key else None,
+        stt_port=stt_port,
         poll_interval_sec=float(settings.ats2_poll_interval_sec),
     )
 
@@ -130,7 +150,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Telegram webhook registered", url=webhook_url)
 
     # ATS2 Poller (background task)
-    ats2_poller = _create_ats2_poller(settings, session_factory=session_factory)
+    ats2_poller = _create_ats2_poller(
+        settings,
+        session_factory=session_factory,
+        twenty_adapter=twenty_adapter if settings.twenty_api_key else None,
+    )
     ats2_task: asyncio.Task[None] | None = None
     if ats2_poller is not None:
         ats2_task = asyncio.create_task(ats2_poller.start())
