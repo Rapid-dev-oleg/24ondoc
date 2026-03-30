@@ -44,7 +44,7 @@ class ATS2PollerService:
         self._twenty_port = twenty_port
         self._stt_port = stt_port
         self._poll_interval_sec = poll_interval_sec
-        self._last_poll_timestamp: datetime = datetime.now(UTC) - timedelta(hours=24)
+        self._last_poll_timestamp: datetime = datetime.now(UTC) - timedelta(minutes=5)
         self._running: bool = False
         self._stop_event: asyncio.Event = asyncio.Event()
 
@@ -159,7 +159,7 @@ class ATS2PollerService:
 
         # AI-анализ + создание задачи в Twenty
         if transcription_text and self._ai_port and self._twenty_port:
-            await self._create_task_from_call(
+            success = await self._create_task_from_call(
                 call_id=call_id,
                 transcription=transcription_text,
                 caller_phone=caller_phone,
@@ -172,6 +172,11 @@ class ATS2PollerService:
                 call_status=call_status,
                 destination=destination,
             )
+            if success:
+                record.mark_created()
+            else:
+                record.mark_error()
+            await self._call_repo.save(record)
 
     async def _create_task_from_call(
         self,
@@ -186,7 +191,7 @@ class ATS2PollerService:
         call_type: str | None = None,
         call_status: str | None = None,
         destination: str | None = None,
-    ) -> None:
+    ) -> bool:
         """AI-анализ транскрипции → создание задачи в Twenty."""
         assert self._ai_port is not None
         assert self._twenty_port is not None
@@ -264,5 +269,7 @@ class ATS2PollerService:
             logger.info(
                 "ATS2 call %s → Twenty task created: %s", call_id, task.twenty_id
             )
+            return True
         except Exception:
             logger.exception("ATS2 Poller: ошибка создания задачи для %s", call_id)
+            return False

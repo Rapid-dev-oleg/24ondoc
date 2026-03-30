@@ -64,8 +64,6 @@ class CallRecord(BaseModel):
         self.status = CallStatus.PREVIEW
 
     def mark_created(self) -> None:
-        if self.status != CallStatus.PREVIEW:
-            raise ValueError("Can only mark created from preview state")
         self.status = CallStatus.CREATED
 
     def mark_error(self) -> None:
