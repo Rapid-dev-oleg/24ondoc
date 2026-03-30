@@ -56,6 +56,9 @@ class InMemoryUserProfileRepository(UserProfileRepository):
     async def list_active(self) -> list[UserProfile]:
         return [p for p in self._store.values() if p.is_active]
 
+    async def list_all(self) -> list[UserProfile]:
+        return list(self._store.values())
+
     async def delete_by_telegram_id(self, telegram_id: int) -> None:
         self._store.pop(telegram_id, None)
 
@@ -163,7 +166,7 @@ class TestJWT:
 
 
 class TestListUsersUseCase:
-    async def test_returns_active_users(self) -> None:
+    async def test_returns_all_users(self) -> None:
         user_repo = InMemoryUserProfileRepository()
         user = _make_user(telegram_id=1)
         await user_repo.save(user)
@@ -175,14 +178,44 @@ class TestListUsersUseCase:
         assert result[0].telegram_id == 1
         assert result[0].is_pending is False
 
-    async def test_inactive_user_excluded(self) -> None:
+    async def test_inactive_user_included(self) -> None:
         user_repo = InMemoryUserProfileRepository()
         inactive = _make_user(telegram_id=2, is_active=False)
         await user_repo.save(inactive)
 
         uc = ListUsersUseCase(user_repo)
         result = await uc.execute()
-        assert result == []
+        assert len(result) == 1
+        assert result[0].telegram_id == 2
+        assert result[0].is_active is False
+
+    async def test_returns_all_fields(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        from telegram_ingestion.domain.models import UserProfile
+
+        user = UserProfile(
+            telegram_id=3,
+            chatwoot_user_id=30,
+            chatwoot_account_id=1,
+            chatwoot_contact_id=55,
+            role=UserRole.AGENT,
+            phone_internal="+79001234567",
+            voice_sample_url="https://example.com/sample.ogg",
+            settings={"lang": "ru"},
+            is_active=True,
+            created_at=datetime.now(UTC),
+        )
+        await user_repo.save(user)
+
+        uc = ListUsersUseCase(user_repo)
+        result = await uc.execute()
+
+        assert len(result) == 1
+        r = result[0]
+        assert r.chatwoot_contact_id == 55
+        assert r.phone_internal == "+79001234567"
+        assert r.voice_sample_url == "https://example.com/sample.ogg"
+        assert r.settings == {"lang": "ru"}
 
     async def test_empty_repository(self) -> None:
         uc = ListUsersUseCase(InMemoryUserProfileRepository())
@@ -306,6 +339,29 @@ class TestUpdateUserUseCase:
 
         assert result is not None
         assert result.is_active is False
+
+    async def test_update_phone_internal(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        await user_repo.save(_make_user(telegram_id=1))
+
+        uc = UpdateUserUseCase(user_repo)
+        result = await uc.execute(1, UpdateUserRequest(phone_internal="+79001234567"))
+
+        assert result is not None
+        assert result.phone_internal == "+79001234567"
+        saved = await user_repo.get_by_telegram_id(1)
+        assert saved is not None
+        assert saved.phone_internal == "+79001234567"
+
+    async def test_update_settings(self) -> None:
+        user_repo = InMemoryUserProfileRepository()
+        await user_repo.save(_make_user(telegram_id=1))
+
+        uc = UpdateUserUseCase(user_repo)
+        result = await uc.execute(1, UpdateUserRequest(settings={"lang": "ru"}))
+
+        assert result is not None
+        assert result.settings == {"lang": "ru"}
 
     async def test_user_not_found_returns_none(self) -> None:
         uc = UpdateUserUseCase(InMemoryUserProfileRepository())

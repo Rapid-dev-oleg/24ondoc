@@ -28,19 +28,23 @@ def _mask_value(value: str) -> str:
 
 
 class ListUsersUseCase:
-    """Return all active users."""
+    """Return all users from the database."""
 
     def __init__(self, user_repo: UserProfileRepository) -> None:
         self._users = user_repo
 
     async def execute(self) -> list[UserResponse]:
-        users = await self._users.list_active()
+        users = await self._users.list_all()
         return [
             UserResponse(
                 telegram_id=u.telegram_id,
                 chatwoot_user_id=u.chatwoot_user_id,
                 chatwoot_account_id=u.chatwoot_account_id,
+                chatwoot_contact_id=u.chatwoot_contact_id,
                 role=u.role,
+                phone_internal=u.phone_internal,
+                voice_sample_url=u.voice_sample_url,
+                settings=u.settings,
                 is_active=u.is_active,
                 is_pending=False,
                 created_at=u.created_at,
@@ -99,7 +103,11 @@ class CreateUserDirectUseCase:
             telegram_id=profile.telegram_id,
             chatwoot_user_id=profile.chatwoot_user_id,
             chatwoot_account_id=profile.chatwoot_account_id,
+            chatwoot_contact_id=profile.chatwoot_contact_id,
             role=profile.role,
+            phone_internal=profile.phone_internal,
+            voice_sample_url=profile.voice_sample_url,
+            settings=profile.settings,
             is_active=profile.is_active,
             is_pending=False,
             created_at=profile.created_at,
@@ -121,6 +129,12 @@ class UpdateUserUseCase:
             updates["role"] = request.role
         if request.is_active is not None:
             updates["is_active"] = request.is_active
+        if request.phone_internal is not None:
+            updates["phone_internal"] = request.phone_internal
+        if request.voice_sample_url is not None:
+            updates["voice_sample_url"] = request.voice_sample_url
+        if request.settings is not None:
+            updates["settings"] = request.settings
         if updates:
             user = user.model_copy(update=updates)
             await self._users.save(user)
@@ -128,7 +142,11 @@ class UpdateUserUseCase:
             telegram_id=user.telegram_id,
             chatwoot_user_id=user.chatwoot_user_id,
             chatwoot_account_id=user.chatwoot_account_id,
+            chatwoot_contact_id=user.chatwoot_contact_id,
             role=user.role,
+            phone_internal=user.phone_internal,
+            voice_sample_url=user.voice_sample_url,
+            settings=user.settings,
             is_active=user.is_active,
             is_pending=False,
             created_at=user.created_at,

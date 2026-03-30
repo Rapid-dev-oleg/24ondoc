@@ -120,37 +120,44 @@
           </template>
 
           <template x-if="!isLoadingUsers">
-            <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-x-auto">
               <table class="w-full text-sm">
                 <thead class="bg-gray-50 dark:bg-gray-700">
                   <tr>
-                    <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Telegram ID</th>
-                    <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Chatwoot ID</th>
-                    <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Роль</th>
-                    <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Статус</th>
-                    <th class="px-4 py-3 text-right font-medium text-gray-600 dark:text-gray-300">Действия</th>
+                    <th class="px-3 py-3 text-left font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Telegram ID</th>
+                    <th class="px-3 py-3 text-left font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Chatwoot User ID</th>
+                    <th class="px-3 py-3 text-left font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Chatwoot Account ID</th>
+                    <th class="px-3 py-3 text-left font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Chatwoot Contact ID</th>
+                    <th class="px-3 py-3 text-left font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Роль</th>
+                    <th class="px-3 py-3 text-left font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Телефон</th>
+                    <th class="px-3 py-3 text-left font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Voice URL</th>
+                    <th class="px-3 py-3 text-left font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Settings</th>
+                    <th class="px-3 py-3 text-left font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Статус</th>
+                    <th class="px-3 py-3 text-left font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Создан</th>
+                    <th class="px-3 py-3 text-right font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">Действия</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
                   <template x-if="users.length === 0">
-                    <tr><td colspan="6" class="px-4 py-8 text-center text-gray-400">Нет пользователей</td></tr>
+                    <tr><td colspan="11" class="px-4 py-8 text-center text-gray-400">Нет пользователей</td></tr>
                   </template>
                   <template x-for="u in users" :key="(u.telegram_id || '') + u.chatwoot_user_id">
                     <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                      <td class="px-4 py-3 text-gray-900 dark:text-white font-mono">
-                        <span x-text="u.telegram_id || '—'"></span>
+                      <td class="px-3 py-3 text-gray-900 dark:text-white font-mono whitespace-nowrap" x-text="u.telegram_id || '—'"></td>
+                      <td class="px-3 py-3 text-gray-600 dark:text-gray-300 font-mono whitespace-nowrap" x-text="u.chatwoot_user_id"></td>
+                      <td class="px-3 py-3 text-gray-600 dark:text-gray-300 font-mono whitespace-nowrap" x-text="u.chatwoot_account_id"></td>
+                      <td class="px-3 py-3 text-gray-600 dark:text-gray-300 font-mono whitespace-nowrap" x-text="u.chatwoot_contact_id ?? '—'"></td>
+                      <td class="px-3 py-3 whitespace-nowrap">
+                        <span class="text-xs font-medium" x-text="u.role"></span>
                       </td>
-                      <td class="px-4 py-3 text-gray-600 dark:text-gray-300 font-mono" x-text="u.chatwoot_user_id"></td>
-                      <td class="px-4 py-3">
-                        <select @change="updateRole(u.telegram_id, $event.target.value)"
-                                :value="u.role"
-                                class="text-xs border border-gray-200 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-                          <option value="agent">agent</option>
-                          <option value="supervisor">supervisor</option>
-                          <option value="admin">admin</option>
-                        </select>
+                      <td class="px-3 py-3 text-gray-600 dark:text-gray-300 font-mono whitespace-nowrap" x-text="u.phone_internal || '—'"></td>
+                      <td class="px-3 py-3 text-gray-600 dark:text-gray-300 max-w-xs truncate">
+                        <span x-text="u.voice_sample_url || '—'" :title="u.voice_sample_url || ''"></span>
                       </td>
-                      <td class="px-4 py-3">
+                      <td class="px-3 py-3 text-gray-600 dark:text-gray-300 font-mono text-xs max-w-xs truncate">
+                        <span x-text="Object.keys(u.settings || {}).length ? JSON.stringify(u.settings) : '—'" :title="JSON.stringify(u.settings)"></span>
+                      </td>
+                      <td class="px-3 py-3 whitespace-nowrap">
                         <template x-if="u.is_active">
                           <span class="text-xs bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 px-2 py-1 rounded-full">Активен</span>
                         </template>
@@ -158,13 +165,16 @@
                           <span class="text-xs bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 px-2 py-1 rounded-full">Неактивен</span>
                         </template>
                       </td>
-                      <td class="px-4 py-3 text-right">
-                        <template x-if="u.is_active">
-                          <button @click="deactivateUser(u.telegram_id)"
-                                  class="text-xs text-red-600 hover:text-red-700 dark:text-red-400 font-medium">
-                            Деактивировать
-                          </button>
-                        </template>
+                      <td class="px-3 py-3 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap" x-text="u.created_at ? new Date(u.created_at).toLocaleDateString('ru-RU') : '—'"></td>
+                      <td class="px-3 py-3 text-right whitespace-nowrap">
+                        <button @click="openEditModal(u)"
+                                class="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 font-medium mr-2">
+                          Изменить
+                        </button>
+                        <button @click="deleteUser(u.telegram_id)"
+                                class="text-xs text-red-600 hover:text-red-700 dark:text-red-400 font-medium">
+                          Удалить
+                        </button>
                       </td>
                     </tr>
                   </template>
@@ -207,6 +217,55 @@
         </div>
 
       </div><!-- /content -->
+    </div>
+  </template>
+
+  <!-- ─── MODAL: Edit User ─── -->
+  <template x-if="showEditUserModal">
+    <div class="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-4" @click.self="showEditUserModal = false">
+      <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md p-6 max-h-screen overflow-y-auto">
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Изменить пользователя</h3>
+        <form @submit.prevent="saveEditUser()" class="space-y-3">
+          <div>
+            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Telegram ID</label>
+            <input type="text" :value="editUserForm.telegram_id" disabled class="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-sm">
+          </div>
+          <div>
+            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Роль</label>
+            <select x-model="editUserForm.role" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none text-sm">
+              <option value="agent">agent</option>
+              <option value="supervisor">supervisor</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Статус</label>
+            <select x-model="editUserForm.is_active" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none text-sm">
+              <option :value="true">Активен</option>
+              <option :value="false">Неактивен</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Телефон (внутренний)</label>
+            <input type="text" x-model="editUserForm.phone_internal" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="+79001234567">
+          </div>
+          <div>
+            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Voice Sample URL</label>
+            <input type="text" x-model="editUserForm.voice_sample_url" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm" placeholder="https://...">
+          </div>
+          <div>
+            <label class="block text-sm text-gray-700 dark:text-gray-300 mb-1">Settings (JSON)</label>
+            <textarea x-model="editUserForm.settingsRaw" rows="3" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono" placeholder='{"key": "value"}'></textarea>
+          </div>
+          <div class="flex gap-2 pt-2">
+            <button type="submit" :disabled="isLoading" class="flex-1 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
+              <span x-show="!isLoading">Сохранить</span>
+              <span x-show="isLoading">Сохранение...</span>
+            </button>
+            <button type="button" @click="showEditUserModal = false" class="flex-1 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg transition-colors">Отмена</button>
+          </div>
+        </form>
+      </div>
     </div>
   </template>
 
@@ -265,10 +324,12 @@ function adminApp() {
 
     // Modal flags
     showAddUserModal: false,
+    showEditUserModal: false,
 
     // Forms
     loginForm: { telegram_id: '', password: '' },
     addUserForm: { telegram_id: '', name: '', email: '', role: 'agent' },
+    editUserForm: { telegram_id: null, role: 'agent', is_active: true, phone_internal: '', voice_sample_url: '', settingsRaw: '{}' },
     settingsForm: { openrouter_api_key: '', telegram_bot_token: '' },
 
     // Toast list
@@ -367,6 +428,7 @@ function adminApp() {
     async api(method, path, body) {
       const opts = {
         method,
+        cache: 'no-store',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.token}`,
@@ -435,30 +497,62 @@ function adminApp() {
       }
     },
 
-    async updateRole(telegramId, role) {
+    openEditModal(u) {
+      this.editUserForm = {
+        telegram_id: u.telegram_id,
+        role: u.role,
+        is_active: u.is_active,
+        phone_internal: u.phone_internal || '',
+        voice_sample_url: u.voice_sample_url || '',
+        settingsRaw: Object.keys(u.settings || {}).length ? JSON.stringify(u.settings, null, 2) : '{}',
+      };
+      this.showEditUserModal = true;
+    },
+
+    async saveEditUser() {
+      let settings;
       try {
-        const r = await this.api('PATCH', `/api/admin/users/${telegramId}`, { role });
+        settings = JSON.parse(this.editUserForm.settingsRaw || '{}');
+      } catch (_) {
+        this.toast('Неверный JSON в поле Settings', 'error');
+        return;
+      }
+      this.isLoading = true;
+      try {
+        const body = {
+          role: this.editUserForm.role,
+          is_active: this.editUserForm.is_active,
+          phone_internal: this.editUserForm.phone_internal || null,
+          voice_sample_url: this.editUserForm.voice_sample_url || null,
+          settings,
+        };
+        const r = await this.api('PATCH', `/api/admin/users/${this.editUserForm.telegram_id}`, body);
         if (!r || !r.ok) {
-          this.toast('Ошибка обновления роли', 'error');
-          await this.loadUsers();
+          let d = {};
+          try { d = r ? await r.json() : {}; } catch (_) {}
+          this.toast(d.detail || 'Ошибка обновления', 'error');
           return;
         }
-        this.toast('Роль обновлена');
+        this.showEditUserModal = false;
+        await this.loadUsers();
+        this.toast('Пользователь обновлён');
       } catch (e) {
         this.toast('Ошибка сети', 'error');
+      } finally {
+        this.isLoading = false;
       }
     },
 
-    async deactivateUser(telegramId) {
-      if (!confirm('Деактивировать пользователя?')) return;
+    async deleteUser(telegramId) {
+      if (!confirm('Удалить пользователя из базы данных? Это действие необратимо.')) return;
       try {
         const r = await this.api('DELETE', `/api/admin/users/${telegramId}`);
         if (!r || !r.ok) {
-          this.toast('Ошибка деактивации', 'error');
+          this.toast('Ошибка удаления', 'error');
           return;
         }
         await this.loadUsers();
-        this.toast('Пользователь деактивирован');
+        this.toast('Пользователь удалён');
       } catch (e) {
         this.toast('Ошибка сети', 'error');
       }

@@ -62,6 +62,10 @@ class SQLAlchemyUserProfileRepository(UserProfileRepository):
         result = await self._session.execute(select(UserORM).where(UserORM.is_active.is_(True)))
         return [self._to_domain(row) for row in result.scalars().all()]
 
+    async def list_all(self) -> list[UserProfile]:
+        result = await self._session.execute(select(UserORM).order_by(UserORM.created_at))
+        return [self._to_domain(row) for row in result.scalars().all()]
+
     async def delete_by_telegram_id(self, telegram_id: int) -> None:
         await self._session.execute(sql_delete(UserORM).where(UserORM.telegram_id == telegram_id))
 
