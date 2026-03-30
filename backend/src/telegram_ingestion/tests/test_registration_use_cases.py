@@ -98,7 +98,7 @@ class TestAutoRegisterUserUseCase:
         profile, password, is_new = await uc.execute(telegram_id=42, first_name="Алиса")
 
         assert is_new is True
-        assert password == "Temp_Password"
+        assert password == "Temp_Password1"
         assert profile.telegram_id == 42
         assert profile.chatwoot_user_id == 200
         assert profile.settings["display_name"] == "Алиса"
@@ -162,7 +162,7 @@ class TestAutoRegisterUserUseCase:
 
         assert len(reg.calls) == 1
         call = reg.calls[0]
-        assert call["password"] == "Temp_Password"
+        assert call["password"] == "Temp_Password1"
         assert call["email"] == "88@24ondoc.ru"
 
     async def test_account_id_stored_correctly(self) -> None:

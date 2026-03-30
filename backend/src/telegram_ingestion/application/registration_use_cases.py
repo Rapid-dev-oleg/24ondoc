@@ -7,7 +7,7 @@ from ..domain.repository import UserProfileRepository
 from .ports import AgentRegistrationPort, VoiceEnrollmentPort, VoiceSampleStoragePort
 
 _CRM_EMAIL_DOMAIN = "24ondoc.ru"
-_TEMP_PASSWORD = "Temp_Password"
+_TEMP_PASSWORD = "Temp_Password1"
 
 
 class AutoRegisterUserUseCase:
