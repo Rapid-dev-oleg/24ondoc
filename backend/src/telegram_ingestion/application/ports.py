@@ -36,6 +36,13 @@ class UserProfilePort(ABC):
         """Return list of all active agent profiles."""
         ...
 
+    @abstractmethod
+    async def update_twenty_member_id(
+        self, telegram_id: int, twenty_member_id: str
+    ) -> UserProfile | None:
+        """Update twenty_member_id for a user. Returns updated profile or None if not found."""
+        ...
+
 
 class VoiceSampleStoragePort(ABC):
     """Port for persisting voice sample audio files."""
