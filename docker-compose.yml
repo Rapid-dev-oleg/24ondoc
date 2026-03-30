@@ -157,8 +157,19 @@ services:
       - PGADMIN_CONFIG_SERVER_MODE=True
       - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
       - PGADMIN_CONFIG_SCRIPT_NAME='/pgadmin'
+      - PGADMIN_DB_USER=${POSTGRES_USER}
+      - PGADMIN_DB_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+    entrypoint: >
+      /bin/sh -c "
+      echo \"postgres:5432:*:$${PGADMIN_DB_USER}:$${PGADMIN_DB_PASSWORD}\" > /tmp/pgpass &&
+      chmod 600 /tmp/pgpass &&
+      cp /tmp/pgpass /pgadmin4/pgpass &&
+      chown pgadmin:pgadmin /pgadmin4/pgpass &&
+      /entrypoint.sh
+      "
     depends_on:
       postgres:
         condition: service_healthy
