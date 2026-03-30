@@ -53,6 +53,11 @@ class StubUserProfilePort(UserProfilePort):
     async def list_active_agents(self) -> list[UserProfile]:
         return self._agents
 
+    async def update_twenty_member_id(
+        self, telegram_id: int, twenty_member_id: str
+    ) -> UserProfile | None:
+        return None
+
 
 class InMemoryChatwootPort(ChatwootPort):
     def __init__(self, tickets: list[SupportTicket] | None = None) -> None:
@@ -229,7 +234,7 @@ class TestReassignTaskUseCase:
         profile = _make_agent_profile(telegram_id=100, role=UserRole.SUPERVISOR)
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
-        ok = await uc.execute(requester_telegram_id=100, task_id=1, target_chatwoot_user_id=20)
+        ok = await uc.execute(requester_telegram_id=100, task_id=1, target_user_id=20)
         assert ok is True
         assert (1, 20) in chatwoot.assignee_updates
 
@@ -237,7 +242,7 @@ class TestReassignTaskUseCase:
         profile = _make_agent_profile(telegram_id=100, role=UserRole.ADMIN)
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
-        ok = await uc.execute(requester_telegram_id=100, task_id=2, target_chatwoot_user_id=30)
+        ok = await uc.execute(requester_telegram_id=100, task_id=2, target_user_id=30)
         assert ok is True
         assert (2, 30) in chatwoot.assignee_updates
 
@@ -245,14 +250,14 @@ class TestReassignTaskUseCase:
         profile = _make_agent_profile(telegram_id=100, role=UserRole.AGENT)
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
-        ok = await uc.execute(requester_telegram_id=100, task_id=1, target_chatwoot_user_id=20)
+        ok = await uc.execute(requester_telegram_id=100, task_id=1, target_user_id=20)
         assert ok is False
         assert len(chatwoot.assignee_updates) == 0
 
     async def test_returns_false_if_requester_not_found(self) -> None:
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(None), chatwoot)
-        ok = await uc.execute(requester_telegram_id=999, task_id=1, target_chatwoot_user_id=20)
+        ok = await uc.execute(requester_telegram_id=999, task_id=1, target_user_id=20)
         assert ok is False
 
 

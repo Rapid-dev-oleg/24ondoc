@@ -147,6 +147,23 @@ class TwentyRestAdapter(TwentyCRMPort):
         except httpx.HTTPError as e:
             raise RuntimeError(f"Failed to link person to task: {e}") from e
 
+    # -- TaskCRMPort protocol methods (stub implementations for migration) --
+
+    async def get_conversations(
+        self, assignee_id: int, status: str = "open", page: int = 1
+    ) -> list[Any]:
+        """Получить задачи (stub — TODO: реализовать через Twenty tasks API)."""
+        return []
+
+    async def update_conversation_status(self, task_id: int, status: str) -> None:
+        """Обновить статус задачи (stub)."""
+
+    async def update_conversation_assignee(self, task_id: int, assignee_id: int) -> None:
+        """Переназначить задачу (stub)."""
+
+    async def add_message(self, task_id: int, content: str, private: bool = True) -> None:
+        """Добавить комментарий к задаче (stub)."""
+
     async def close(self) -> None:
         """Закрыть HTTP клиент."""
         await self._client.aclose()

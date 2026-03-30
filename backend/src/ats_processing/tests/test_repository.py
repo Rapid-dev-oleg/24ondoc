@@ -29,7 +29,9 @@ def _make_call(
 
 
 def _make_orm(
-    call_id: str = "t2_001", status: str = "new", source: str = "call_t2_webhook",
+    call_id: str = "t2_001",
+    status: str = "new",
+    source: str = "call_t2_webhook",
 ) -> CallRecordORM:
     row = CallRecordORM()
     row.call_id = call_id

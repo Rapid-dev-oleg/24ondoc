@@ -14,7 +14,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
 from twenty_integration.application.use_cases import CreateTwentyTaskFromSession
-from twenty_integration.domain.models import TwentyPerson, TwentyTask
+from twenty_integration.domain.models import TwentyMember, TwentyPerson, TwentyTask
 from twenty_integration.domain.ports import TwentyCRMPort
 
 from ..application.ports import UserProfilePort
@@ -60,7 +60,7 @@ class FakeTwentyCRMPort(TwentyCRMPort):
         self.created_tasks: list[TwentyTask] = []
         self.last_assignee_id: str | None = None
 
-    async def list_workspace_members(self) -> list:
+    async def list_workspace_members(self) -> list[TwentyMember]:
         return []
 
     async def find_person_by_telegram_id(self, telegram_id: int) -> TwentyPerson | None:

@@ -50,7 +50,7 @@ from telegram_ingestion.domain.models import DraftSession, SessionStatus, UserPr
 from telegram_ingestion.domain.repository import DraftSessionRepository, UserProfileRepository
 from telegram_ingestion.infrastructure.bot_handler import TelegramFSMStates, create_router
 from twenty_integration.application.use_cases import CreateTwentyTaskFromSession
-from twenty_integration.domain.models import TwentyPerson, TwentyTask
+from twenty_integration.domain.models import TwentyMember, TwentyPerson, TwentyTask
 from twenty_integration.domain.ports import TwentyCRMPort
 
 # ---------------------------------------------------------------------------
@@ -121,7 +121,7 @@ class InMemoryTwenty(TwentyCRMPort):
     def __init__(self) -> None:
         self.created: list[TwentyTask] = []
 
-    async def list_workspace_members(self) -> list:
+    async def list_workspace_members(self) -> list[TwentyMember]:
         return []
 
     async def find_person_by_telegram_id(self, telegram_id: int) -> TwentyPerson | None:
@@ -160,6 +160,11 @@ class AuthorizedUserPort(UserProfilePort):
 
     async def list_active_agents(self) -> list[UserProfile]:
         return await self._repo.list_active()
+
+    async def update_twenty_member_id(
+        self, telegram_id: int, twenty_member_id: str
+    ) -> UserProfile | None:
+        return None
 
 
 # ---------------------------------------------------------------------------

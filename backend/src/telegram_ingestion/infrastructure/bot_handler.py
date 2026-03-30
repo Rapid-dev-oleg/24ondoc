@@ -476,6 +476,8 @@ def create_router(
         if callback.from_user is None:
             await callback.answer()
             return
+        if callback.data is None:
+            return
         twenty_member_id = callback.data.split(":", 1)[1]
         await state.update_data(twenty_member_id=twenty_member_id)
         await state.set_state(OperatorLinkStates.entering_telegram_id)
@@ -755,7 +757,7 @@ def create_tasks_router(
         ok = await reassign_task.execute(
             requester_telegram_id=callback.from_user.id,
             task_id=task_id,
-            target_chatwoot_user_id=target_chatwoot_id,
+            target_user_id=target_chatwoot_id,
         )
         if ok:
             await callback.answer("✅ Задача переназначена!")

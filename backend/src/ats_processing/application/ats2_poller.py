@@ -99,9 +99,7 @@ class ATS2PollerService:
         # Обновляем timestamp только при успешном опросе
         self._last_poll_timestamp = now
 
-    async def _process_new_call(
-        self, raw_call: dict[str, object], call_id: str
-    ) -> None:
+    async def _process_new_call(self, raw_call: dict[str, object], call_id: str) -> None:
         """Обработать один новый звонок: создать запись, скачать аудио, транскрипцию."""
         filename = str(raw_call.get("filename", ""))
 
@@ -109,9 +107,7 @@ class ATS2PollerService:
         try:
             await self._ats2_client.download_recording(filename)
         except Exception:
-            logger.exception(
-                "ATS2 Poller: ошибка загрузки записи call_id=%s", call_id
-            )
+            logger.exception("ATS2 Poller: ошибка загрузки записи call_id=%s", call_id)
 
         # Получить транскрипцию
         transcription_text: str | None = None
@@ -122,9 +118,7 @@ class ATS2PollerService:
                 words = [ATS2Word(**w) for w in raw_words]  # type: ignore[arg-type]
                 transcription_text = self._mapper.map_to_dialogue(words)
         except Exception:
-            logger.exception(
-                "ATS2 Poller: ошибка транскрипции call_id=%s", call_id
-            )
+            logger.exception("ATS2 Poller: ошибка транскрипции call_id=%s", call_id)
 
         # Создать CallRecord
         audio_url = f"ats2://recordings/{filename}" if filename else ""
@@ -133,7 +127,7 @@ class ATS2PollerService:
             audio_url=audio_url,
             source=SourceType.CALL_ATS2_POLLING,
             transcription_t2=transcription_text,
-            duration=int(raw_call["duration"]) if raw_call.get("duration") else None,
+            duration=int(str(raw_call["duration"])) if raw_call.get("duration") else None,
             caller_phone=str(raw_call.get("callerPhone", "")) or None,
             agent_ext=str(raw_call.get("agentExt", "")) or None,
         )
@@ -144,6 +138,4 @@ class ATS2PollerService:
         try:
             await self._process_call.execute(call_id)
         except Exception:
-            logger.exception(
-                "ATS2 Poller: ошибка ProcessCallWebhook call_id=%s", call_id
-            )
+            logger.exception("ATS2 Poller: ошибка ProcessCallWebhook call_id=%s", call_id)

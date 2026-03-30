@@ -24,7 +24,7 @@ from telegram_ingestion.infrastructure.bot_handler import (
     OperatorLinkStates,
     create_router,
 )
-from twenty_integration.domain.models import TwentyMember
+from twenty_integration.domain.models import TwentyMember, TwentyPerson, TwentyTask
 from twenty_integration.domain.ports import TwentyCRMPort
 
 from .test_bot_fsm import (
@@ -44,12 +44,6 @@ class InMemoryUserProfileRepository(UserProfileRepository):
 
     async def get_by_telegram_id(self, telegram_id: int) -> UserProfile | None:
         return self._store.get(telegram_id)
-
-    async def get_by_chatwoot_id(self, chatwoot_user_id: int) -> UserProfile | None:
-        for p in self._store.values():
-            if p.chatwoot_user_id == chatwoot_user_id:
-                return p
-        return None
 
     async def save(self, profile: UserProfile) -> None:
         self._store[profile.telegram_id] = profile
@@ -109,14 +103,16 @@ class MockTwentyCRMPort(TwentyCRMPort):
     async def list_workspace_members(self) -> list[TwentyMember]:
         return self.members
 
-    async def find_person_by_telegram_id(self, telegram_id: int):
+    async def find_person_by_telegram_id(self, telegram_id: int) -> TwentyPerson | None:
         return None
 
-    async def create_person(self, telegram_id: int, name: str):
-        pass
+    async def create_person(self, telegram_id: int, name: str) -> TwentyPerson:
+        return TwentyPerson(twenty_id="person-new", telegram_id=telegram_id, name=name)
 
-    async def create_task(self, title: str, body: str, due_at=None, assignee_id=None):
-        pass
+    async def create_task(
+        self, title: str, body: str, due_at: datetime | None = None, assignee_id: str | None = None
+    ) -> TwentyTask:
+        return TwentyTask(twenty_id="task-1", title=title, body=body, status="TODO")
 
     async def link_person_to_task(self, task_id: str, person_id: str) -> None:
         pass
@@ -125,8 +121,6 @@ class MockTwentyCRMPort(TwentyCRMPort):
 def _make_profile(telegram_id: int = 100, role: UserRole = UserRole.ADMIN) -> UserProfile:
     return UserProfile(
         telegram_id=telegram_id,
-        chatwoot_user_id=10 + telegram_id,
-        chatwoot_account_id=1,
         role=role,
         settings={"display_name": "Тест", "email": f"{telegram_id}@24ondoc.ru"},
         is_active=True,

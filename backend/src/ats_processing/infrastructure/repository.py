@@ -31,9 +31,7 @@ class CallRecordRepositoryImpl(CallRecordRepository):
     async def get_pending(
         self, limit: int = 10, source: SourceType | None = None
     ) -> list[CallRecord]:
-        query = select(CallRecordORM).where(
-            CallRecordORM.status == CallStatus.NEW.value
-        )
+        query = select(CallRecordORM).where(CallRecordORM.status == CallStatus.NEW.value)
         if source is not None:
             query = query.where(CallRecordORM.source == source.value)
         query = query.order_by(CallRecordORM.created_at.asc()).limit(limit)

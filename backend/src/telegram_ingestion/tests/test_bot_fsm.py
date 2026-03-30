@@ -19,7 +19,7 @@ from ai_classification.domain.models import (
 )
 from ai_classification.domain.repository import AIClassificationPort
 from twenty_integration.application.use_cases import CreateTwentyTaskFromSession
-from twenty_integration.domain.models import TwentyPerson, TwentyTask
+from twenty_integration.domain.models import TwentyMember, TwentyPerson, TwentyTask
 from twenty_integration.domain.ports import TwentyCRMPort
 
 from ..application.ports import STTPort, UserProfilePort
@@ -74,6 +74,11 @@ class AuthorizedUserPort(UserProfilePort):
     async def list_active_agents(self) -> list[UserProfile]:
         return []
 
+    async def update_twenty_member_id(
+        self, telegram_id: int, twenty_member_id: str
+    ) -> UserProfile | None:
+        return None
+
 
 class UnauthorizedUserPort(UserProfilePort):
     async def is_authorized(self, telegram_id: int) -> bool:
@@ -84,6 +89,11 @@ class UnauthorizedUserPort(UserProfilePort):
 
     async def list_active_agents(self) -> list[UserProfile]:
         return []
+
+    async def update_twenty_member_id(
+        self, telegram_id: int, twenty_member_id: str
+    ) -> UserProfile | None:
+        return None
 
 
 class MockSTTPort(STTPort):
@@ -114,7 +124,7 @@ class InMemoryTwentyForCreate(TwentyCRMPort):
     def __init__(self) -> None:
         self.created: list[TwentyTask] = []
 
-    async def list_workspace_members(self) -> list:
+    async def list_workspace_members(self) -> list[TwentyMember]:
         return []
 
     async def find_person_by_telegram_id(self, telegram_id: int) -> TwentyPerson | None:

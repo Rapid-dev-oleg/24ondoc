@@ -62,6 +62,11 @@ class InMemoryUserProfilePort(UserProfilePort):
     async def list_active_agents(self) -> list[UserProfile]:
         return list(self._profiles.values())
 
+    async def update_twenty_member_id(
+        self, telegram_id: int, twenty_member_id: str
+    ) -> UserProfile | None:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Tests: normalize_phone

@@ -154,8 +154,10 @@ class TestATS2RestClient:
             result = await client.get_transcription(filename="call1.mp3")
 
         assert "words" in result
-        assert len(result["words"]) == 3
-        assert result["words"][0]["word"] == "Здравствуйте"
+        words = result["words"]
+        assert isinstance(words, list)
+        assert len(words) == 3
+        assert words[0]["word"] == "Здравствуйте"
 
     @pytest.mark.asyncio
     async def test_client_retries_after_token_refresh(self) -> None:
