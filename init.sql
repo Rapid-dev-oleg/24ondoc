@@ -4,6 +4,10 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- Twenty CRM database
+SELECT 'CREATE DATABASE twenty_db'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'twenty_db')\gexec
+
 -- Пользователи (UserProfile)
 CREATE TABLE IF NOT EXISTS users (
     telegram_id BIGINT PRIMARY KEY,
