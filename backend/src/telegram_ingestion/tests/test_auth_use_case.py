@@ -36,12 +36,6 @@ class InMemoryUserProfileRepository(UserProfileRepository):
     async def get_by_telegram_id(self, telegram_id: int) -> UserProfile | None:
         return self._store.get(telegram_id)
 
-    async def get_by_chatwoot_id(self, chatwoot_user_id: int) -> UserProfile | None:
-        for p in self._store.values():
-            if p.chatwoot_user_id == chatwoot_user_id:
-                return p
-        return None
-
     async def save(self, profile: UserProfile) -> None:
         self._store[profile.telegram_id] = profile
 
@@ -120,8 +114,6 @@ class TestAuthByPhoneUseCase:
 
         assert profile is not None
         assert profile.telegram_id == 100
-        assert profile.chatwoot_user_id == 10
-        assert profile.chatwoot_account_id == 1
         assert profile.role == UserRole.AGENT
 
         # Pending record deleted
@@ -170,8 +162,6 @@ class TestRegisterPhoneUseCase:
         pending_repo = InMemoryPendingUserRepository()
         admin = UserProfile(
             telegram_id=1,
-            chatwoot_user_id=1,
-            chatwoot_account_id=1,
             role=UserRole.ADMIN,
         )
         user_port = InMemoryUserProfilePort({1: admin})
@@ -193,8 +183,6 @@ class TestRegisterPhoneUseCase:
         pending_repo = InMemoryPendingUserRepository()
         supervisor = UserProfile(
             telegram_id=2,
-            chatwoot_user_id=2,
-            chatwoot_account_id=1,
             role=UserRole.SUPERVISOR,
         )
         user_port = InMemoryUserProfilePort({2: supervisor})
@@ -215,8 +203,6 @@ class TestRegisterPhoneUseCase:
         pending_repo = InMemoryPendingUserRepository()
         agent = UserProfile(
             telegram_id=3,
-            chatwoot_user_id=3,
-            chatwoot_account_id=1,
             role=UserRole.AGENT,
         )
         user_port = InMemoryUserProfilePort({3: agent})

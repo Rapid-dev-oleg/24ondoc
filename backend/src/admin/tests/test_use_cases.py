@@ -44,12 +44,6 @@ class InMemoryUserProfileRepository(UserProfileRepository):
     async def get_by_telegram_id(self, telegram_id: int) -> UserProfile | None:
         return self._store.get(telegram_id)
 
-    async def get_by_chatwoot_id(self, chatwoot_user_id: int) -> UserProfile | None:
-        for p in self._store.values():
-            if p.chatwoot_user_id == chatwoot_user_id:
-                return p
-        return None
-
     async def save(self, profile: UserProfile) -> None:
         self._store[profile.telegram_id] = profile
 
@@ -103,14 +97,11 @@ class InMemoryTelegramNotificationPort(TelegramNotificationPort):
 
 def _make_user(
     telegram_id: int = 1,
-    chatwoot_user_id: int = 10,
     role: UserRole = UserRole.ADMIN,
     is_active: bool = True,
 ) -> UserProfile:
     return UserProfile(
         telegram_id=telegram_id,
-        chatwoot_user_id=chatwoot_user_id,
-        chatwoot_account_id=1,
         role=role,
         is_active=is_active,
         created_at=datetime.now(UTC),
@@ -195,9 +186,7 @@ class TestListUsersUseCase:
 
         user = UserProfile(
             telegram_id=3,
-            chatwoot_user_id=30,
-            chatwoot_account_id=1,
-            chatwoot_contact_id=55,
+            twenty_member_id="member-55",
             role=UserRole.AGENT,
             phone_internal="+79001234567",
             voice_sample_url="https://example.com/sample.ogg",
@@ -212,7 +201,7 @@ class TestListUsersUseCase:
 
         assert len(result) == 1
         r = result[0]
-        assert r.chatwoot_contact_id == 55
+        assert r.twenty_member_id == "member-55"
         assert r.phone_internal == "+79001234567"
         assert r.voice_sample_url == "https://example.com/sample.ogg"
         assert r.settings == {"lang": "ru"}
@@ -238,13 +227,10 @@ class TestCreateUserDirectUseCase:
         result = await uc.execute(req)
 
         assert result.telegram_id == 12345
-        assert result.chatwoot_user_id == 200
-        assert result.chatwoot_account_id == 2
         assert result.is_pending is False
 
         saved = await user_repo.get_by_telegram_id(12345)
         assert saved is not None
-        assert saved.chatwoot_user_id == 200
 
         assert len(chatwoot.calls) == 1
         assert chatwoot.calls[0]["name"] == "John"
@@ -377,7 +363,7 @@ class TestUpdateUserUseCase:
 class TestDeactivateUserUseCase:
     async def test_deactivates_existing_user(self) -> None:
         user_repo = InMemoryUserProfileRepository()
-        user = _make_user(is_active=True, chatwoot_user_id=42)
+        user = _make_user(is_active=True)
         await user_repo.save(user)
         chatwoot = InMemoryChatwootAdminPort()
 
@@ -394,45 +380,26 @@ class TestDeactivateUserUseCase:
         uc = DeactivateUserUseCase(InMemoryUserProfileRepository(), chatwoot)
         assert await uc.execute(999) is False
 
-    async def test_deletes_agent_from_chatwoot(self) -> None:
+    async def test_deactivates_without_chatwoot_call(self) -> None:
         user_repo = InMemoryUserProfileRepository()
-        user = _make_user(is_active=True, chatwoot_user_id=77)
+        user = _make_user(is_active=True)
         await user_repo.save(user)
         chatwoot = InMemoryChatwootAdminPort()
 
         uc = DeactivateUserUseCase(user_repo, chatwoot)
         await uc.execute(1)
 
-        assert chatwoot.deleted_agent_ids == [77]
+        assert chatwoot.deleted_agent_ids == []
 
-    async def test_chatwoot_404_does_not_raise(self) -> None:
-        """Если Chatwoot вернул 404 (агент уже удалён) — ошибка не должна выбрасываться."""
+    async def test_user_is_deactivated(self) -> None:
         user_repo = InMemoryUserProfileRepository()
-        user = _make_user(is_active=True, chatwoot_user_id=99)
-        await user_repo.save(user)
-
-        class NotFoundChatwoot(ChatwootAdminPort):
-            async def create_agent(self, name: str, email: str, role: str) -> int:
-                return 0
-
-            async def delete_agent(self, chatwoot_user_id: int) -> None:
-                pass  # 404 — тихо игнорируем
-
-        uc = DeactivateUserUseCase(user_repo, NotFoundChatwoot())
-        found = await uc.execute(1)
-        assert found is True
-
-    async def test_is_active_false_even_if_chatwoot_errors(self) -> None:
-        """Локальная деактивация должна произойти до вызова Chatwoot."""
-        user_repo = InMemoryUserProfileRepository()
-        user = _make_user(is_active=True, chatwoot_user_id=55)
+        user = _make_user(is_active=True)
         await user_repo.save(user)
         chatwoot = InMemoryChatwootAdminPort()
-        chatwoot.delete_raises = RuntimeError("Chatwoot down")
 
         uc = DeactivateUserUseCase(user_repo, chatwoot)
-        with pytest.raises(RuntimeError, match="Chatwoot down"):
-            await uc.execute(1)
+        found = await uc.execute(1)
+        assert found is True
 
         saved = await user_repo.get_by_telegram_id(1)
         assert saved is not None
@@ -453,7 +420,7 @@ class TestDeactivateUserUseCase:
 class TestDeleteUserUseCase:
     async def test_hard_deletes_user_from_repo(self) -> None:
         user_repo = InMemoryUserProfileRepository()
-        user = _make_user(telegram_id=1, chatwoot_user_id=42)
+        user = _make_user(telegram_id=1)
         await user_repo.save(user)
         chatwoot = InMemoryChatwootAdminPort()
 
@@ -468,21 +435,21 @@ class TestDeleteUserUseCase:
         uc = DeleteUserUseCase(InMemoryUserProfileRepository(), chatwoot)
         assert await uc.execute(999) is False
 
-    async def test_deletes_agent_from_chatwoot(self) -> None:
+    async def test_does_not_call_chatwoot(self) -> None:
         user_repo = InMemoryUserProfileRepository()
-        user = _make_user(telegram_id=1, chatwoot_user_id=77)
+        user = _make_user(telegram_id=1)
         await user_repo.save(user)
         chatwoot = InMemoryChatwootAdminPort()
 
         uc = DeleteUserUseCase(user_repo, chatwoot)
         await uc.execute(1)
 
-        assert chatwoot.deleted_agent_ids == [77]
+        assert chatwoot.deleted_agent_ids == []
 
     async def test_inactive_user_can_be_hard_deleted(self) -> None:
         """Деактивированный юзер (невидимый в таблице) должен удаляться."""
         user_repo = InMemoryUserProfileRepository()
-        user = _make_user(telegram_id=764347890, chatwoot_user_id=5, is_active=False)
+        user = _make_user(telegram_id=764347890, is_active=False)
         await user_repo.save(user)
         chatwoot = InMemoryChatwootAdminPort()
 

@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # T2 ATS
     t2_webhook_secret: str
 
+    # Twenty CRM
+    twenty_api_url: str = ""
+    twenty_api_key: str = ""
+
     # MinIO
     minio_endpoint: str = "minio:9000"
     minio_access_key: str

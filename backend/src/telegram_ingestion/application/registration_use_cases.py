@@ -4,53 +4,36 @@ from __future__ import annotations
 
 from ..domain.models import UserProfile, UserRole
 from ..domain.repository import UserProfileRepository
-from .ports import AgentRegistrationPort, VoiceEnrollmentPort, VoiceSampleStoragePort
-
-_CRM_EMAIL_DOMAIN = "24ondoc.ru"
-_TEMP_PASSWORD = "Temp_Password1"
+from .ports import VoiceEnrollmentPort, VoiceSampleStoragePort
 
 
 class AutoRegisterUserUseCase:
-    """Auto-create a Chatwoot agent + UserProfile on /start if user does not exist yet.
+    """Auto-create a UserProfile on /start if user does not exist yet.
 
-    Returns (profile, temp_password, is_new).  When is_new=False, temp_password is "".
+    Returns (profile, is_new).
     """
 
     def __init__(
         self,
         user_repo: UserProfileRepository,
-        agent_registration: AgentRegistrationPort,
-        account_id: int,
     ) -> None:
         self._user_repo = user_repo
-        self._agent_registration = agent_registration
-        self._account_id = account_id
 
-    async def execute(self, telegram_id: int, first_name: str) -> tuple[UserProfile, str, bool]:
+    async def execute(self, telegram_id: int, first_name: str) -> tuple[UserProfile, bool]:
         existing = await self._user_repo.get_by_telegram_id(telegram_id)
         if existing is not None:
-            return existing, "", False
+            return existing, False
 
         name = first_name.strip() or str(telegram_id)
-        email = f"{telegram_id}@{_CRM_EMAIL_DOMAIN}"
-        password = _TEMP_PASSWORD
-
-        chatwoot_user_id = await self._agent_registration.create_chatwoot_agent(
-            name, email, password
-        )
-        chatwoot_contact_id = await self._agent_registration.create_contact(name, email)
 
         profile = UserProfile(
             telegram_id=telegram_id,
-            chatwoot_user_id=chatwoot_user_id,
-            chatwoot_account_id=self._account_id,
-            chatwoot_contact_id=chatwoot_contact_id,
             role=UserRole.AGENT,
-            settings={"display_name": name, "email": email},
+            settings={"display_name": name},
         )
         await self._user_repo.save(profile)
 
-        return profile, password, True
+        return profile, True
 
 
 class UpdateProfileFieldUseCase:
@@ -99,6 +82,6 @@ class SaveVoiceSampleUseCase:
 
         enrolled = False
         if self._enrollment is not None:
-            enrolled = await self._enrollment.enroll(profile.chatwoot_user_id, data)
+            enrolled = await self._enrollment.enroll(telegram_id, data)
 
         return True, enrolled

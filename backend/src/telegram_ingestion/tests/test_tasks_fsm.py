@@ -81,13 +81,10 @@ class InMemoryChatwootPort(ChatwootPort):
 
 def _make_agent_profile(
     telegram_id: int = 100,
-    chatwoot_user_id: int = 10,
     role: UserRole = UserRole.AGENT,
 ) -> UserProfile:
     return UserProfile(
         telegram_id=telegram_id,
-        chatwoot_user_id=chatwoot_user_id,
-        chatwoot_account_id=1,
         role=role,
     )
 
@@ -95,7 +92,7 @@ def _make_agent_profile(
 def _make_ticket(
     task_id: int = 1,
     title: str = "Тест задача",
-    assignee_chatwoot_id: int | None = 10,
+    assignee_chatwoot_id: int | None = 100,
     status: TicketStatus = TicketStatus.OPEN,
 ) -> SupportTicket:
     return SupportTicket(
@@ -111,7 +108,7 @@ def _make_ticket(
 
 class TestGetMyTasksUseCase:
     async def test_returns_tasks_for_user(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         tickets = [_make_ticket(task_id=1), _make_ticket(task_id=2)]
         uc = GetMyTasksUseCase(StubUserProfilePort(profile), InMemoryChatwootPort(tickets))
         result = await uc.execute(telegram_id=100)
@@ -161,34 +158,34 @@ class TestGetMyTasksUseCase:
 
 class TestUpdateTaskStatusUseCase:
     async def test_assignee_can_resolve(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         chatwoot = InMemoryChatwootPort()
         uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), chatwoot)
         ok = await uc.execute(
             requester_telegram_id=100,
             task_id=1,
-            assignee_chatwoot_id=10,
+            assignee_chatwoot_id=100,
             new_status="resolved",
         )
         assert ok is True
         assert (1, "resolved") in chatwoot.status_updates
 
     async def test_assignee_can_reopen(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         chatwoot = InMemoryChatwootPort()
         uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), chatwoot)
         ok = await uc.execute(
             requester_telegram_id=100,
             task_id=5,
-            assignee_chatwoot_id=10,
+            assignee_chatwoot_id=100,
             new_status="open",
         )
         assert ok is True
         assert (5, "open") in chatwoot.status_updates
 
     async def test_non_assignee_cannot_change_status(self) -> None:
-        # chatwoot_user_id=99 does NOT match assignee_chatwoot_id=10
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=99)
+        # telegram_id=100 does NOT match assignee_chatwoot_id=10
+        profile = _make_agent_profile(telegram_id=100)
         chatwoot = InMemoryChatwootPort()
         uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), chatwoot)
         ok = await uc.execute(
@@ -212,7 +209,7 @@ class TestUpdateTaskStatusUseCase:
         assert ok is False
 
     async def test_returns_false_if_no_assignee(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         chatwoot = InMemoryChatwootPort()
         uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), chatwoot)
         ok = await uc.execute(
@@ -229,9 +226,7 @@ class TestUpdateTaskStatusUseCase:
 
 class TestReassignTaskUseCase:
     async def test_supervisor_can_reassign(self) -> None:
-        profile = _make_agent_profile(
-            telegram_id=100, chatwoot_user_id=10, role=UserRole.SUPERVISOR
-        )
+        profile = _make_agent_profile(telegram_id=100, role=UserRole.SUPERVISOR)
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
         ok = await uc.execute(requester_telegram_id=100, task_id=1, target_chatwoot_user_id=20)
@@ -239,7 +234,7 @@ class TestReassignTaskUseCase:
         assert (1, 20) in chatwoot.assignee_updates
 
     async def test_admin_can_reassign(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10, role=UserRole.ADMIN)
+        profile = _make_agent_profile(telegram_id=100, role=UserRole.ADMIN)
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
         ok = await uc.execute(requester_telegram_id=100, task_id=2, target_chatwoot_user_id=30)
@@ -247,7 +242,7 @@ class TestReassignTaskUseCase:
         assert (2, 30) in chatwoot.assignee_updates
 
     async def test_agent_cannot_reassign(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10, role=UserRole.AGENT)
+        profile = _make_agent_profile(telegram_id=100, role=UserRole.AGENT)
         chatwoot = InMemoryChatwootPort()
         uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
         ok = await uc.execute(requester_telegram_id=100, task_id=1, target_chatwoot_user_id=20)
@@ -366,7 +361,7 @@ def _storage_key(user_id: int = 100, bot_id: int = 42) -> StorageKey:
 
 class TestMyTasksBotHandlers:
     async def test_my_tasks_with_tickets_sets_tasks_list_state(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         tickets = [_make_ticket(task_id=1, title="Задача А")]
         dp, _, storage = _build_dispatcher(profile=profile, tickets=tickets)
         bot = _make_mock_bot(bot_id=42)
@@ -378,7 +373,7 @@ class TestMyTasksBotHandlers:
         assert state == TelegramFSMStates.tasks_list.state
 
     async def test_my_tasks_with_tickets_stores_tasks_in_fsm_data(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         tickets = [_make_ticket(task_id=1, title="Задача А")]
         dp, _, storage = _build_dispatcher(profile=profile, tickets=tickets)
         bot = _make_mock_bot(bot_id=42)
@@ -391,7 +386,7 @@ class TestMyTasksBotHandlers:
         assert data["tasks"][0]["task_id"] == 1
 
     async def test_my_tasks_no_tickets_does_not_set_state(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         dp, _, storage = _build_dispatcher(profile=profile, tickets=[])
         bot = _make_mock_bot(bot_id=42)
 
@@ -413,7 +408,7 @@ class TestMyTasksBotHandlers:
         assert state != TelegramFSMStates.tasks_list.state
 
     async def test_tasks_page_pagination_updates_page_in_state(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         tickets = [_make_ticket(task_id=i, title=f"Задача {i}") for i in range(1, 8)]
         dp, _, storage = _build_dispatcher(profile=profile, tickets=tickets)
         bot = _make_mock_bot(bot_id=42)
@@ -426,7 +421,7 @@ class TestMyTasksBotHandlers:
         # Pre-set state and data for callback
         await storage.set_state(key, TelegramFSMStates.tasks_list.state)
         serialized = [
-            {"task_id": t.task_id, "title": t.title, "status": "open", "assignee_chatwoot_id": 10}
+            {"task_id": t.task_id, "title": t.title, "status": "open", "assignee_chatwoot_id": 100}
             for t in tickets
         ]
         await storage.set_data(key, {"tasks": serialized, "tasks_page": 0})
@@ -442,8 +437,8 @@ class TestMyTasksBotHandlers:
         assert data.get("tasks_page") == 1
 
     async def test_task_detail_callback_sets_task_detail_state(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
-        tickets = [_make_ticket(task_id=7, title="Детальная задача", assignee_chatwoot_id=10)]
+        profile = _make_agent_profile(telegram_id=100)
+        tickets = [_make_ticket(task_id=7, title="Детальная задача", assignee_chatwoot_id=100)]
         dp, _, storage = _build_dispatcher(profile=profile, tickets=tickets)
         bot = _make_mock_bot(bot_id=42)
         key = _storage_key(100)
@@ -452,9 +447,9 @@ class TestMyTasksBotHandlers:
         serialized = [
             {
                 "task_id": 7,
-                "title": "Детальная за��ача",
+                "title": "Детальная задача",
                 "status": "open",
-                "assignee_chatwoot_id": 10,
+                "assignee_chatwoot_id": 100,
             }
         ]
         await storage.set_state(key, TelegramFSMStates.tasks_list.state)
@@ -462,7 +457,7 @@ class TestMyTasksBotHandlers:
 
         cb_update = Update(
             update_id=2,
-            callback_query=_make_callback(user_id=100, data="task_detail:7:10"),
+            callback_query=_make_callback(user_id=100, data="task_detail:7:100"),
         )
         await dp.feed_update(bot, cb_update)
 
@@ -470,33 +465,33 @@ class TestMyTasksBotHandlers:
         assert state == TelegramFSMStates.task_detail.state
 
     async def test_resolve_callback_for_assignee(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
-        tickets = [_make_ticket(task_id=3, assignee_chatwoot_id=10)]
+        profile = _make_agent_profile(telegram_id=100)
+        tickets = [_make_ticket(task_id=3, assignee_chatwoot_id=100)]
         dp, chatwoot, _ = _build_dispatcher(profile=profile, tickets=tickets)
         bot = _make_mock_bot()
 
         cb_update = Update(
             update_id=1,
-            callback_query=_make_callback(user_id=100, data="task_resolve:3:10"),
+            callback_query=_make_callback(user_id=100, data="task_resolve:3:100"),
         )
         await dp.feed_update(bot, cb_update)
         assert (3, "resolved") in chatwoot.status_updates
 
     async def test_reopen_callback_for_assignee(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         dp, chatwoot, _ = _build_dispatcher(profile=profile, tickets=[])
         bot = _make_mock_bot()
 
         cb_update = Update(
             update_id=1,
-            callback_query=_make_callback(user_id=100, data="task_reopen:5:10"),
+            callback_query=_make_callback(user_id=100, data="task_reopen:5:100"),
         )
         await dp.feed_update(bot, cb_update)
         assert (5, "open") in chatwoot.status_updates
 
     async def test_resolve_denied_for_non_assignee(self) -> None:
-        # chatwoot_user_id=99, but assignee is 10
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=99)
+        # telegram_id=100, but assignee is 10 — mismatch
+        profile = _make_agent_profile(telegram_id=100)
         dp, chatwoot, _ = _build_dispatcher(profile=profile, tickets=[])
         bot = _make_mock_bot()
 
@@ -508,16 +503,14 @@ class TestMyTasksBotHandlers:
         assert len(chatwoot.status_updates) == 0
 
     async def test_reassign_callback_for_supervisor(self) -> None:
-        profile = _make_agent_profile(
-            telegram_id=100, chatwoot_user_id=10, role=UserRole.SUPERVISOR
-        )
+        profile = _make_agent_profile(telegram_id=100, role=UserRole.SUPERVISOR)
         agents = [
-            _make_agent_profile(telegram_id=200, chatwoot_user_id=20, role=UserRole.AGENT),
+            _make_agent_profile(telegram_id=200, role=UserRole.AGENT),
         ]
         dp, chatwoot, _ = _build_dispatcher(profile=profile, agents=agents, tickets=[])
         bot = _make_mock_bot()
 
-        # Reassign task 3 to agent with chatwoot_id 20
+        # Reassign task 3 to agent with telegram_id 20
         cb_update = Update(
             update_id=1,
             callback_query=_make_callback(user_id=100, data="reassign_to:3:20"),
@@ -526,7 +519,7 @@ class TestMyTasksBotHandlers:
         assert (3, 20) in chatwoot.assignee_updates
 
     async def test_comment_callback_sets_adding_comment_state(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         dp, _, storage = _build_dispatcher(profile=profile, tickets=[])
         bot = _make_mock_bot(bot_id=42)
         key = _storage_key(100)
@@ -541,7 +534,7 @@ class TestMyTasksBotHandlers:
         assert state == TelegramFSMStates.adding_comment.state
 
     async def test_comment_callback_stores_task_id_in_fsm(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         dp, _, storage = _build_dispatcher(profile=profile, tickets=[])
         bot = _make_mock_bot(bot_id=42)
         key = _storage_key(100)
@@ -556,7 +549,7 @@ class TestMyTasksBotHandlers:
         assert data.get("comment_task_id") == 5
 
     async def test_comment_text_submitted_calls_use_case(self) -> None:
-        profile = _make_agent_profile(telegram_id=100, chatwoot_user_id=10)
+        profile = _make_agent_profile(telegram_id=100)
         dp, chatwoot, storage = _build_dispatcher(profile=profile, tickets=[])
         bot = _make_mock_bot(bot_id=42)
         key = _storage_key(100)

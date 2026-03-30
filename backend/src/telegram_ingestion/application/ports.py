@@ -37,19 +37,6 @@ class UserProfilePort(ABC):
         ...
 
 
-class AgentRegistrationPort(ABC):
-    """Port for creating agents in external CRM (Chatwoot)."""
-
-    @abstractmethod
-    async def create_chatwoot_agent(self, name: str, email: str, password: str) -> int:
-        """Create agent in Chatwoot and return the external chatwoot_user_id."""
-        ...
-
-    async def create_contact(self, name: str, email: str) -> int | None:
-        """Create a contact in Chatwoot for the user. Returns contact_id or None."""
-        return None
-
-
 class VoiceSampleStoragePort(ABC):
     """Port for persisting voice sample audio files."""
 

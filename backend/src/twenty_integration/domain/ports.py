@@ -22,9 +22,7 @@ class TwentyCRMPort(ABC):
 
     @abstractmethod
     async def create_task(
-        self, title: str, body: str,
-        due_at: datetime | None,
-        assignee_id: str | None
+        self, title: str, body: str, due_at: datetime | None, assignee_id: str | None
     ) -> TwentyTask: ...
 
     @abstractmethod

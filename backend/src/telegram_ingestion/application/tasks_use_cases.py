@@ -21,7 +21,7 @@ class GetMyTasksUseCase:
         if profile is None:
             return []
         result: list[SupportTicket] = await self._chatwoot_port.get_conversations(
-            assignee_id=profile.chatwoot_user_id,
+            assignee_id=profile.telegram_id,
             status="open",
             page=page,
         )
@@ -47,7 +47,7 @@ class UpdateTaskStatusUseCase:
         profile = await self._user_port.get_profile(requester_telegram_id)
         if profile is None:
             return False
-        if profile.chatwoot_user_id != assignee_chatwoot_id:
+        if profile.telegram_id != assignee_chatwoot_id:
             return False
         await self._chatwoot_port.update_conversation_status(task_id, new_status)
         return True

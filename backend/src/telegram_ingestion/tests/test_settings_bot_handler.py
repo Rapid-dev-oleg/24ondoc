@@ -49,12 +49,6 @@ class InMemoryUserProfileRepository(UserProfileRepository):
     async def get_by_telegram_id(self, telegram_id: int) -> UserProfile | None:
         return self._store.get(telegram_id)
 
-    async def get_by_chatwoot_id(self, chatwoot_user_id: int) -> UserProfile | None:
-        for p in self._store.values():
-            if p.chatwoot_user_id == chatwoot_user_id:
-                return p
-        return None
-
     async def save(self, profile: UserProfile) -> None:
         self._store[profile.telegram_id] = profile
 
@@ -80,8 +74,6 @@ class InMemoryVoiceStorage(VoiceSampleStoragePort):
 def _make_profile(telegram_id: int = 100) -> UserProfile:
     return UserProfile(
         telegram_id=telegram_id,
-        chatwoot_user_id=10,
-        chatwoot_account_id=1,
         role=UserRole.AGENT,
         settings={"display_name": "Тест", "email": f"{telegram_id}@24ondoc.ru"},
         is_active=True,
@@ -225,19 +217,8 @@ class TestUpdateProfileViaHandler:
 
 class TestAutoRegisterOnStart:
     async def test_new_user_triggers_registration(self) -> None:
-        from telegram_ingestion.application.ports import AgentRegistrationPort
-
-        class FakeAgentReg(AgentRegistrationPort):
-            def __init__(self) -> None:
-                self.called = False
-
-            async def create_chatwoot_agent(self, name: str, email: str, password: str) -> int:
-                self.called = True
-                return 999
-
         repo = InMemoryUserProfileRepository()
-        reg = FakeAgentReg()
-        auto_register = AutoRegisterUserUseCase(repo, reg, account_id=1)
+        auto_register = AutoRegisterUserUseCase(repo)
 
         from telegram_ingestion.application.use_cases import (
             AddTextContentUseCase,
@@ -273,27 +254,14 @@ class TestAutoRegisterOnStart:
         update = _make_update(_make_message(user_id=111, text="/start"))
         await dp.feed_update(bot, update)
 
-        assert reg.called is True
         saved = await repo.get_by_telegram_id(111)
         assert saved is not None
-        assert saved.chatwoot_user_id == 999
 
     async def test_existing_user_no_registration(self) -> None:
-        from telegram_ingestion.application.ports import AgentRegistrationPort
-
-        class FakeAgentReg(AgentRegistrationPort):
-            def __init__(self) -> None:
-                self.called = False
-
-            async def create_chatwoot_agent(self, name: str, email: str, password: str) -> int:
-                self.called = True
-                return 888
-
         repo = InMemoryUserProfileRepository()
         existing = _make_profile(telegram_id=222)
         await repo.save(existing)
-        reg = FakeAgentReg()
-        auto_register = AutoRegisterUserUseCase(repo, reg, account_id=1)
+        auto_register = AutoRegisterUserUseCase(repo)
 
         from telegram_ingestion.application.use_cases import (
             AddTextContentUseCase,
@@ -329,7 +297,9 @@ class TestAutoRegisterOnStart:
         update = _make_update(_make_message(user_id=222, text="/start"))
         await dp.feed_update(bot, update)
 
-        assert reg.called is False
+        # Existing user should still be in repo, no duplicate created
+        saved = await repo.get_by_telegram_id(222)
+        assert saved is not None
 
 
 # ---------------------------------------------------------------------------

@@ -33,8 +33,6 @@ class AuthByPhoneUseCase:
             return None
         profile = UserProfile(
             telegram_id=telegram_id,
-            chatwoot_user_id=pending.chatwoot_user_id,
-            chatwoot_account_id=pending.chatwoot_account_id,
             role=pending.role,
         )
         await self._user_repo.save(profile)

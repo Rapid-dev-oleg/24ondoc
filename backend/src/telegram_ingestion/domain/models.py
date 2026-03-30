@@ -17,12 +17,10 @@ class UserRole(StrEnum):
 
 
 class UserProfile(BaseModel):
-    """Aggregate Root: профиль пользователя Telegram/Chatwoot."""
+    """Aggregate Root: профиль пользователя Telegram."""
 
     telegram_id: int
-    chatwoot_user_id: int
-    chatwoot_account_id: int
-    chatwoot_contact_id: int | None = None
+    twenty_member_id: str | None = None
     role: UserRole = UserRole.AGENT
     phone_internal: str | None = None
     voice_sample_url: str | None = None

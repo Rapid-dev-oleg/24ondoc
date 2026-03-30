@@ -42,9 +42,6 @@ from telegram_ingestion.infrastructure.bot_handler import (
     create_settings_router,
     create_tasks_router,
 )
-from telegram_ingestion.infrastructure.chatwoot_register_adapter import (
-    ChatwootRegisterAdapter,
-)
 from telegram_ingestion.infrastructure.draft_session_repository import (
     SQLAlchemyRedisDraftSessionRepository,
 )
@@ -53,6 +50,7 @@ from telegram_ingestion.infrastructure.user_profile_port import UserProfilePortA
 from telegram_ingestion.infrastructure.user_profile_repository import (
     SQLAlchemyUserProfileRepository,
 )
+from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -109,15 +107,7 @@ async def telegram_webhook(
     add_task_comment = AddTaskCommentUseCase(chatwoot_client)
 
     # Registration + profile use cases
-    chatwoot_register = ChatwootRegisterAdapter(
-        base_url=settings.chatwoot_base_url,
-        api_key=settings.chatwoot_api_key,
-        account_id=settings.chatwoot_support_account_id,
-        platform_api_key=settings.chatwoot_platform_api_key,
-    )
-    auto_register = AutoRegisterUserUseCase(
-        user_repo, chatwoot_register, settings.chatwoot_support_account_id
-    )
+    auto_register = AutoRegisterUserUseCase(user_repo)
     update_profile = UpdateProfileFieldUseCase(user_repo)
     voice_storage = LocalVoiceSampleStorage(base_dir="/data/voice_samples")
     save_voice = SaveVoiceSampleUseCase(user_repo, voice_storage)
@@ -128,6 +118,14 @@ async def telegram_webhook(
     )
     ticket_repo: InMemorySupportTicketRepository = request.app.state.ticket_repo
     create_ticket = CreateTicketFromSession(chatwoot_client, ticket_repo)
+
+    # Twenty CRM integration
+    twenty_crm_port = None
+    if settings.twenty_api_url and settings.twenty_api_key:
+        twenty_crm_port = TwentyRestAdapter(
+            base_url=settings.twenty_api_url,
+            api_key=settings.twenty_api_key,
+        )
 
     # Dispatcher with Redis FSM storage (shared state across per-request instances)
     storage = RedisStorage(redis=redis)
@@ -153,6 +151,7 @@ async def telegram_webhook(
             set_analysis_result=set_analysis_result,
             create_ticket=create_ticket,
             draft_repo=draft_repo,
+            twenty_crm_port=twenty_crm_port,
         )
     )
     dp.include_router(
