@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # T2 ATS
     t2_webhook_secret: str
 
+    # ATS2 REST API
+    ats2_base_url: str = "https://ats2.t2.ru/crm/openapi"
+    ats2_access_token: str = ""
+    ats2_refresh_token: str = ""
+
     # Twenty CRM
     twenty_base_url: str = "https://24ondoc.ru"
     twenty_api_key: str = ""
