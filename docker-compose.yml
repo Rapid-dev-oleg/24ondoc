@@ -14,6 +14,10 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+      pgadmin:
+        condition: service_healthy
+      twenty:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - frontend
@@ -205,12 +209,63 @@ services:
     networks:
       - backend
 
+  # --- pgAdmin 4 (Web UI for PostgreSQL) ---
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD}
+      - PGADMIN_CONFIG_SERVER_MODE=True
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/misc/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+
+  # --- Twenty CRM (24ondoc.ru/crm) ---
+  twenty:
+    image: twentycrm/twenty:latest
+    environment:
+      - SERVER_URL=${TWENTY_SERVER_URL:-https://24ondoc.ru}
+      - FRONT_BASE_URL=${TWENTY_FRONT_BASE_URL:-https://24ondoc.ru/crm}
+      - PG_DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/twenty_db
+      - APP_SECRET=${TWENTY_APP_SECRET}
+      - STORAGE_TYPE=local
+      - STORAGE_LOCAL_PATH=.local-storage
+      - IS_SIGN_UP_DISABLED=${TWENTY_SIGN_UP_DISABLED:-false}
+    volumes:
+      - twenty_data:/app/.local-storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+
   # --- PostgreSQL Backup (daily) ---
   pg-backup:
     image: prodrigestivill/postgres-backup-local:15
     environment:
       - POSTGRES_HOST=postgres
-      - POSTGRES_DB=${POSTGRES_DB},chatwoot_production
+      - POSTGRES_DB=${POSTGRES_DB},chatwoot_production,twenty_db
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - SCHEDULE=@daily
@@ -236,6 +291,8 @@ volumes:
   minio_data:
   certbot_webroot:
   pg_backups:
+  pgadmin_data:
+  twenty_data:
 
 networks:
   frontend:
