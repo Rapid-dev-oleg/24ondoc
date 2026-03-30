@@ -10,8 +10,6 @@ services:
       - ./nginx/ssl:/etc/letsencrypt:ro
       - certbot_webroot:/var/www/certbot:ro
     depends_on:
-      chatwoot:
-        condition: service_healthy
       backend:
         condition: service_healthy
       pgadmin:
@@ -30,65 +28,6 @@ services:
       - certbot_webroot:/var/www/certbot
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
     restart: unless-stopped
-
-  # --- Chatwoot CRM ---
-  chatwoot:
-    image: chatwoot/chatwoot:latest
-    command: bundle exec rails s -p 3000 -b '0.0.0.0'
-    environment:
-      - RAILS_ENV=production
-      - SECRET_KEY_BASE=${CHATWOOT_SECRET_KEY_BASE}
-      - FRONTEND_URL=${CHATWOOT_FRONTEND_URL:-https://chat.24ondoc.ru}
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DATABASE=chatwoot_production
-      - POSTGRES_USERNAME=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - REDIS_URL=redis://redis:6379/0
-      - MAILER_SENDER_EMAIL=${MAILER_SENDER_EMAIL:-noreply@24ondoc.ru}
-      - SMTP_ADDRESS=${SMTP_ADDRESS}
-      - SMTP_PORT=${SMTP_PORT:-587}
-      - RAILS_LOG_TO_STDOUT=true
-    volumes:
-      - chatwoot_data:/app/storage
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/auth/sign_in"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    restart: unless-stopped
-    networks:
-      - frontend
-      - backend
-
-  chatwoot-worker:
-    image: chatwoot/chatwoot:latest
-    command: bundle exec sidekiq -C config/sidekiq.yml
-    environment:
-      - RAILS_ENV=production
-      - SECRET_KEY_BASE=${CHATWOOT_SECRET_KEY_BASE}
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DATABASE=chatwoot_production
-      - POSTGRES_USERNAME=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - chatwoot_data:/app/storage
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - backend
 
   # --- Backend (Python FastAPI) ---
   backend:
@@ -217,6 +156,7 @@ services:
       - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD}
       - PGADMIN_CONFIG_SERVER_MODE=True
       - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+      - PGADMIN_CONFIG_SCRIPT_NAME='/pgadmin'
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
@@ -233,12 +173,12 @@ services:
       - frontend
       - backend
 
-  # --- Twenty CRM (24ondoc.ru/crm) ---
+  # --- Twenty CRM (24ondoc.ru/) ---
   twenty:
     image: twentycrm/twenty:latest
     environment:
       - SERVER_URL=${TWENTY_SERVER_URL:-https://24ondoc.ru}
-      - FRONT_BASE_URL=${TWENTY_FRONT_BASE_URL:-https://24ondoc.ru/crm}
+      - FRONT_BASE_URL=${TWENTY_FRONT_BASE_URL:-https://24ondoc.ru}
       - PG_DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/twenty_db
       - APP_SECRET=${TWENTY_APP_SECRET}
       - STORAGE_TYPE=local
@@ -269,7 +209,7 @@ services:
     image: prodrigestivill/postgres-backup-local:15
     environment:
       - POSTGRES_HOST=postgres
-      - POSTGRES_DB=${POSTGRES_DB},chatwoot_production,twenty_db
+      - POSTGRES_DB=${POSTGRES_DB},twenty_db
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - SCHEDULE=@daily
@@ -289,7 +229,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  chatwoot_data:
   voice_samples:
   whisper_cache:
   minio_data:
