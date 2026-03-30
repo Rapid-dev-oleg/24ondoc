@@ -18,14 +18,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from admin.infrastructure.router import router as admin_router
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
 from ats_processing.infrastructure.webhook_handler import router as t2_router
-from chatwoot_integration.infrastructure.chatwoot_client import ChatwootClient
-from chatwoot_integration.infrastructure.ticket_repository import (
-    InMemorySupportTicketRepository,
-)
-from chatwoot_integration.infrastructure.webhook_handler import router as cw_router
 from config import get_settings
 from telegram_ingestion.infrastructure.stt_adapter import OpenRouterSTTAdapter
 from telegram_ingestion.infrastructure.telegram_fastapi import router as tg_router
+from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
 
 logger = structlog.get_logger(__name__)
 
@@ -47,13 +43,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         default=DefaultBotProperties(parse_mode="HTML"),
     )
 
-    # Chatwoot client (singleton — uses httpx, no per-request state)
-    chatwoot_client = ChatwootClient(
-        base_url=settings.chatwoot_base_url,
-        api_key=settings.chatwoot_api_key,
-        account_id=settings.chatwoot_support_account_id,
-        redis=redis,
-        inbox_id=settings.chatwoot_inbox_id,
+    # Twenty CRM adapter
+    if not settings.twenty_api_key:
+        logger.warning("TWENTY_API_KEY is empty — Twenty CRM integration disabled")
+    twenty_adapter = TwentyRestAdapter(
+        base_url=settings.twenty_base_url,
+        api_key=settings.twenty_api_key,
     )
 
     # STT adapter: self-hosted Whisper primary, OpenAI API fallback
@@ -62,16 +57,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         whisper_url=settings.whisper_base_url,
     )
 
-    # In-memory SupportTicket cache (persists for process lifetime)
-    ticket_repo = InMemorySupportTicketRepository()
-
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.redis = redis
     app.state.bot = bot
-    app.state.chatwoot_client = chatwoot_client
+    app.state.twenty_adapter = twenty_adapter
     app.state.stt_port = stt_port
-    app.state.ticket_repo = ticket_repo
     app.state.settings = settings
 
     # Register Telegram webhook
@@ -94,7 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="24ondoc Backend",
-    description="Chatwoot CRM + Telegram Bot + АТС Т2 integration",
+    description="Twenty CRM + Telegram Bot + АТС Т2 integration",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -129,9 +120,7 @@ async def db_session_middleware(request: Request, call_next: object) -> Response
         async with session.begin():
             request.state.db_session = session
             request.state.call_repo = CallRecordRepositoryImpl(session)
-            request.state.ticket_repo = request.app.state.ticket_repo
             request.state.t2_webhook_secret = request.app.state.settings.t2_webhook_secret
-            request.state.chatwoot_webhook_token = request.app.state.settings.chatwoot_webhook_token
             response: Response = await _call_next(request)
     return response
 
@@ -149,5 +138,4 @@ async def metrics() -> dict[str, str]:
 # Handlers already define full paths — include WITHOUT extra prefix
 app.include_router(admin_router)  # /api/admin/*
 app.include_router(t2_router)  # POST /webhook/t2/call
-app.include_router(cw_router)  # POST /webhook/chatwoot
 app.include_router(tg_router)  # POST /webhook/telegram

@@ -21,7 +21,7 @@ from aiogram.types import (
 )
 
 from ai_classification.domain.repository import AIClassificationPort
-from chatwoot_integration.application.use_cases import CreateTicketFromSession
+from twenty_integration.application.use_cases import CreateTwentyTaskFromSession
 
 from ..application.ports import UserProfilePort
 from ..application.registration_use_cases import (
@@ -129,7 +129,7 @@ def create_router(
     *,
     ai_port: AIClassificationPort | None = None,
     set_analysis_result: SetAnalysisResultUseCase | None = None,
-    create_ticket: CreateTicketFromSession | None = None,
+    create_twenty_task: CreateTwentyTaskFromSession | None = None,
     draft_repo: DraftSessionRepository | None = None,
     twenty_crm_port: Any = None,
 ) -> Router:
@@ -406,7 +406,7 @@ def create_router(
             await callback.answer()
             return
 
-        if create_ticket is None or draft_repo is None:
+        if create_twenty_task is None or draft_repo is None:
             await callback.answer("❌ CRM-интеграция недоступна.", show_alert=True)
             return
 
@@ -423,17 +423,23 @@ def create_router(
                 await callback.answer("❌ Сессия не найдена.", show_alert=True)
                 return
 
-            ticket = await create_ticket.execute(fetched, contact_id=None)
-            if ticket is None:
-                await callback.answer("❌ Ошибка создания задачи.", show_alert=True)
-                return
+            # Determine assignee from user profile
+            profile = await user_port.get_profile(callback.from_user.id)
+            assignee_id = profile.twenty_member_id if profile else None
+
+            task = await create_twenty_task.execute(
+                fetched,
+                telegram_id=callback.from_user.id,
+                user_name=callback.from_user.first_name or "",
+                assignee_id=assignee_id,
+            )
 
             await cancel_session.execute(callback.from_user.id)
             await state.clear()
-            await callback.answer(f"✅ Задача #{ticket.task_id} создана в CRM!")
+            await callback.answer("✅ Задача создана в CRM!")
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(
-                    f"✅ Задача <b>#{ticket.task_id}</b> создана в CRM.\n{ticket.title}"
+                    f"✅ Задача <b>{task.title}</b> создана в Twenty CRM."
                 )
         except Exception:
             await callback.answer("❌ Ошибка создания задачи.", show_alert=True)

@@ -18,9 +18,9 @@ from ai_classification.domain.models import (
     Priority,
 )
 from ai_classification.domain.repository import AIClassificationPort
-from chatwoot_integration.application.use_cases import CreateTicketFromSession
-from chatwoot_integration.domain.models import SupportTicket
-from chatwoot_integration.domain.repository import ChatwootPort, SupportTicketRepository
+from twenty_integration.application.use_cases import CreateTwentyTaskFromSession
+from twenty_integration.domain.models import TwentyPerson, TwentyTask
+from twenty_integration.domain.ports import TwentyCRMPort
 
 from ..application.ports import STTPort, UserProfilePort
 from ..application.use_cases import (
@@ -110,44 +110,33 @@ class MockAIPort(AIClassificationPort):
         )
 
 
-class InMemorySupportTicketRepo(SupportTicketRepository):
+class InMemoryTwentyForCreate(TwentyCRMPort):
     def __init__(self) -> None:
-        self._store: dict[int, SupportTicket] = {}
+        self.created: list[TwentyTask] = []
 
-    async def get_by_id(self, task_id: int) -> SupportTicket | None:
-        return self._store.get(task_id)
-
-    async def save(self, ticket: SupportTicket) -> None:
-        self._store[ticket.task_id] = ticket
-
-    async def get_by_assignee(
-        self, telegram_id: int, status: str | None = None
-    ) -> list[SupportTicket]:
+    async def list_workspace_members(self) -> list:
         return []
 
+    async def find_person_by_telegram_id(self, telegram_id: int) -> TwentyPerson | None:
+        return TwentyPerson(twenty_id="person-1", telegram_id=telegram_id, name="Test")
 
-class InMemoryChatwootForCreate(ChatwootPort):
-    def __init__(self) -> None:
-        self.created: list[SupportTicket] = []
+    async def create_person(self, telegram_id: int, name: str) -> TwentyPerson:
+        return TwentyPerson(twenty_id="person-new", telegram_id=telegram_id, name=name)
 
-    async def create_conversation(self, command: object) -> SupportTicket:
-        cmd = command
-        ticket = SupportTicket(task_id=len(self.created) + 1, title=getattr(cmd, "title", "Тест"))
-        self.created.append(ticket)
-        return ticket
+    async def create_task(
+        self, title: str, body: str, due_at: object = None, assignee_id: str | None = None
+    ) -> TwentyTask:
+        task = TwentyTask(
+            twenty_id=f"task-{len(self.created) + 1}",
+            title=title,
+            body=body,
+            status="TODO",
+            assignee_id=assignee_id,
+        )
+        self.created.append(task)
+        return task
 
-    async def update_conversation_status(self, task_id: int, status: str) -> None:
-        pass
-
-    async def get_conversations(
-        self, assignee_id: int, status: str = "open", page: int = 1
-    ) -> list[SupportTicket]:
-        return []
-
-    async def add_message(self, task_id: int, content: str, private: bool = True) -> None:
-        pass
-
-    async def update_conversation_assignee(self, task_id: int, assignee_chatwoot_id: int) -> None:
+    async def link_person_to_task(self, task_id: str, person_id: str) -> None:
         pass
 
 
@@ -663,7 +652,7 @@ class TestPreviewFlow:
         repo: InMemoryRepo,
         session: DraftSession,
         ai_raise_error: bool = False,
-    ) -> tuple[Router, InMemoryChatwootForCreate]:
+    ) -> tuple[Router, InMemoryTwentyForCreate]:
         """Строит router с реальными use cases и mock-ботом."""
         mock_start = MagicMock(spec=StartSessionUseCase)
         mock_start.execute = AsyncMock(return_value=session)
@@ -679,9 +668,8 @@ class TestPreviewFlow:
 
         ai_port = MockAIPort(raise_error=ai_raise_error)
         set_result = SetAnalysisResultUseCase(repo)
-        ticket_repo = InMemorySupportTicketRepo()
-        chatwoot = InMemoryChatwootForCreate()
-        create_ticket = CreateTicketFromSession(chatwoot, ticket_repo)
+        twenty = InMemoryTwentyForCreate()
+        create_twenty_task = CreateTwentyTaskFromSession(twenty)
 
         router = create_router(
             mock_start,
@@ -692,10 +680,10 @@ class TestPreviewFlow:
             mock_user_port,
             ai_port=ai_port,
             set_analysis_result=set_result,
-            create_ticket=create_ticket,
+            create_twenty_task=create_twenty_task,
             draft_repo=repo,
         )
-        return router, chatwoot
+        return router, twenty
 
     async def test_callback_collect_transitions_to_preview_on_success(self) -> None:
         """При успешном AI-анализе состояние должно стать preview."""
@@ -785,15 +773,15 @@ class TestPreviewFlow:
         await storage.set_state(key, TelegramFSMStates.preview.state)
         await storage.set_data(key, {"session_id": str(session.session_id)})
 
-        router, chatwoot = self._build_router(repo, session)
+        router, twenty = self._build_router(repo, session)
         dp = Dispatcher(storage=storage)
         dp.include_router(router)
         await dp.feed_update(make_mock_bot(), make_callback_update(data="create_crm"))
 
         state = await storage.get_state(key)
         assert state is None
-        assert len(chatwoot.created) == 1
-        assert chatwoot.created[0].title == "Тест задача"
+        assert len(twenty.created) == 1
+        assert twenty.created[0].title == "Тест задача"
 
     async def test_reanalyze_callback_transitions_to_preview(self) -> None:
         """Повторный анализ из preview тоже должен завершаться в preview."""

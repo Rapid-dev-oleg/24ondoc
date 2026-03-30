@@ -12,11 +12,6 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from ai_classification.infrastructure.openrouter_adapter import OpenRouterAdapter
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
-from chatwoot_integration.application.use_cases import CreateTicketFromSession
-from chatwoot_integration.infrastructure.chatwoot_client import ChatwootClient
-from chatwoot_integration.infrastructure.ticket_repository import (
-    InMemorySupportTicketRepository,
-)
 from telegram_ingestion.application.registration_use_cases import (
     AutoRegisterUserUseCase,
     SaveVoiceSampleUseCase,
@@ -50,6 +45,7 @@ from telegram_ingestion.infrastructure.user_profile_port import UserProfilePortA
 from telegram_ingestion.infrastructure.user_profile_repository import (
     SQLAlchemyUserProfileRepository,
 )
+from twenty_integration.application.use_cases import CreateTwentyTaskFromSession
 from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
 
 logger = logging.getLogger(__name__)
@@ -83,7 +79,7 @@ async def telegram_webhook(
 
     bot: Bot = request.app.state.bot
     redis = request.app.state.redis
-    chatwoot_client: ChatwootClient = request.app.state.chatwoot_client
+    twenty_adapter: TwentyRestAdapter = request.app.state.twenty_adapter
     stt_port = request.app.state.stt_port
     db_session = request.state.db_session
 
@@ -101,10 +97,10 @@ async def telegram_webhook(
     cancel_session = CancelSessionUseCase(draft_repo)
     set_analysis_result = SetAnalysisResultUseCase(draft_repo)
 
-    get_my_tasks = GetMyTasksUseCase(user_port, chatwoot_client)
-    update_task_status = UpdateTaskStatusUseCase(user_port, chatwoot_client)
-    reassign_task = ReassignTaskUseCase(user_port, chatwoot_client)
-    add_task_comment = AddTaskCommentUseCase(chatwoot_client)
+    get_my_tasks = GetMyTasksUseCase(user_port, twenty_adapter)
+    update_task_status = UpdateTaskStatusUseCase(user_port, twenty_adapter)
+    reassign_task = ReassignTaskUseCase(user_port, twenty_adapter)
+    add_task_comment = AddTaskCommentUseCase(twenty_adapter)
 
     # Registration + profile use cases
     auto_register = AutoRegisterUserUseCase(user_repo)
@@ -112,20 +108,11 @@ async def telegram_webhook(
     voice_storage = LocalVoiceSampleStorage(base_dir="/data/voice_samples")
     save_voice = SaveVoiceSampleUseCase(user_repo, voice_storage)
 
-    # AI classification + CRM ticket creation
+    # AI classification + Twenty CRM task creation
     ai_port = OpenRouterAdapter(
         api_key=settings.openrouter_api_key or settings.openai_api_key or ""
     )
-    ticket_repo: InMemorySupportTicketRepository = request.app.state.ticket_repo
-    create_ticket = CreateTicketFromSession(chatwoot_client, ticket_repo)
-
-    # Twenty CRM integration
-    twenty_crm_port = None
-    if settings.twenty_api_url and settings.twenty_api_key:
-        twenty_crm_port = TwentyRestAdapter(
-            base_url=settings.twenty_api_url,
-            api_key=settings.twenty_api_key,
-        )
+    create_twenty_task = CreateTwentyTaskFromSession(twenty_adapter)
 
     # Dispatcher with Redis FSM storage (shared state across per-request instances)
     storage = RedisStorage(redis=redis)
@@ -149,9 +136,9 @@ async def telegram_webhook(
             auto_register=auto_register,
             ai_port=ai_port,
             set_analysis_result=set_analysis_result,
-            create_ticket=create_ticket,
+            create_twenty_task=create_twenty_task,
             draft_repo=draft_repo,
-            twenty_crm_port=twenty_crm_port,
+            twenty_crm_port=twenty_adapter,
         )
     )
     dp.include_router(
