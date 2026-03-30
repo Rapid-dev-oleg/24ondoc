@@ -97,13 +97,13 @@ def _make_agent_profile(
 def _make_ticket(
     task_id: int = 1,
     title: str = "Тест задача",
-    assignee_chatwoot_id: int | None = 100,
+    assignee_crm_id: int | None = 100,
     status: TicketStatus = TicketStatus.OPEN,
 ) -> SupportTicket:
     return SupportTicket(
         task_id=task_id,
         title=title,
-        assignee_chatwoot_id=assignee_chatwoot_id,
+        assignee_chatwoot_id=assignee_crm_id,
         status=status,
     )
 
@@ -169,7 +169,7 @@ class TestUpdateTaskStatusUseCase:
         ok = await uc.execute(
             requester_telegram_id=100,
             task_id=1,
-            assignee_chatwoot_id=100,
+            assignee_crm_id=100,
             new_status="resolved",
         )
         assert ok is True
@@ -182,21 +182,21 @@ class TestUpdateTaskStatusUseCase:
         ok = await uc.execute(
             requester_telegram_id=100,
             task_id=5,
-            assignee_chatwoot_id=100,
+            assignee_crm_id=100,
             new_status="open",
         )
         assert ok is True
         assert (5, "open") in chatwoot.status_updates
 
     async def test_non_assignee_cannot_change_status(self) -> None:
-        # telegram_id=100 does NOT match assignee_chatwoot_id=10
+        # telegram_id=100 does NOT match assignee_crm_id=10
         profile = _make_agent_profile(telegram_id=100)
         chatwoot = InMemoryChatwootPort()
         uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), chatwoot)
         ok = await uc.execute(
             requester_telegram_id=100,
             task_id=1,
-            assignee_chatwoot_id=10,
+            assignee_crm_id=10,
             new_status="resolved",
         )
         assert ok is False
@@ -208,7 +208,7 @@ class TestUpdateTaskStatusUseCase:
         ok = await uc.execute(
             requester_telegram_id=999,
             task_id=1,
-            assignee_chatwoot_id=10,
+            assignee_crm_id=10,
             new_status="resolved",
         )
         assert ok is False
@@ -220,7 +220,7 @@ class TestUpdateTaskStatusUseCase:
         ok = await uc.execute(
             requester_telegram_id=100,
             task_id=1,
-            assignee_chatwoot_id=None,
+            assignee_crm_id=None,
             new_status="resolved",
         )
         assert ok is False
@@ -426,7 +426,7 @@ class TestMyTasksBotHandlers:
         # Pre-set state and data for callback
         await storage.set_state(key, TelegramFSMStates.tasks_list.state)
         serialized = [
-            {"task_id": t.task_id, "title": t.title, "status": "open", "assignee_chatwoot_id": 100}
+            {"task_id": t.task_id, "title": t.title, "status": "open", "assignee_crm_id": 100}
             for t in tickets
         ]
         await storage.set_data(key, {"tasks": serialized, "tasks_page": 0})
@@ -443,7 +443,7 @@ class TestMyTasksBotHandlers:
 
     async def test_task_detail_callback_sets_task_detail_state(self) -> None:
         profile = _make_agent_profile(telegram_id=100)
-        tickets = [_make_ticket(task_id=7, title="Детальная задача", assignee_chatwoot_id=100)]
+        tickets = [_make_ticket(task_id=7, title="Детальная задача", assignee_crm_id=100)]
         dp, _, storage = _build_dispatcher(profile=profile, tickets=tickets)
         bot = _make_mock_bot(bot_id=42)
         key = _storage_key(100)
@@ -454,7 +454,7 @@ class TestMyTasksBotHandlers:
                 "task_id": 7,
                 "title": "Детальная задача",
                 "status": "open",
-                "assignee_chatwoot_id": 100,
+                "assignee_crm_id": 100,
             }
         ]
         await storage.set_state(key, TelegramFSMStates.tasks_list.state)
@@ -471,7 +471,7 @@ class TestMyTasksBotHandlers:
 
     async def test_resolve_callback_for_assignee(self) -> None:
         profile = _make_agent_profile(telegram_id=100)
-        tickets = [_make_ticket(task_id=3, assignee_chatwoot_id=100)]
+        tickets = [_make_ticket(task_id=3, assignee_crm_id=100)]
         dp, chatwoot, _ = _build_dispatcher(profile=profile, tickets=tickets)
         bot = _make_mock_bot()
 

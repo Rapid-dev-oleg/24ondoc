@@ -49,8 +49,8 @@ class Settings(BaseSettings):
     minio_bucket_voices: str = "voice-samples"
 
     # Admin panel
-    admin_jwt_secret: str = "CHANGE_ME_ADMIN_JWT_SECRET"
-    admin_password: str = "CHANGE_ME_ADMIN_PASSWORD"
+    admin_jwt_secret: str
+    admin_password: str
     env_file_path: str = ".env"
     telegram_bot_username: str = ""
 

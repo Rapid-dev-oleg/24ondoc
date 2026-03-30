@@ -48,7 +48,7 @@ from ..domain.repository import DraftSessionRepository
 
 logger = logging.getLogger(__name__)
 
-_CRM_URL = "https://chat.24ondoc.ru"
+_CRM_URL = "https://24ondoc.ru"
 
 _TASKS_PAGE_SIZE = 5
 
@@ -255,26 +255,20 @@ def create_router(
         await add_text.execute(message.from_user.id, text)
         await message.answer("📄 Файл добавлен.", reply_markup=_collect_keyboard())
 
-    @router.callback_query(TelegramFSMStates.collecting, F.data == "collect")
-    async def callback_collect(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
-            return
-        session = await trigger_analysis.execute(callback.from_user.id)
-        if session is None:
-            await callback.answer("❌ Сессия не найдена.")
-            return
-        await state.set_state(TelegramFSMStates.analyzing)
-        await callback.answer()
-        if isinstance(callback.message, Message):
-            await callback.message.edit_text("⏳ Анализирую... Пожалуйста, подождите.")
-
+    async def _run_ai_analysis(
+        session: DraftSession,
+        callback: CallbackQuery,
+        state: FSMContext,
+        fallback_state: State,
+        fallback_keyboard: InlineKeyboardMarkup,
+    ) -> None:
+        """Run AI classification on session and show preview. Shared by collect and reanalyze."""
         if ai_port is None or set_analysis_result is None:
-            await state.set_state(TelegramFSMStates.collecting)
+            await state.set_state(fallback_state)
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(
                     "❌ AI-анализ недоступен. Попробуйте позже.",
-                    reply_markup=_collect_keyboard(),
+                    reply_markup=fallback_keyboard,
                 )
             return
 
@@ -305,12 +299,32 @@ def create_router(
                     reply_markup=_preview_keyboard(),
                 )
         except Exception:
-            await state.set_state(TelegramFSMStates.collecting)
+            await state.set_state(fallback_state)
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(
                     "❌ Ошибка анализа. Попробуйте снова.",
-                    reply_markup=_collect_keyboard(),
+                    reply_markup=fallback_keyboard,
                 )
+
+    @router.callback_query(TelegramFSMStates.collecting, F.data == "collect")
+    async def callback_collect(callback: CallbackQuery, state: FSMContext) -> None:
+        if callback.from_user is None:
+            await callback.answer()
+            return
+        session = await trigger_analysis.execute(callback.from_user.id)
+        if session is None:
+            await callback.answer("❌ Сессия не найдена.")
+            return
+        await state.set_state(TelegramFSMStates.analyzing)
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text("⏳ Анализирую... Пожалуйста, подождите.")
+
+        await _run_ai_analysis(
+            session, callback, state,
+            fallback_state=TelegramFSMStates.collecting,
+            fallback_keyboard=_collect_keyboard(),
+        )
 
     @router.callback_query(F.data == "cancel")
     async def callback_cancel(callback: CallbackQuery, state: FSMContext) -> None:
@@ -357,48 +371,11 @@ def create_router(
         if isinstance(callback.message, Message):
             await callback.message.edit_text("⏳ Переанализирую...")
 
-        if ai_port is None or set_analysis_result is None:
-            await state.set_state(TelegramFSMStates.preview)
-            if isinstance(callback.message, Message):
-                await callback.message.edit_text(
-                    "❌ AI-анализ недоступен. Попробуйте позже.",
-                    reply_markup=_preview_keyboard(),
-                )
-            return
-
-        try:
-            text = session.assembled_text or ""
-            classification = await ai_port.classify(text)
-            ai_result = AIResult(
-                title=classification.title,
-                description=classification.description,
-                category=str(classification.category),
-                priority=str(classification.priority),
-                deadline=classification.deadline,
-                entities={
-                    "emails": classification.entities.emails,
-                    "phones": classification.entities.phones,
-                    "prices": classification.entities.prices,
-                    "dates": classification.entities.dates,
-                },
-                assignee_hint=classification.assignee_hint,
-            )
-            updated = await set_analysis_result.execute(session.session_id, ai_result)
-            if updated is None:
-                raise ValueError("Session not found after analysis")
-            await state.set_state(TelegramFSMStates.preview)
-            if isinstance(callback.message, Message):
-                await callback.message.edit_text(
-                    _format_preview(updated),
-                    reply_markup=_preview_keyboard(),
-                )
-        except Exception:
-            await state.set_state(TelegramFSMStates.preview)
-            if isinstance(callback.message, Message):
-                await callback.message.edit_text(
-                    "❌ Ошибка анализа. Попробуйте снова.",
-                    reply_markup=_preview_keyboard(),
-                )
+        await _run_ai_analysis(
+            session, callback, state,
+            fallback_state=TelegramFSMStates.preview,
+            fallback_keyboard=_preview_keyboard(),
+        )
 
     @router.callback_query(TelegramFSMStates.preview, F.data == "create_crm")
     async def callback_create_crm(callback: CallbackQuery, state: FSMContext) -> None:
@@ -529,7 +506,7 @@ def _tasks_list_keyboard(
     end = start + _TASKS_PAGE_SIZE
     for ticket in tickets[start:end]:
         label = f"📋 #{ticket['task_id']} {ticket['title'][:40]}"
-        cb_data = f"task_detail:{ticket['task_id']}:{ticket.get('assignee_chatwoot_id') or 0}"
+        cb_data = f"task_detail:{ticket['task_id']}:{ticket.get('assignee_crm_id') or 0}"
         buttons.append([InlineKeyboardButton(text=label, callback_data=cb_data)])
 
     nav_row: list[InlineKeyboardButton] = []
@@ -544,7 +521,7 @@ def _tasks_list_keyboard(
 
 
 def _task_detail_keyboard(
-    task_id: int, assignee_chatwoot_id: int, status: str, is_supervisor: bool
+    task_id: int, assignee_crm_id: int, status: str, is_supervisor: bool
 ) -> InlineKeyboardMarkup:
     """Клавиатура для детального просмотра задачи."""
     buttons: list[list[InlineKeyboardButton]] = []
@@ -553,7 +530,7 @@ def _task_detail_keyboard(
         buttons.append(
             [
                 InlineKeyboardButton(
-                    text="✅ Решить", callback_data=f"task_resolve:{task_id}:{assignee_chatwoot_id}"
+                    text="✅ Решить", callback_data=f"task_resolve:{task_id}:{assignee_crm_id}"
                 )
             ]
         )
@@ -561,7 +538,7 @@ def _task_detail_keyboard(
         buttons.append(
             [
                 InlineKeyboardButton(
-                    text="🔓 Открыть", callback_data=f"task_reopen:{task_id}:{assignee_chatwoot_id}"
+                    text="🔓 Открыть", callback_data=f"task_reopen:{task_id}:{assignee_crm_id}"
                 )
             ]
         )
@@ -618,7 +595,7 @@ def create_tasks_router(
                 "task_id": t.task_id,
                 "title": t.title,
                 "status": t.status.value,
-                "assignee_chatwoot_id": t.assignee_chatwoot_id,
+                "assignee_crm_id": t.assignee_chatwoot_id,
             }
             for t in tickets
         ]
@@ -655,7 +632,7 @@ def create_tasks_router(
             return
         parts = callback.data.split(":")  # type: ignore[union-attr]
         task_id = int(parts[1])
-        assignee_chatwoot_id = int(parts[2])
+        assignee_crm_id = int(parts[2])
 
         profile = await user_port.get_profile(callback.from_user.id)
         from ..domain.models import UserRole
@@ -674,11 +651,11 @@ def create_tasks_router(
         await state.set_state(TelegramFSMStates.task_detail)
         await state.update_data(
             current_task_id=task_id,
-            current_assignee_chatwoot_id=assignee_chatwoot_id,
+            current_assignee_crm_id=assignee_crm_id,
             current_task_status=status,
         )
 
-        keyboard = _task_detail_keyboard(task_id, assignee_chatwoot_id, status, is_supervisor)
+        keyboard = _task_detail_keyboard(task_id, assignee_crm_id, status, is_supervisor)
         await callback.answer()
         if isinstance(callback.message, Message):
             await callback.message.edit_text(
@@ -693,12 +670,12 @@ def create_tasks_router(
             return
         parts = callback.data.split(":")  # type: ignore[union-attr]
         task_id = int(parts[1])
-        assignee_chatwoot_id = int(parts[2]) if parts[2] != "0" else None
+        assignee_crm_id = int(parts[2]) if parts[2] != "0" else None
 
         ok = await update_task_status.execute(
             requester_telegram_id=callback.from_user.id,
             task_id=task_id,
-            assignee_chatwoot_id=assignee_chatwoot_id,
+            assignee_crm_id=assignee_crm_id,
             new_status="resolved",
         )
         if ok:
@@ -715,12 +692,12 @@ def create_tasks_router(
             return
         parts = callback.data.split(":")  # type: ignore[union-attr]
         task_id = int(parts[1])
-        assignee_chatwoot_id = int(parts[2]) if parts[2] != "0" else None
+        assignee_crm_id = int(parts[2]) if parts[2] != "0" else None
 
         ok = await update_task_status.execute(
             requester_telegram_id=callback.from_user.id,
             task_id=task_id,
-            assignee_chatwoot_id=assignee_chatwoot_id,
+            assignee_crm_id=assignee_crm_id,
             new_status="open",
         )
         if ok:
@@ -1066,7 +1043,7 @@ def create_call_notification_router(
                 try:
                     await chatwoot_port.create_ticket_from_call(call_id)
                     await callback.message.edit_text(
-                        f"✅ Тикет для звонка {call_id} создан в Chatwoot."
+                        f"✅ Тикет для звонка {call_id} создан в CRM."
                     )
                 except Exception:
                     await callback.message.edit_text("❌ Ошибка создания тикета.")

@@ -52,15 +52,15 @@ class UpdateTaskStatusUseCase:
         self,
         requester_telegram_id: int,
         task_id: int,
-        assignee_chatwoot_id: int | None,
+        assignee_crm_id: int | None,
         new_status: str,
     ) -> bool:
-        if assignee_chatwoot_id is None:
+        if assignee_crm_id is None:
             return False
         profile = await self._user_port.get_profile(requester_telegram_id)
         if profile is None:
             return False
-        if profile.telegram_id != assignee_chatwoot_id:
+        if profile.telegram_id != assignee_crm_id:
             return False
         await self._crm_port.update_conversation_status(task_id, new_status)
         return True
