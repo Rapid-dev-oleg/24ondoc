@@ -197,6 +197,22 @@ async def db_session_middleware(request: Request, call_next: object) -> Response
     return response
 
 
+import os
+
+from fastapi.responses import FileResponse
+
+_ATTACHMENTS_DIR = "/app/data/attachments"
+
+
+@app.get("/api/files/{filename:path}")
+async def serve_attachment(filename: str) -> FileResponse:
+    """Serve uploaded attachment files."""
+    filepath = os.path.join(_ATTACHMENTS_DIR, filename)
+    if not os.path.isfile(filepath):
+        return JSONResponse(status_code=404, content={"detail": "File not found"})  # type: ignore[return-value]
+    return FileResponse(filepath)
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}

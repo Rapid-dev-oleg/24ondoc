@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from telegram_ingestion.domain.models import DraftSession
 from twenty_integration.domain.models import TwentyTask
 from twenty_integration.domain.ports import TwentyCRMPort
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
+    FileDownloader = Callable[[str], Coroutine[None, None, tuple[bytes, str, str] | None]]
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_deadline(deadline_str: str | None) -> datetime | None:
@@ -31,6 +40,7 @@ class CreateTwentyTaskFromSession:
         telegram_id: int,
         user_name: str,
         assignee_id: str | None = None,
+        file_downloader: FileDownloader | None = None,
     ) -> TwentyTask:
         """Создать задачу в Twenty из сессии.
 
@@ -39,6 +49,7 @@ class CreateTwentyTaskFromSession:
             telegram_id: Telegram ID пользователя
             user_name: Имя пользователя
             assignee_id: ID ответственного (опционально)
+            file_downloader: Async callback (file_id) -> (bytes, filename) | None
 
         Returns:
             Созданная TwentyTask
@@ -46,12 +57,7 @@ class CreateTwentyTaskFromSession:
         if session.ai_result is None:
             raise ValueError("DraftSession должна иметь ai_result")
 
-        # 1. Найти или создать Person по telegram_id
-        person = await self._port.find_person_by_telegram_id(telegram_id)
-        if person is None:
-            person = await self._port.create_person(telegram_id, user_name)
-
-        # 2. Создать Task
+        # 1. Создать Task с назначением оператора как ответственного (workspace member)
         task = await self._port.create_task(
             title=session.ai_result.title,
             body=session.ai_result.description,
@@ -59,7 +65,27 @@ class CreateTwentyTaskFromSession:
             assignee_id=assignee_id,
         )
 
-        # 3. Связать Person с Task
-        await self._port.link_person_to_task(task.twenty_id, person.twenty_id)
+        # 4. Загрузить файлы в Twenty и прикрепить к задаче
+        if file_downloader is not None:
+            for block in session.content_blocks:
+                if block.type in ("photo", "file") and block.file_id:
+                    try:
+                        result = await file_downloader(block.file_id)
+                        if result is not None:
+                            file_bytes, filename, content_type = result
+                            # Upload file to Twenty storage
+                            path = await self._port.upload_file(
+                                file_bytes, filename, content_type
+                            )
+                            if path:
+                                await self._port.create_attachment(
+                                    task.twenty_id, filename, path
+                                )
+                    except Exception:
+                        logger.exception(
+                            "Failed to attach file %s to task %s",
+                            block.file_id,
+                            task.twenty_id,
+                        )
 
         return task

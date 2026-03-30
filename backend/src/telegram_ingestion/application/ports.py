@@ -43,6 +43,13 @@ class UserProfilePort(ABC):
         """Update twenty_member_id for a user. Returns updated profile or None if not found."""
         ...
 
+    @abstractmethod
+    async def upsert_user(
+        self, telegram_id: int, twenty_member_id: str, role: str, display_name: str = "",
+    ) -> UserProfile:
+        """Create or update a user with role and twenty_member_id."""
+        ...
+
 
 class VoiceSampleStoragePort(ABC):
     """Port for persisting voice sample audio files."""

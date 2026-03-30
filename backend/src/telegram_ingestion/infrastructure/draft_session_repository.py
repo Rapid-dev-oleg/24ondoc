@@ -40,12 +40,13 @@ class SQLAlchemyRedisDraftSessionRepository(DraftSessionRepository):
             session_id = uuid.UUID(raw.decode())
             return await self.get_by_id(session_id)
         # Redis miss — fallback to PostgreSQL
+        now = datetime.now(UTC)
         result = await self._session.execute(
             select(DraftSessionORM)
             .where(
                 DraftSessionORM.user_id == user_id,
                 DraftSessionORM.status.in_(["collecting", "analyzing", "preview", "editing"]),
-                DraftSessionORM.expires_at > datetime.now(UTC),
+                (DraftSessionORM.expires_at > now) | (DraftSessionORM.expires_at.is_(None)),
             )
             .order_by(DraftSessionORM.created_at.desc())
             .limit(1)

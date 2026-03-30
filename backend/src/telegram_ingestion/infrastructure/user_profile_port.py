@@ -32,3 +32,25 @@ class UserProfilePortAdapter(UserProfilePort):
         profile.twenty_member_id = twenty_member_id
         await self._repo.save(profile)
         return profile
+
+    async def upsert_user(
+        self, telegram_id: int, twenty_member_id: str, role: str, display_name: str = "",
+    ) -> UserProfile:
+        from ..domain.models import UserRole
+
+        profile = await self._repo.get_by_telegram_id(telegram_id)
+        if profile is None:
+            profile = UserProfile(
+                telegram_id=telegram_id,
+                twenty_member_id=twenty_member_id,
+                role=UserRole(role),
+                settings={"display_name": display_name} if display_name else {},
+            )
+        else:
+            profile.twenty_member_id = twenty_member_id
+            profile.role = UserRole(role)
+            if display_name:
+                profile.settings["display_name"] = display_name
+            profile.is_active = True
+        await self._repo.save(profile)
+        return profile

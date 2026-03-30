@@ -27,3 +27,16 @@ class TwentyCRMPort(ABC):
 
     @abstractmethod
     async def link_person_to_task(self, task_id: str, person_id: str) -> None: ...
+
+    @abstractmethod
+    async def upload_file(
+        self, file_bytes: bytes, filename: str, content_type: str
+    ) -> str | None: ...
+
+    @abstractmethod
+    async def create_attachment(
+        self, task_id: str, name: str, file_path: str
+    ) -> None: ...
+
+    @abstractmethod
+    async def update_task_body(self, task_id: str, body: str) -> None: ...

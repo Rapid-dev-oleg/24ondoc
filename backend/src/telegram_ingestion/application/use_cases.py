@@ -33,11 +33,19 @@ class AddTextContentUseCase:
     def __init__(self, repo: DraftSessionRepository) -> None:
         self._repo = repo
 
-    async def execute(self, telegram_id: int, text: str) -> DraftSession | None:
+    async def execute(
+        self,
+        telegram_id: int,
+        text: str,
+        block_type: str = "text",
+        file_id: str | None = None,
+    ) -> DraftSession | None:
         session = await self._repo.get_active_by_user(telegram_id)
         if session is None:
             return None
-        session.add_content_block(ContentBlock(type="text", content=text))
+        session.add_content_block(
+            ContentBlock(type=block_type, content=text, file_id=file_id)
+        )
         await self._repo.save(session)
         return session
 

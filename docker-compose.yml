@@ -60,6 +60,7 @@ services:
       - ATS2_ENABLED=${ATS2_ENABLED:-false}
     volumes:
       - voice_samples:/app/data/voices
+      - task_attachments:/app/data/attachments
     depends_on:
       postgres:
         condition: service_healthy
@@ -245,6 +246,7 @@ volumes:
   certbot_webroot:
   pg_backups:
   pgadmin_data:
+  task_attachments:
   twenty_data:
 
 networks:

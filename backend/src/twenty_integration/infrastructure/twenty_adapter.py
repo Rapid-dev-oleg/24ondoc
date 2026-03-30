@@ -5,9 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+import logging
+
 import httpx
 
 from twenty_integration.domain.models import TwentyMember, TwentyPerson, TwentyTask
+
+logger = logging.getLogger(__name__)
 from twenty_integration.domain.ports import TwentyCRMPort
 
 
@@ -37,14 +41,14 @@ class TwentyRestAdapter(TwentyCRMPort):
             data = response.json()
 
             members = []
-            edges = data.get("edges", [])
-            for edge in edges:
-                node = edge.get("node", {})
+            items = data.get("data", {}).get("workspaceMembers", [])
+            for item in items:
+                name = item.get("name", {})
                 member = TwentyMember(
-                    twenty_id=node.get("id", ""),
-                    first_name=node.get("firstName", ""),
-                    last_name=node.get("lastName", ""),
-                    email=node.get("email", ""),
+                    twenty_id=item.get("id", ""),
+                    first_name=name.get("firstName", ""),
+                    last_name=name.get("lastName", ""),
+                    email=item.get("userEmail", ""),
                 )
                 members.append(member)
             return members
@@ -61,15 +65,15 @@ class TwentyRestAdapter(TwentyCRMPort):
             response.raise_for_status()
             data = response.json()
 
-            edges = data.get("edges", [])
-            if not edges:
+            items = data.get("data", {}).get("people", [])
+            if not items:
                 return None
 
-            node = edges[0].get("node", {})
+            item = items[0]
             person = TwentyPerson(
-                twenty_id=node.get("id", ""),
+                twenty_id=item.get("id", ""),
                 telegram_id=telegram_id,
-                name=node.get("name", {}).get("firstName", ""),
+                name=item.get("name", {}).get("firstName", ""),
             )
             return person
         except httpx.HTTPError:
@@ -86,11 +90,11 @@ class TwentyRestAdapter(TwentyCRMPort):
             response.raise_for_status()
             data = response.json()
 
-            node = data.get("data", {}).get("node", {})
+            created = data.get("data", {}).get("createPerson", {})
             person = TwentyPerson(
-                twenty_id=node.get("id", ""),
+                twenty_id=created.get("id", ""),
                 telegram_id=telegram_id,
-                name=node.get("name", {}).get("firstName", ""),
+                name=created.get("name", {}).get("firstName", ""),
             )
             return person
         except httpx.HTTPError as e:
@@ -118,17 +122,24 @@ class TwentyRestAdapter(TwentyCRMPort):
                 payload["assigneeId"] = assignee_id
 
             response = await self._client.post("/rest/tasks", json=payload)
+            if response.status_code >= 400:
+                logger.error(
+                    "Twenty create_task failed: %s %s payload=%s",
+                    response.status_code,
+                    response.text[:300],
+                    payload,
+                )
             response.raise_for_status()
             data = response.json()
 
-            node = data.get("data", {}).get("node", {})
+            created = data.get("data", {}).get("createTask", {})
             task = TwentyTask(
-                twenty_id=node.get("id", ""),
-                title=node.get("title", ""),
-                body=node.get("bodyV2", {}).get("markdown", ""),
-                status=node.get("status", "TODO"),
-                due_at=_parse_datetime(node.get("dueAt")),
-                assignee_id=node.get("assigneeId"),
+                twenty_id=created.get("id", ""),
+                title=created.get("title", ""),
+                body=created.get("bodyV2", {}).get("markdown", ""),
+                status=created.get("status", "TODO"),
+                due_at=_parse_datetime(created.get("dueAt")),
+                assignee_id=created.get("assigneeId"),
                 person_id=None,
             )
             return task
@@ -146,6 +157,68 @@ class TwentyRestAdapter(TwentyCRMPort):
             response.raise_for_status()
         except httpx.HTTPError as e:
             raise RuntimeError(f"Failed to link person to task: {e}") from e
+
+    _ATTACHMENT_FILE_FIELD_ID = "0d953c19-1809-41e8-8f78-80d18836bd9d"
+
+    async def upload_file(self, file_bytes: bytes, filename: str, content_type: str = "application/octet-stream") -> str | None:
+        """Загрузить файл в Twenty через GraphQL multipart upload. Возвращает file ID."""
+        import json as _json
+
+        operations = _json.dumps({
+            "query": (
+                "mutation UploadFilesFieldFile($file: Upload!, $fieldMetadataId: String!) "
+                "{ uploadFilesFieldFile(file: $file, fieldMetadataId: $fieldMetadataId) "
+                "{ id path } }"
+            ),
+            "variables": {"file": None, "fieldMetadataId": self._ATTACHMENT_FILE_FIELD_ID},
+        })
+        files = {
+            "operations": (None, operations, "application/json"),
+            "map": (None, '{"0":["variables.file"]}', "application/json"),
+            "0": (filename, file_bytes, content_type),
+        }
+        try:
+            response = await self._client.post("/metadata", files=files)
+            response.raise_for_status()
+            data = response.json()
+            uploaded = data.get("data", {}).get("uploadFilesFieldFile", {})
+            file_id = uploaded.get("id")
+            if not file_id:
+                logger.warning("Twenty upload_file: no id in response: %s", data)
+            return file_id
+        except httpx.HTTPError as e:
+            logger.warning("Twenty upload_file failed for %s: %s", filename, e)
+            return None
+
+    async def create_attachment(
+        self, task_id: str, name: str, uploaded_file_id: str
+    ) -> None:
+        """Создать attachment с загруженным файлом, привязать к задаче."""
+        try:
+            payload = {
+                "name": name,
+                "file": [{"fileId": uploaded_file_id, "label": name}],
+                "targetTaskId": task_id,
+            }
+            response = await self._client.post("/rest/attachments", json=payload)
+            if response.status_code >= 400:
+                logger.warning(
+                    "Twenty create_attachment failed: %s %s",
+                    response.status_code,
+                    response.text[:300],
+                )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            logger.warning("Failed to create attachment %s: %s", name, e)
+
+    async def update_task_body(self, task_id: str, body: str) -> None:
+        """Обновить body задачи."""
+        try:
+            payload = {"bodyV2": {"markdown": body}}
+            response = await self._client.patch(f"/rest/tasks/{task_id}", json=payload)
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            logger.warning("Failed to update task body %s: %s", task_id, e)
 
     # -- TaskCRMPort protocol methods (stub implementations for migration) --
 

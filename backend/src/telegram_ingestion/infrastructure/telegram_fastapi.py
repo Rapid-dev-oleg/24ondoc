@@ -139,6 +139,8 @@ async def telegram_webhook(
             create_twenty_task=create_twenty_task,
             draft_repo=draft_repo,
             twenty_crm_port=twenty_adapter,
+            redis=redis,
+            bot_username=settings.telegram_bot_username,
         )
     )
     dp.include_router(

@@ -79,6 +79,12 @@ class OperatorLinkStates(StatesGroup):
     entering_telegram_id = State()
 
 
+class AddUserStates(StatesGroup):
+    choosing_member = State()
+
+_INVITE_TTL = 86400 * 7  # 7 days
+
+
 def _collect_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -132,6 +138,8 @@ def create_router(
     create_twenty_task: CreateTwentyTaskFromSession | None = None,
     draft_repo: DraftSessionRepository | None = None,
     twenty_crm_port: Any = None,
+    redis: Any = None,
+    bot_username: str = "",
 ) -> Router:
     """Create and configure the telegram ingestion router with injected use cases."""
     from ..domain.models import UserRole
@@ -143,6 +151,39 @@ def create_router(
         if message.from_user is None:
             return
         await state.clear()
+
+        # Check for invite deep link: /start inv_<token>
+        args = message.text.split(maxsplit=1)[1] if message.text and " " in message.text else ""
+        if args.startswith("inv_") and redis is not None:
+            token = args
+            raw = await redis.get(f"invite:{token}")
+            if raw is not None:
+                import json as _json
+                invite = _json.loads(raw.decode())
+                first_name = message.from_user.first_name or ""
+                last_name = message.from_user.last_name or ""
+                display_name = f"{first_name} {last_name}".strip() or str(message.from_user.id)
+                try:
+                    await user_port.upsert_user(
+                        telegram_id=message.from_user.id,
+                        twenty_member_id=invite["twenty_member_id"],
+                        role=invite["role"],
+                        display_name=display_name,
+                    )
+                    role_label = "администратор" if invite["role"] == "admin" else "участник"
+                    await message.answer(
+                        f"✅ Вы добавлены в систему 24ondoc как <b>{role_label}</b>!\n\n"
+                        "Используйте /new_task чтобы создать задачу."
+                    )
+                    await redis.delete(f"invite:{token}")
+                    return
+                except Exception:
+                    logger.exception("Invite registration failed for user %s", message.from_user.id)
+                    await message.answer("❌ Ошибка регистрации. Попробуйте позже.")
+                    return
+            else:
+                await message.answer("❌ Ссылка-приглашение недействительна или устарела.")
+                return
 
         if auto_register is not None:
             first_name = message.from_user.first_name or ""
@@ -236,11 +277,14 @@ def create_router(
     async def handle_photo(message: Message, state: FSMContext) -> None:
         if message.from_user is None or not message.photo:
             return
+        photo = message.photo[-1]
         caption = message.caption or ""
         text = "[Фото]"
         if caption:
             text += f" {caption}"
-        await add_text.execute(message.from_user.id, text)
+        await add_text.execute(
+            message.from_user.id, text, block_type="photo", file_id=photo.file_id
+        )
         await message.answer("🖼 Фото добавлено.", reply_markup=_collect_keyboard())
 
     @router.message(TelegramFSMStates.collecting, F.document)
@@ -252,7 +296,9 @@ def create_router(
         text = f"[Файл: {file_name}]"
         if caption:
             text += f" {caption}"
-        await add_text.execute(message.from_user.id, text)
+        await add_text.execute(
+            message.from_user.id, text, block_type="file", file_id=message.document.file_id
+        )
         await message.answer("📄 Файл добавлен.", reply_markup=_collect_keyboard())
 
     async def _run_ai_analysis(
@@ -378,7 +424,7 @@ def create_router(
         )
 
     @router.callback_query(TelegramFSMStates.preview, F.data == "create_crm")
-    async def callback_create_crm(callback: CallbackQuery, state: FSMContext) -> None:
+    async def callback_create_crm(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         if callback.from_user is None:
             await callback.answer()
             return
@@ -404,11 +450,26 @@ def create_router(
             profile = await user_port.get_profile(callback.from_user.id)
             assignee_id = profile.twenty_member_id if profile else None
 
+            # File downloader: downloads from Telegram, returns (bytes, filename, content_type)
+            async def _download_tg_file(file_id: str) -> tuple[bytes, str, str] | None:
+                import mimetypes
+
+                tg_file = await bot.get_file(file_id)
+                if tg_file.file_path is None:
+                    return None
+                raw = await bot.download_file(tg_file.file_path)
+                if not isinstance(raw, io.BytesIO):
+                    return None
+                filename = tg_file.file_path.split("/")[-1] if "/" in tg_file.file_path else tg_file.file_path
+                content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                return raw.read(), filename, content_type
+
             task = await create_twenty_task.execute(
                 fetched,
                 telegram_id=callback.from_user.id,
                 user_name=callback.from_user.first_name or "",
                 assignee_id=assignee_id,
+                file_downloader=_download_tg_file,
             )
 
             await cancel_session.execute(callback.from_user.id)
@@ -419,6 +480,7 @@ def create_router(
                     f"✅ Задача <b>{task.title}</b> создана в Twenty CRM."
                 )
         except Exception:
+            logger.exception("Failed to create CRM task for user %s", callback.from_user.id)
             await callback.answer("❌ Ошибка создания задачи.", show_alert=True)
 
     # ---------- /operators command (DEV-122) ----------
@@ -488,6 +550,92 @@ def create_router(
                 f"✅ Оператор {name} привязан к члену workspace (ID: {twenty_member_id})"
             )
         await state.clear()
+
+    # ---------- /add_member & /add_admin commands ----------
+
+    async def _cmd_add_user(message: Message, state: FSMContext, target_role: str) -> None:
+        """Общий обработчик для /add_member и /add_admin."""
+        if message.from_user is None:
+            return
+        profile = await user_port.get_profile(message.from_user.id)
+        if profile is None or profile.role != UserRole.ADMIN:
+            await message.answer("🔒 Нет доступа. Только для администраторов.")
+            return
+        if twenty_crm_port is None:
+            await message.answer("❌ Интеграция с Twenty недоступна.")
+            return
+        try:
+            members = await twenty_crm_port.list_workspace_members()
+            if not members:
+                await message.answer("❌ Нет членов workspace.")
+                return
+            role_label = "администратора" if target_role == "admin" else "участника"
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text=f"{m.first_name} {m.last_name}",
+                        callback_data=f"adduser:{target_role}:{m.twenty_id}",
+                    )]
+                    for m in members
+                ]
+            )
+            await state.set_state(AddUserStates.choosing_member)
+            await message.answer(
+                f"👥 Выберите члена workspace для добавления {role_label}:",
+                reply_markup=keyboard,
+            )
+        except Exception:
+            logger.exception("Error in add_user command")
+            await message.answer("❌ Ошибка получения членов workspace.")
+
+    @router.message(Command("add_member"))
+    async def cmd_add_member(message: Message, state: FSMContext) -> None:
+        await _cmd_add_user(message, state, "agent")
+
+    @router.message(Command("add_admin"))
+    async def cmd_add_admin(message: Message, state: FSMContext) -> None:
+        await _cmd_add_user(message, state, "admin")
+
+    @router.callback_query(AddUserStates.choosing_member, F.data.startswith("adduser:"))
+    async def cb_add_user_select(callback: CallbackQuery, state: FSMContext) -> None:
+        if callback.from_user is None or callback.data is None:
+            await callback.answer()
+            return
+        parts = callback.data.split(":", 2)
+        if len(parts) != 3:
+            await callback.answer("❌ Ошибка данных.")
+            return
+        _, target_role, twenty_member_id = parts
+
+        if redis is None:
+            await callback.answer("❌ Redis недоступен.", show_alert=True)
+            await state.clear()
+            return
+
+        # Generate invite token and save to Redis
+        import json as _json
+
+        token = f"inv_{uuid.uuid4().hex[:12]}"
+        invite_data = _json.dumps({
+            "twenty_member_id": twenty_member_id,
+            "role": target_role,
+        })
+        await redis.set(f"invite:{token}", invite_data, ex=_INVITE_TTL)
+
+        username = bot_username or "aidevl_bot"
+        link = f"https://t.me/{username}?start={token}"
+        role_label = "администратора" if target_role == "admin" else "участника"
+
+        await callback.answer()
+        await state.clear()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                f"🔗 Ссылка для добавления <b>{role_label}</b>:\n\n"
+                f"<code>{link}</code>\n\n"
+                f"Отправьте эту ссылку пользователю. "
+                f"При переходе он автоматически зарегистрируется в системе.\n"
+                f"Ссылка действительна 7 дней."
+            )
 
     return router
 
