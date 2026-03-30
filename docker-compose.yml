@@ -53,6 +53,11 @@ services:
       - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME:-}
+      - ATS2_BASE_URL=${ATS2_BASE_URL:-https://ats2.t2.ru/crm/openapi}
+      - ATS2_ACCESS_TOKEN=${ATS2_ACCESS_TOKEN:-}
+      - ATS2_REFRESH_TOKEN=${ATS2_REFRESH_TOKEN:-}
+      - ATS2_POLL_INTERVAL_SEC=${ATS2_POLL_INTERVAL_SEC:-60}
+      - ATS2_ENABLED=${ATS2_ENABLED:-false}
     volumes:
       - voice_samples:/app/data/voices
     depends_on:

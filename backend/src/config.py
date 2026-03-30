@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     ats2_base_url: str = "https://ats2.t2.ru/crm/openapi"
     ats2_access_token: str = ""
     ats2_refresh_token: str = ""
+    ats2_poll_interval_sec: int = 60
+    ats2_enabled: bool = False
 
     # Twenty CRM
     twenty_base_url: str = "https://24ondoc.ru"
