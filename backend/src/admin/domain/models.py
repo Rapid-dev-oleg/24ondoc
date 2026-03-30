@@ -27,9 +27,7 @@ class UpdateUserRequest(BaseModel):
 class UserResponse(BaseModel):
     telegram_id: int | None = None
     phone: str | None = None
-    chatwoot_user_id: int
-    chatwoot_account_id: int
-    chatwoot_contact_id: int | None = None
+    twenty_member_id: str | None = None
     role: UserRole
     phone_internal: str | None = None
     voice_sample_url: str | None = None

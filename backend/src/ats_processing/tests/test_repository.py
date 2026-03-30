@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ..domain.models import CallRecord, CallStatus
+from ..domain.models import CallRecord, CallStatus, SourceType
 from ..infrastructure.orm_models import CallRecordORM
 from ..infrastructure.repository import CallRecordRepositoryImpl
 
@@ -28,10 +28,15 @@ def _make_call(
     )
 
 
-def _make_orm(call_id: str = "t2_001", status: str = "new") -> CallRecordORM:
+def _make_orm(
+    call_id: str = "t2_001",
+    status: str = "new",
+    source: str = "call_t2_webhook",
+) -> CallRecordORM:
     row = CallRecordORM()
     row.call_id = call_id
     row.audio_url = "https://t2.example.com/rec/001.mp3"
+    row.source = source
     row.transcription_t2 = None
     row.transcription_whisper = None
     row.duration = None
@@ -211,3 +216,38 @@ class TestCallRecordRepositoryGetPending:
         assert len(results) == 1
         assert results[0].call_id == "t2_001"
         assert results[0].status == CallStatus.NEW
+
+    async def test_get_pending_filters_by_source(self) -> None:
+        """AC: get_pending фильтрует по source."""
+        orm_webhook = _make_orm("t2_001", status="new", source="call_t2_webhook")
+        _make_orm("ats2_001", status="new", source="call_ats2_polling")
+
+        session = AsyncMock()
+        scalars_mock = MagicMock()
+        scalars_mock.return_value = iter([orm_webhook])
+        execute_result = MagicMock()
+        execute_result.scalars = scalars_mock
+        session.execute = AsyncMock(return_value=execute_result)
+
+        repo = CallRecordRepositoryImpl(session)
+        results = await repo.get_pending(limit=10, source=SourceType.CALL_T2_WEBHOOK)
+
+        assert len(results) == 1
+        assert results[0].call_id == "t2_001"
+        assert results[0].source == SourceType.CALL_T2_WEBHOOK
+
+    async def test_existing_webhook_records_default_to_t2_webhook(self) -> None:
+        """AC: существующие записи по умолчанию имеют source=call_t2_webhook."""
+        orm_row = _make_orm("t2_legacy", status="new")
+        session = AsyncMock()
+        scalars_mock = MagicMock()
+        scalars_mock.return_value = iter([orm_row])
+        execute_result = MagicMock()
+        execute_result.scalars = scalars_mock
+        session.execute = AsyncMock(return_value=execute_result)
+
+        repo = CallRecordRepositoryImpl(session)
+        results = await repo.get_pending(limit=10)
+
+        assert len(results) == 1
+        assert results[0].source == SourceType.CALL_T2_WEBHOOK

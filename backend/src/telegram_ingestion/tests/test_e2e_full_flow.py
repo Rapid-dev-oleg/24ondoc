@@ -1,13 +1,13 @@
 """E2E тест: полный флоу Telegram → регистрация → задача (текст+голос) → CRM.
 
 Acceptance criteria:
-  1. /start → пользователь создаётся в репо + агент в Chatwoot
+  1. /start → пользователь создаётся в репо
   2. /new_task → сессия создана (статус COLLECTING)
   3. текст → ContentBlock(type=text) добавлен
   4. голос → STT → ContentBlock(type=voice) добавлен
   5. collect callback → AI классификация → статус PREVIEW
-  6. create_crm callback → тикет создаётся в Chatwoot CRM
-  7. тикет содержит правильные поля (title, description, category, priority)
+  6. create_crm callback → задача создаётся в Twenty CRM
+  7. задача содержит правильные поля (title, description, category, priority)
 """
 
 from __future__ import annotations
@@ -33,11 +33,7 @@ from aiogram.types import (
 
 from ai_classification.domain.models import Category, ClassificationResult, Priority
 from ai_classification.domain.repository import AIClassificationPort
-from chatwoot_integration.application.use_cases import CreateTicketFromSession
-from chatwoot_integration.domain.models import SupportTicket
-from chatwoot_integration.domain.repository import ChatwootPort, SupportTicketRepository
 from telegram_ingestion.application.ports import (
-    AgentRegistrationPort,
     STTPort,
     UserProfilePort,
 )
@@ -53,6 +49,9 @@ from telegram_ingestion.application.use_cases import (
 from telegram_ingestion.domain.models import DraftSession, SessionStatus, UserProfile, UserRole
 from telegram_ingestion.domain.repository import DraftSessionRepository, UserProfileRepository
 from telegram_ingestion.infrastructure.bot_handler import TelegramFSMStates, create_router
+from twenty_integration.application.use_cases import CreateTwentyTaskFromSession
+from twenty_integration.domain.models import TwentyMember, TwentyPerson, TwentyTask
+from twenty_integration.domain.ports import TwentyCRMPort
 
 # ---------------------------------------------------------------------------
 # In-memory стабы
@@ -86,12 +85,6 @@ class InMemoryUserRepo(UserProfileRepository):
     async def get_by_telegram_id(self, telegram_id: int) -> UserProfile | None:
         return self._store.get(telegram_id)
 
-    async def get_by_chatwoot_id(self, chatwoot_user_id: int) -> UserProfile | None:
-        for p in self._store.values():
-            if p.chatwoot_user_id == chatwoot_user_id:
-                return p
-        return None
-
     async def save(self, profile: UserProfile) -> None:
         self._store[profile.telegram_id] = profile
 
@@ -103,18 +96,6 @@ class InMemoryUserRepo(UserProfileRepository):
 
     async def delete_by_telegram_id(self, telegram_id: int) -> None:
         self._store.pop(telegram_id, None)
-
-
-class InMemoryAgentReg(AgentRegistrationPort):
-    def __init__(self, next_id: int = 42) -> None:
-        self._next_id = next_id
-        self.calls: list[dict[str, str]] = []
-
-    async def create_chatwoot_agent(self, name: str, email: str, password: str) -> int:
-        self.calls.append({"name": name, "email": email, "password": password})
-        cid = self._next_id
-        self._next_id += 1
-        return cid
 
 
 class MockSTT(STTPort):
@@ -136,48 +117,33 @@ class MockAI(AIClassificationPort):
         )
 
 
-class InMemoryTicketRepo(SupportTicketRepository):
+class InMemoryTwenty(TwentyCRMPort):
     def __init__(self) -> None:
-        self._store: dict[int, SupportTicket] = {}
+        self.created: list[TwentyTask] = []
 
-    async def get_by_id(self, task_id: int) -> SupportTicket | None:
-        return self._store.get(task_id)
-
-    async def save(self, ticket: SupportTicket) -> None:
-        self._store[ticket.task_id] = ticket
-
-    async def get_by_assignee(
-        self, telegram_id: int, status: str | None = None
-    ) -> list[SupportTicket]:
+    async def list_workspace_members(self) -> list[TwentyMember]:
         return []
 
+    async def find_person_by_telegram_id(self, telegram_id: int) -> TwentyPerson | None:
+        return TwentyPerson(twenty_id="person-1", telegram_id=telegram_id, name="Test")
 
-class InMemoryChatwoot(ChatwootPort):
-    def __init__(self) -> None:
-        self.created: list[SupportTicket] = []
+    async def create_person(self, telegram_id: int, name: str) -> TwentyPerson:
+        return TwentyPerson(twenty_id="person-new", telegram_id=telegram_id, name=name)
 
-    async def create_conversation(self, command: object) -> SupportTicket:
-        cmd = command
-        ticket = SupportTicket(
-            task_id=len(self.created) + 1,
-            title=getattr(cmd, "title", ""),
-            priority=getattr(cmd, "priority", None) or "medium",
+    async def create_task(
+        self, title: str, body: str, due_at: object = None, assignee_id: str | None = None
+    ) -> TwentyTask:
+        task = TwentyTask(
+            twenty_id=f"task-{len(self.created) + 1}",
+            title=title,
+            body=body,
+            status="TODO",
+            assignee_id=assignee_id,
         )
-        self.created.append(ticket)
-        return ticket
+        self.created.append(task)
+        return task
 
-    async def update_conversation_status(self, task_id: int, status: str) -> None:
-        pass
-
-    async def get_conversations(
-        self, assignee_id: int, status: str = "open", page: int = 1
-    ) -> list[SupportTicket]:
-        return []
-
-    async def add_message(self, task_id: int, content: str, private: bool = True) -> None:
-        pass
-
-    async def update_conversation_assignee(self, task_id: int, assignee_chatwoot_id: int) -> None:
+    async def link_person_to_task(self, task_id: str, person_id: str) -> None:
         pass
 
 
@@ -194,6 +160,11 @@ class AuthorizedUserPort(UserProfilePort):
 
     async def list_active_agents(self) -> list[UserProfile]:
         return await self._repo.list_active()
+
+    async def update_twenty_member_id(
+        self, telegram_id: int, twenty_member_id: str
+    ) -> UserProfile | None:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -293,12 +264,9 @@ def _make_mock_bot() -> MagicMock:
 def _build_full_dispatcher(
     draft_repo: InMemoryDraftRepo,
     user_repo: InMemoryUserRepo,
-    chatwoot: InMemoryChatwoot,
-    ticket_repo: InMemoryTicketRepo,
+    twenty: InMemoryTwenty,
     stt: MockSTT,
     ai: MockAI,
-    agent_reg: InMemoryAgentReg,
-    account_id: int = 1,
 ) -> tuple[Dispatcher, MemoryStorage]:
     user_port = AuthorizedUserPort(user_repo)
 
@@ -308,8 +276,8 @@ def _build_full_dispatcher(
     trigger_analysis = TriggerAnalysisUseCase(draft_repo)
     cancel_session = CancelSessionUseCase(draft_repo)
     set_result = SetAnalysisResultUseCase(draft_repo)
-    auto_register = AutoRegisterUserUseCase(user_repo, agent_reg, account_id=account_id)
-    create_ticket = CreateTicketFromSession(chatwoot, ticket_repo)
+    auto_register = AutoRegisterUserUseCase(user_repo)
+    create_twenty_task = CreateTwentyTaskFromSession(twenty)
 
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
@@ -324,7 +292,7 @@ def _build_full_dispatcher(
             auto_register=auto_register,
             ai_port=ai,
             set_analysis_result=set_result,
-            create_ticket=create_ticket,
+            create_twenty_task=create_twenty_task,
             draft_repo=draft_repo,
         )
     )
@@ -339,17 +307,13 @@ def _build_full_dispatcher(
 class TestE2EFullFlow:
     """Полный флоу: /start → /new_task → текст → голос → анализ → CRM."""
 
-    # Шаг 1: /start создаёт пользователя в репо и в Chatwoot (через AgentReg)
+    # Шаг 1: /start создаёт пользователя в репо
     async def test_step1_start_registers_new_user(self) -> None:
         draft_repo = InMemoryDraftRepo()
         user_repo = InMemoryUserRepo()
-        chatwoot = InMemoryChatwoot()
-        ticket_repo = InMemoryTicketRepo()
-        agent_reg = InMemoryAgentReg(next_id=50)
+        twenty = InMemoryTwenty()
 
-        dp, _ = _build_full_dispatcher(
-            draft_repo, user_repo, chatwoot, ticket_repo, MockSTT(), MockAI(), agent_reg
-        )
+        dp, _ = _build_full_dispatcher(draft_repo, user_repo, twenty, MockSTT(), MockAI())
         bot = _make_mock_bot()
 
         await dp.feed_update(bot, _make_update(_make_message(user_id=100, text="/start")))
@@ -357,22 +321,15 @@ class TestE2EFullFlow:
         profile = await user_repo.get_by_telegram_id(100)
         assert profile is not None, "Профиль должен быть создан после /start"
         assert profile.telegram_id == 100
-        assert profile.chatwoot_user_id == 50
         assert profile.role == UserRole.AGENT
-        assert len(agent_reg.calls) == 1
-        assert agent_reg.calls[0]["email"] == "100@24ondoc.ru"
 
     # Шаг 2: /new_task создаёт сессию в статусе COLLECTING
     async def test_step2_new_task_creates_collecting_session(self) -> None:
         draft_repo = InMemoryDraftRepo()
         user_repo = InMemoryUserRepo()
-        chatwoot = InMemoryChatwoot()
-        ticket_repo = InMemoryTicketRepo()
-        agent_reg = InMemoryAgentReg(next_id=50)
+        twenty = InMemoryTwenty()
 
-        dp, storage = _build_full_dispatcher(
-            draft_repo, user_repo, chatwoot, ticket_repo, MockSTT(), MockAI(), agent_reg
-        )
+        dp, storage = _build_full_dispatcher(draft_repo, user_repo, twenty, MockSTT(), MockAI())
         bot = _make_mock_bot()
         key = _storage_key(100)
 
@@ -398,13 +355,9 @@ class TestE2EFullFlow:
     async def test_step3_text_message_adds_text_content_block(self) -> None:
         draft_repo = InMemoryDraftRepo()
         user_repo = InMemoryUserRepo()
-        chatwoot = InMemoryChatwoot()
-        ticket_repo = InMemoryTicketRepo()
-        agent_reg = InMemoryAgentReg(next_id=50)
+        twenty = InMemoryTwenty()
 
-        dp, storage = _build_full_dispatcher(
-            draft_repo, user_repo, chatwoot, ticket_repo, MockSTT(), MockAI(), agent_reg
-        )
+        dp, storage = _build_full_dispatcher(draft_repo, user_repo, twenty, MockSTT(), MockAI())
         bot = _make_mock_bot()
         key = _storage_key(100)
 
@@ -429,14 +382,10 @@ class TestE2EFullFlow:
     async def test_step4_voice_message_adds_voice_content_block(self) -> None:
         draft_repo = InMemoryDraftRepo()
         user_repo = InMemoryUserRepo()
-        chatwoot = InMemoryChatwoot()
-        ticket_repo = InMemoryTicketRepo()
-        agent_reg = InMemoryAgentReg(next_id=50)
+        twenty = InMemoryTwenty()
         stt = MockSTT("дополнительное описание проблемы")
 
-        dp, storage = _build_full_dispatcher(
-            draft_repo, user_repo, chatwoot, ticket_repo, stt, MockAI(), agent_reg
-        )
+        dp, storage = _build_full_dispatcher(draft_repo, user_repo, twenty, stt, MockAI())
         bot = _make_mock_bot()
         key = _storage_key(100)
 
@@ -461,13 +410,9 @@ class TestE2EFullFlow:
     async def test_step5_collect_callback_triggers_ai_analysis(self) -> None:
         draft_repo = InMemoryDraftRepo()
         user_repo = InMemoryUserRepo()
-        chatwoot = InMemoryChatwoot()
-        ticket_repo = InMemoryTicketRepo()
-        agent_reg = InMemoryAgentReg(next_id=50)
+        twenty = InMemoryTwenty()
 
-        dp, storage = _build_full_dispatcher(
-            draft_repo, user_repo, chatwoot, ticket_repo, MockSTT(), MockAI(), agent_reg
-        )
+        dp, storage = _build_full_dispatcher(draft_repo, user_repo, twenty, MockSTT(), MockAI())
         bot = _make_mock_bot()
         key = _storage_key(100)
 
@@ -502,19 +447,15 @@ class TestE2EFullFlow:
         assert updated.ai_result is not None
         assert updated.ai_result.title == "Проблема с авторизацией"
 
-    # Шаг 6: create_crm callback → тикет создаётся в Chatwoot
-    async def test_step6_create_crm_creates_ticket_in_chatwoot(self) -> None:
+    # Шаг 6: create_crm callback → задача создаётся в Twenty
+    async def test_step6_create_crm_creates_task_in_twenty(self) -> None:
         from telegram_ingestion.domain.models import AIResult, ContentBlock
 
         draft_repo = InMemoryDraftRepo()
         user_repo = InMemoryUserRepo()
-        chatwoot = InMemoryChatwoot()
-        ticket_repo = InMemoryTicketRepo()
-        agent_reg = InMemoryAgentReg(next_id=50)
+        twenty = InMemoryTwenty()
 
-        dp, storage = _build_full_dispatcher(
-            draft_repo, user_repo, chatwoot, ticket_repo, MockSTT(), MockAI(), agent_reg
-        )
+        dp, storage = _build_full_dispatcher(draft_repo, user_repo, twenty, MockSTT(), MockAI())
         bot = _make_mock_bot()
         key = _storage_key(100)
 
@@ -546,9 +487,9 @@ class TestE2EFullFlow:
         # Нажимаем "Создать в CRM"
         await dp.feed_update(bot, _make_callback_update(user_id=100, data="create_crm"))
 
-        assert len(chatwoot.created) == 1
-        ticket = chatwoot.created[0]
-        assert ticket.title == "Проблема с авторизацией"
+        assert len(twenty.created) == 1
+        task = twenty.created[0]
+        assert task.title == "Проблема с авторизацией"
 
         state = await storage.get_state(key)
         assert state is None
@@ -558,14 +499,10 @@ class TestE2EFullFlow:
         """Полный E2E: /start → /new_task → текст → голос → collect → create_crm."""
         draft_repo = InMemoryDraftRepo()
         user_repo = InMemoryUserRepo()
-        chatwoot = InMemoryChatwoot()
-        ticket_repo = InMemoryTicketRepo()
-        agent_reg = InMemoryAgentReg(next_id=77)
+        twenty = InMemoryTwenty()
         stt = MockSTT("добавлю голосовой контекст")
 
-        dp, storage = _build_full_dispatcher(
-            draft_repo, user_repo, chatwoot, ticket_repo, stt, MockAI(), agent_reg
-        )
+        dp, storage = _build_full_dispatcher(draft_repo, user_repo, twenty, stt, MockAI())
         bot = _make_mock_bot()
         key = _storage_key(100)
 
@@ -573,7 +510,6 @@ class TestE2EFullFlow:
         await dp.feed_update(bot, _make_update(_make_message(user_id=100, text="/start")))
         profile = await user_repo.get_by_telegram_id(100)
         assert profile is not None, "Шаг 1: профиль должен появиться"
-        assert profile.chatwoot_user_id == 77
 
         # --- Шаг 2: /new_task — создание сессии ---
         await dp.feed_update(
@@ -617,12 +553,12 @@ class TestE2EFullFlow:
         assert session.ai_result.title == "Проблема с авторизацией"
         assert session.ai_result.priority == "high"
 
-        # --- Шаг 6: create_crm → тикет в CRM ---
+        # --- Шаг 6: create_crm → задача в Twenty ---
         await storage.set_data(key, {"session_id": str(session_id)})
         await dp.feed_update(bot, _make_callback_update(user_id=100, data="create_crm"))
-        assert len(chatwoot.created) == 1, "Шаг 6: тикет создан в Chatwoot"
-        ticket = chatwoot.created[0]
-        assert ticket.title == "Проблема с авторизацией"
+        assert len(twenty.created) == 1, "Шаг 6: задача создана в Twenty"
+        task = twenty.created[0]
+        assert task.title == "Проблема с авторизацией"
 
         state = await storage.get_state(key)
-        assert state is None, "Шаг 6: FSM очищен после создания тикета"
+        assert state is None, "Шаг 6: FSM очищен после создания задачи"

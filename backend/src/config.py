@@ -17,14 +17,6 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str
     telegram_webhook_base_url: str = "https://24ondoc.ru"
 
-    # Chatwoot
-    chatwoot_api_key: str
-    chatwoot_base_url: str = "http://chatwoot:3000"
-    chatwoot_support_account_id: int = 2
-    chatwoot_webhook_token: str
-    chatwoot_inbox_id: int = 1
-    chatwoot_platform_api_key: str | None = None
-
     # OpenRouter
     openrouter_api_key: str
     openrouter_model: str = "anthropic/claude-3.5-sonnet"
@@ -38,6 +30,17 @@ class Settings(BaseSettings):
 
     # T2 ATS
     t2_webhook_secret: str
+
+    # ATS2 REST API
+    ats2_base_url: str = "https://ats2.t2.ru/crm/openapi"
+    ats2_access_token: str = ""
+    ats2_refresh_token: str = ""
+    ats2_poll_interval_sec: int = 60
+    ats2_enabled: bool = False
+
+    # Twenty CRM
+    twenty_base_url: str = "https://24ondoc.ru"
+    twenty_api_key: str = ""
 
     # MinIO
     minio_endpoint: str = "minio:9000"

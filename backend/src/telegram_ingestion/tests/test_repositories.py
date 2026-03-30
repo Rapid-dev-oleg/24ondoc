@@ -25,8 +25,6 @@ from ..infrastructure.user_profile_repository import SQLAlchemyUserProfileReposi
 def make_user_orm(telegram_id: int = 111) -> UserORM:
     row = UserORM()
     row.telegram_id = telegram_id
-    row.chatwoot_user_id = 222
-    row.chatwoot_account_id = 1
     row.role = "agent"
     row.phone_internal = None
     row.voice_sample_url = None
@@ -56,8 +54,6 @@ def make_draft_orm(session_id: uuid.UUID | None = None, user_id: int = 111) -> D
 def make_profile(telegram_id: int = 111) -> UserProfile:
     return UserProfile(
         telegram_id=telegram_id,
-        chatwoot_user_id=222,
-        chatwoot_account_id=1,
     )
 
 
@@ -91,7 +87,6 @@ class TestSQLAlchemyUserProfileRepository:
 
         assert profile is not None
         assert profile.telegram_id == 111
-        assert profile.chatwoot_user_id == 222
         assert profile.role == UserRole.AGENT
 
     async def test_get_by_telegram_id_returns_none_when_not_found(self) -> None:
@@ -102,30 +97,6 @@ class TestSQLAlchemyUserProfileRepository:
 
         repo = SQLAlchemyUserProfileRepository(session)
         profile = await repo.get_by_telegram_id(999)
-
-        assert profile is None
-
-    async def test_get_by_chatwoot_id_returns_profile(self) -> None:
-        session = _mock_session()
-        row = make_user_orm()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = row
-        session.execute = AsyncMock(return_value=mock_result)
-
-        repo = SQLAlchemyUserProfileRepository(session)
-        profile = await repo.get_by_chatwoot_id(222)
-
-        assert profile is not None
-        assert profile.chatwoot_user_id == 222
-
-    async def test_get_by_chatwoot_id_returns_none_when_not_found(self) -> None:
-        session = _mock_session()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        session.execute = AsyncMock(return_value=mock_result)
-
-        repo = SQLAlchemyUserProfileRepository(session)
-        profile = await repo.get_by_chatwoot_id(999)
 
         assert profile is None
 
@@ -140,7 +111,6 @@ class TestSQLAlchemyUserProfileRepository:
         session.add.assert_called_once()
         added: UserORM = session.add.call_args[0][0]
         assert added.telegram_id == 111
-        assert added.chatwoot_user_id == 222
 
     async def test_save_updates_existing_profile(self) -> None:
         session = _mock_session()
@@ -150,15 +120,12 @@ class TestSQLAlchemyUserProfileRepository:
         repo = SQLAlchemyUserProfileRepository(session)
         profile = UserProfile(
             telegram_id=111,
-            chatwoot_user_id=333,
-            chatwoot_account_id=2,
             role=UserRole.SUPERVISOR,
             is_active=False,
         )
         await repo.save(profile)
 
         session.add.assert_not_called()
-        assert row.chatwoot_user_id == 333
         assert row.role == "supervisor"
         assert row.is_active is False
 

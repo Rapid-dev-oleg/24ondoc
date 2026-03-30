@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import cast
@@ -16,18 +17,68 @@ from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from admin.infrastructure.router import router as admin_router
+from ats_processing.application.ats2_poller import ATS2PollerService
+from ats_processing.application.ats2_transcription_mapper import ATS2TranscriptionMapper
+from ats_processing.infrastructure.ats2_client import ATS2AuthManager, ATS2RestClient
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
 from ats_processing.infrastructure.webhook_handler import router as t2_router
-from chatwoot_integration.infrastructure.chatwoot_client import ChatwootClient
-from chatwoot_integration.infrastructure.ticket_repository import (
-    InMemorySupportTicketRepository,
-)
-from chatwoot_integration.infrastructure.webhook_handler import router as cw_router
-from config import get_settings
+from config import Settings, get_settings
 from telegram_ingestion.infrastructure.stt_adapter import OpenRouterSTTAdapter
 from telegram_ingestion.infrastructure.telegram_fastapi import router as tg_router
+from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
 
 logger = structlog.get_logger(__name__)
+
+
+class _NullProcessCall:
+    """No-op placeholder for ProcessCallWebhook until full wiring is available."""
+
+    async def execute(self, call_id: str) -> None:
+        logger.debug("ATS2 ProcessCall stub: call_id=%s (not wired yet)", call_id)
+
+
+class _NullCallRepo:
+    """No-op placeholder for CallRecordRepository in ATS2 poller startup."""
+
+    async def get_by_id(self, call_id: str) -> None:
+        return None
+
+    async def save(self, record: object) -> None:
+        logger.debug("ATS2 CallRepo stub: saving record (not wired yet)")
+
+    async def get_pending(self, limit: int = 10, source: object = None) -> list:  # type: ignore[type-arg]
+        return []
+
+    async def find_recent_by_phone(self, phone: str, limit: int = 10) -> list:  # type: ignore[type-arg]
+        return []
+
+
+def _create_ats2_poller(
+    settings: Settings,
+    session_factory: object,
+) -> ATS2PollerService | None:
+    """Create ATS2PollerService if ATS2_ENABLED=true, else return None."""
+    if not settings.ats2_enabled:
+        return None
+
+    auth_manager = ATS2AuthManager(
+        access_token=settings.ats2_access_token,
+        refresh_token=settings.ats2_refresh_token,
+        base_url=settings.ats2_base_url,
+    )
+    ats2_client = ATS2RestClient(
+        auth_manager=auth_manager,
+        base_url=settings.ats2_base_url,
+    )
+    mapper = ATS2TranscriptionMapper()
+
+    return ATS2PollerService(
+        ats2_client=ats2_client,
+        call_repo=_NullCallRepo(),  # type: ignore[arg-type]
+        process_call_webhook=_NullProcessCall(),  # type: ignore[arg-type]
+        transcription_mapper=mapper,
+        poll_interval_sec=float(settings.ats2_poll_interval_sec),
+    )
 
 
 @asynccontextmanager
@@ -47,13 +98,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         default=DefaultBotProperties(parse_mode="HTML"),
     )
 
-    # Chatwoot client (singleton — uses httpx, no per-request state)
-    chatwoot_client = ChatwootClient(
-        base_url=settings.chatwoot_base_url,
-        api_key=settings.chatwoot_api_key,
-        account_id=settings.chatwoot_support_account_id,
-        redis=redis,
-        inbox_id=settings.chatwoot_inbox_id,
+    # Twenty CRM adapter
+    if not settings.twenty_api_key:
+        logger.warning("TWENTY_API_KEY is empty — Twenty CRM integration disabled")
+    twenty_adapter = TwentyRestAdapter(
+        base_url=settings.twenty_base_url,
+        api_key=settings.twenty_api_key,
     )
 
     # STT adapter: self-hosted Whisper primary, OpenAI API fallback
@@ -62,16 +112,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         whisper_url=settings.whisper_base_url,
     )
 
-    # In-memory SupportTicket cache (persists for process lifetime)
-    ticket_repo = InMemorySupportTicketRepository()
-
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.redis = redis
     app.state.bot = bot
-    app.state.chatwoot_client = chatwoot_client
+    app.state.twenty_adapter = twenty_adapter
     app.state.stt_port = stt_port
-    app.state.ticket_repo = ticket_repo
     app.state.settings = settings
 
     # Register Telegram webhook
@@ -83,8 +129,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     logger.info("Telegram webhook registered", url=webhook_url)
 
+    # ATS2 Poller (background task)
+    ats2_poller = _create_ats2_poller(settings, session_factory=session_factory)
+    ats2_task: asyncio.Task[None] | None = None
+    if ats2_poller is not None:
+        ats2_task = asyncio.create_task(ats2_poller.start())
+        app.state.ats2_poller = ats2_poller
+        logger.info("ATS2 Poller started", interval=settings.ats2_poll_interval_sec)
+    else:
+        logger.info("ATS2 Poller disabled (ATS2_ENABLED=false)")
+
     logger.info("Application started")
     yield
+
+    # Shutdown ATS2 Poller
+    if ats2_poller is not None:
+        ats2_poller.stop()
+        if ats2_task is not None:
+            await asyncio.wait_for(ats2_task, timeout=10.0)
+        logger.info("ATS2 Poller stopped")
 
     await bot.session.close()
     await redis.aclose()
@@ -94,7 +157,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="24ondoc Backend",
-    description="Chatwoot CRM + Telegram Bot + АТС Т2 integration",
+    description="Twenty CRM + Telegram Bot + АТС Т2 integration",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -129,9 +192,7 @@ async def db_session_middleware(request: Request, call_next: object) -> Response
         async with session.begin():
             request.state.db_session = session
             request.state.call_repo = CallRecordRepositoryImpl(session)
-            request.state.ticket_repo = request.app.state.ticket_repo
             request.state.t2_webhook_secret = request.app.state.settings.t2_webhook_secret
-            request.state.chatwoot_webhook_token = request.app.state.settings.chatwoot_webhook_token
             response: Response = await _call_next(request)
     return response
 
@@ -149,5 +210,4 @@ async def metrics() -> dict[str, str]:
 # Handlers already define full paths — include WITHOUT extra prefix
 app.include_router(admin_router)  # /api/admin/*
 app.include_router(t2_router)  # POST /webhook/t2/call
-app.include_router(cw_router)  # POST /webhook/chatwoot
 app.include_router(tg_router)  # POST /webhook/telegram

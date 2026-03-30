@@ -41,9 +41,6 @@ class UserProfileRepository(ABC):
     async def get_by_telegram_id(self, telegram_id: int) -> UserProfile | None: ...
 
     @abstractmethod
-    async def get_by_chatwoot_id(self, chatwoot_user_id: int) -> UserProfile | None: ...
-
-    @abstractmethod
     async def save(self, profile: UserProfile) -> None: ...
 
     @abstractmethod

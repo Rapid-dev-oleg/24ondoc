@@ -21,7 +21,7 @@ from aiogram.types import (
 )
 
 from ai_classification.domain.repository import AIClassificationPort
-from chatwoot_integration.application.use_cases import CreateTicketFromSession
+from twenty_integration.application.use_cases import CreateTwentyTaskFromSession
 
 from ..application.ports import UserProfilePort
 from ..application.registration_use_cases import (
@@ -74,6 +74,11 @@ class SettingsFSMStates(StatesGroup):
     voice_sample = State()
 
 
+class OperatorLinkStates(StatesGroup):
+    choosing_member = State()
+    entering_telegram_id = State()
+
+
 def _collect_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -124,10 +129,13 @@ def create_router(
     *,
     ai_port: AIClassificationPort | None = None,
     set_analysis_result: SetAnalysisResultUseCase | None = None,
-    create_ticket: CreateTicketFromSession | None = None,
+    create_twenty_task: CreateTwentyTaskFromSession | None = None,
     draft_repo: DraftSessionRepository | None = None,
+    twenty_crm_port: Any = None,
 ) -> Router:
     """Create and configure the telegram ingestion router with injected use cases."""
+    from ..domain.models import UserRole
+
     router = Router(name="telegram_ingestion")
 
     @router.message(Command("start"))
@@ -139,9 +147,7 @@ def create_router(
         if auto_register is not None:
             first_name = message.from_user.first_name or ""
             try:
-                profile, password, is_new = await auto_register.execute(
-                    message.from_user.id, first_name
-                )
+                profile, is_new = await auto_register.execute(message.from_user.id, first_name)
             except Exception:
                 logger.exception("Auto-registration failed for user %s", message.from_user.id)
                 await message.answer(
@@ -150,13 +156,8 @@ def create_router(
                 return
             try:
                 if is_new:
-                    email = profile.settings.get("email", f"{profile.telegram_id}@24ondoc.ru")
                     await message.answer(
                         "✅ Вы успешно зарегистрированы в системе 24ondoc!\n\n"
-                        f"📧 Email: <code>{email}</code>\n"
-                        f"🔑 Пароль: <code>{password}</code>\n"
-                        f"🔗 CRM: {_CRM_URL}\n\n"
-                        "Для смены пароля: войдите в CRM → Настройки профиля → Пароль.\n\n"
                         "Используйте /settings для настройки профиля."
                     )
                 else:
@@ -405,7 +406,7 @@ def create_router(
             await callback.answer()
             return
 
-        if create_ticket is None or draft_repo is None:
+        if create_twenty_task is None or draft_repo is None:
             await callback.answer("❌ CRM-интеграция недоступна.", show_alert=True)
             return
 
@@ -422,22 +423,94 @@ def create_router(
                 await callback.answer("❌ Сессия не найдена.", show_alert=True)
                 return
 
+            # Determine assignee from user profile
             profile = await user_port.get_profile(callback.from_user.id)
-            contact_id = profile.chatwoot_contact_id if profile is not None else None
-            ticket = await create_ticket.execute(fetched, contact_id=contact_id)
-            if ticket is None:
-                await callback.answer("❌ Ошибка создания задачи.", show_alert=True)
-                return
+            assignee_id = profile.twenty_member_id if profile else None
+
+            task = await create_twenty_task.execute(
+                fetched,
+                telegram_id=callback.from_user.id,
+                user_name=callback.from_user.first_name or "",
+                assignee_id=assignee_id,
+            )
 
             await cancel_session.execute(callback.from_user.id)
             await state.clear()
-            await callback.answer(f"✅ Задача #{ticket.task_id} создана в CRM!")
+            await callback.answer("✅ Задача создана в CRM!")
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(
-                    f"✅ Задача <b>#{ticket.task_id}</b> создана в CRM.\n{ticket.title}"
+                    f"✅ Задача <b>{task.title}</b> создана в Twenty CRM."
                 )
         except Exception:
             await callback.answer("❌ Ошибка создания задачи.", show_alert=True)
+
+    # ---------- /operators command (DEV-122) ----------
+
+    @router.message(Command("operators"))
+    async def cmd_operators(message: Message, state: FSMContext) -> None:
+        if message.from_user is None:
+            return
+        profile = await user_port.get_profile(message.from_user.id)
+        if profile is None or profile.role not in (UserRole.ADMIN, UserRole.SUPERVISOR):
+            await message.answer("🔒 Нет доступа.")
+            return
+        if twenty_crm_port is None:
+            await message.answer("❌ Интеграция с Twenty недоступна.")
+            return
+        try:
+            members = await twenty_crm_port.list_workspace_members()
+            if not members:
+                await message.answer("❌ Нет членов workspace.")
+                return
+            await state.set_state(OperatorLinkStates.choosing_member)
+            await message.answer(
+                "👥 Выберите члена workspace для привязки к Telegram ID:",
+                reply_markup=_operators_keyboard(members),
+            )
+        except Exception as e:
+            logger.error("Error listing workspace members: %s", e)
+            await message.answer("❌ Ошибка получения членов workspace.")
+
+    @router.callback_query(OperatorLinkStates.choosing_member, F.data.startswith("select_member:"))
+    async def cb_select_member(callback: CallbackQuery, state: FSMContext) -> None:
+        if callback.from_user is None:
+            await callback.answer()
+            return
+        if callback.data is None:
+            return
+        twenty_member_id = callback.data.split(":", 1)[1]
+        await state.update_data(twenty_member_id=twenty_member_id)
+        await state.set_state(OperatorLinkStates.entering_telegram_id)
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                "📱 Введите Telegram ID оператора (или telegram_id в формате числа):"
+            )
+
+    @router.message(OperatorLinkStates.entering_telegram_id, F.text)
+    async def handle_telegram_id(message: Message, state: FSMContext) -> None:
+        if message.from_user is None or message.text is None:
+            return
+        try:
+            telegram_id = int(message.text.strip())
+        except ValueError:
+            await message.answer("❌ Некорректный Telegram ID. Введите число.")
+            return
+        state_data = await state.get_data()
+        twenty_member_id = state_data.get("twenty_member_id")
+        if not twenty_member_id:
+            await message.answer("❌ Ошибка: member_id не найден.")
+            await state.clear()
+            return
+        updated = await user_port.update_twenty_member_id(telegram_id, twenty_member_id)
+        if updated is None:
+            await message.answer(f"❌ Оператор с Telegram ID {telegram_id} не найден в системе.")
+        else:
+            name = updated.settings.get("display_name", telegram_id)
+            await message.answer(
+                f"✅ Оператор {name} привязан к члену workspace (ID: {twenty_member_id})"
+            )
+        await state.clear()
 
     return router
 
@@ -514,8 +587,8 @@ def _task_detail_keyboard(
 def _reassign_keyboard(task_id: int, agents: Sequence[Any]) -> InlineKeyboardMarkup:
     buttons: list[list[InlineKeyboardButton]] = []
     for agent in agents:
-        label = f"👤 {agent.telegram_id} (cwt:{agent.chatwoot_user_id})"
-        cb = f"reassign_to:{task_id}:{agent.chatwoot_user_id}"
+        label = f"👤 {agent.telegram_id}"
+        cb = f"reassign_to:{task_id}:{agent.telegram_id}"
         buttons.append([InlineKeyboardButton(text=label, callback_data=cb)])
     buttons.append([InlineKeyboardButton(text="◀ Отмена", callback_data="tasks_back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -684,7 +757,7 @@ def create_tasks_router(
         ok = await reassign_task.execute(
             requester_telegram_id=callback.from_user.id,
             task_id=task_id,
-            target_chatwoot_user_id=target_chatwoot_id,
+            target_user_id=target_chatwoot_id,
         )
         if ok:
             await callback.answer("✅ Задача переназначена!")
@@ -738,6 +811,20 @@ def create_tasks_router(
 
 
 # ---------- Settings Router ----------
+
+
+def _operators_keyboard(members: Sequence[Any]) -> InlineKeyboardMarkup:
+    """Создаёт inline клавиатуру со списком членов workspace."""
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=f"{member.first_name} {member.last_name} ({member.email})",
+                callback_data=f"select_member:{member.twenty_id}",
+            )
+        ]
+        for member in members
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def _settings_keyboard() -> InlineKeyboardMarkup:

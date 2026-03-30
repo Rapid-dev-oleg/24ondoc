@@ -17,7 +17,7 @@ from ..application.use_cases import (
     ProcessCallWebhook,
     TelegramNotificationPort,
 )
-from ..domain.models import CallRecord, CallStatus
+from ..domain.models import CallRecord, CallStatus, SourceType
 from ..domain.repository import AgentVoiceSampleRepository, CallRecordRepository
 
 # ---------- Stubs ----------
@@ -35,7 +35,9 @@ class StubCallRepo(CallRecordRepository):
         self.saved.append(record)
         self._record = record
 
-    async def get_pending(self, limit: int = 10) -> list[CallRecord]:
+    async def get_pending(
+        self, limit: int = 10, source: SourceType | None = None
+    ) -> list[CallRecord]:
         return []
 
     async def find_recent_by_phone(self, phone: str, limit: int = 10) -> list[CallRecord]:

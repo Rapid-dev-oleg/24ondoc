@@ -22,3 +22,13 @@ class UserProfilePortAdapter(UserProfilePort):
 
     async def list_active_agents(self) -> list[UserProfile]:
         return await self._repo.list_active()
+
+    async def update_twenty_member_id(
+        self, telegram_id: int, twenty_member_id: str
+    ) -> UserProfile | None:
+        profile = await self._repo.get_by_telegram_id(telegram_id)
+        if profile is None:
+            return None
+        profile.twenty_member_id = twenty_member_id
+        await self._repo.save(profile)
+        return profile

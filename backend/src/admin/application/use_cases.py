@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import secrets
 import time
 
 from admin.application.ports import ChatwootAdminPort, EnvSettingsPort, TelegramNotificationPort
@@ -38,9 +37,7 @@ class ListUsersUseCase:
         return [
             UserResponse(
                 telegram_id=u.telegram_id,
-                chatwoot_user_id=u.chatwoot_user_id,
-                chatwoot_account_id=u.chatwoot_account_id,
-                chatwoot_contact_id=u.chatwoot_contact_id,
+                twenty_member_id=u.twenty_member_id,
                 role=u.role,
                 phone_internal=u.phone_internal,
                 voice_sample_url=u.voice_sample_url,
@@ -73,7 +70,7 @@ class CreateUserDirectUseCase:
         if existing is not None:
             raise ValueError(f"User {request.telegram_id} already exists")
 
-        chatwoot_user_id = await self._chatwoot.create_agent(
+        await self._chatwoot.create_agent(
             name=request.name,
             email=request.email,
             role=request.role.value,
@@ -81,19 +78,15 @@ class CreateUserDirectUseCase:
 
         profile = UserProfile(
             telegram_id=request.telegram_id,
-            chatwoot_user_id=chatwoot_user_id,
-            chatwoot_account_id=self._account_id,
             role=request.role,
         )
         await self._users.save(profile)
 
-        password = secrets.token_urlsafe(12)
         text = (
             "✅ Вы зарегистрированы в системе 24ondoc!\n\n"
             f"Имя: {request.name}\n"
             f"Email: {request.email}\n"
             f"Роль: {request.role.value}\n\n"
-            f"Временный пароль Chatwoot: {password}\n"
             "На email придёт приглашение для активации аккаунта.\n\n"
             "Используйте /new_task в боте для создания задач."
         )
@@ -101,9 +94,7 @@ class CreateUserDirectUseCase:
 
         return UserResponse(
             telegram_id=profile.telegram_id,
-            chatwoot_user_id=profile.chatwoot_user_id,
-            chatwoot_account_id=profile.chatwoot_account_id,
-            chatwoot_contact_id=profile.chatwoot_contact_id,
+            twenty_member_id=profile.twenty_member_id,
             role=profile.role,
             phone_internal=profile.phone_internal,
             voice_sample_url=profile.voice_sample_url,
@@ -140,9 +131,7 @@ class UpdateUserUseCase:
             await self._users.save(user)
         return UserResponse(
             telegram_id=user.telegram_id,
-            chatwoot_user_id=user.chatwoot_user_id,
-            chatwoot_account_id=user.chatwoot_account_id,
-            chatwoot_contact_id=user.chatwoot_contact_id,
+            twenty_member_id=user.twenty_member_id,
             role=user.role,
             phone_internal=user.phone_internal,
             voice_sample_url=user.voice_sample_url,
@@ -154,7 +143,7 @@ class UpdateUserUseCase:
 
 
 class DeactivateUserUseCase:
-    """Set is_active=False for a user (soft delete) and remove agent from Chatwoot CRM."""
+    """Set is_active=False for a user (soft delete)."""
 
     def __init__(self, user_repo: UserProfileRepository, chatwoot: ChatwootAdminPort) -> None:
         self._users = user_repo
@@ -166,12 +155,11 @@ class DeactivateUserUseCase:
             return False
         user = user.model_copy(update={"is_active": False})
         await self._users.save(user)
-        await self._chatwoot.delete_agent(user.chatwoot_user_id)
         return True
 
 
 class DeleteUserUseCase:
-    """Hard-delete a user from DB and remove agent from Chatwoot CRM."""
+    """Hard-delete a user from DB."""
 
     def __init__(self, user_repo: UserProfileRepository, chatwoot: ChatwootAdminPort) -> None:
         self._users = user_repo
@@ -181,7 +169,6 @@ class DeleteUserUseCase:
         user = await self._users.get_by_telegram_id(telegram_id)
         if user is None:
             return False
-        await self._chatwoot.delete_agent(user.chatwoot_user_id)
         await self._users.delete_by_telegram_id(telegram_id)
         return True
 

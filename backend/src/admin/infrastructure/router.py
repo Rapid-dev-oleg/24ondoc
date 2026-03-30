@@ -9,8 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from admin.application.use_cases import (
-    CreateUserDirectUseCase,
-    DeleteUserUseCase,
     GetSettingsUseCase,
     ListUsersUseCase,
     LoginWithTelegramUseCase,
@@ -29,7 +27,6 @@ from admin.domain.models import (
     UserResponse,
 )
 from admin.infrastructure.auth import create_access_token, require_admin_role
-from admin.infrastructure.chatwoot_admin_client import ChatwootAdminClient
 from admin.infrastructure.env_settings import DotEnvSettingsPort
 from admin.infrastructure.telegram_notify import TelegramNotifyAdapter
 from config import get_settings
@@ -141,25 +138,41 @@ async def list_users(request: Request, _: AdminPayload) -> list[UserResponse]:
 async def create_user(body: CreateUserRequest, request: Request, _: AdminPayload) -> UserResponse:
     settings = get_settings()
     db_session = request.state.db_session
-    chatwoot = ChatwootAdminClient(
-        base_url=settings.chatwoot_base_url,
-        api_key=settings.chatwoot_api_key,
-        account_id=settings.chatwoot_support_account_id,
-        platform_api_key=settings.chatwoot_platform_api_key,
-    )
+    user_repo = SQLAlchemyUserProfileRepository(db_session)
+
+    existing = await user_repo.get_by_telegram_id(body.telegram_id)
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"User {body.telegram_id} already exists",
+        )
+
+    from telegram_ingestion.domain.models import UserProfile
+
+    profile = UserProfile(telegram_id=body.telegram_id, role=body.role)
+    await user_repo.save(profile)
+
     notify = TelegramNotifyAdapter(bot_token=settings.telegram_bot_token)
-    uc = CreateUserDirectUseCase(
-        chatwoot=chatwoot,
-        user_repo=SQLAlchemyUserProfileRepository(db_session),
-        notify=notify,
-        account_id=settings.chatwoot_support_account_id,
+    text = (
+        "✅ Вы зарегистрированы в системе 24ondoc!\n\n"
+        f"Имя: {body.name}\n"
+        f"Email: {body.email}\n"
+        f"Роль: {body.role.value}\n\n"
+        "Используйте /new_task в боте для создания задач."
     )
-    try:
-        return await uc.execute(body)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    await notify.send_message(body.telegram_id, text)
+
+    return UserResponse(
+        telegram_id=profile.telegram_id,
+        twenty_member_id=profile.twenty_member_id,
+        role=profile.role,
+        phone_internal=profile.phone_internal,
+        voice_sample_url=profile.voice_sample_url,
+        settings=profile.settings,
+        is_active=profile.is_active,
+        is_pending=False,
+        created_at=profile.created_at,
+    )
 
 
 @router.patch("/api/admin/users/{telegram_id}", response_model=UserResponse)
@@ -176,18 +189,12 @@ async def update_user(
 
 @router.delete("/api/admin/users/{telegram_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(telegram_id: int, request: Request, _: AdminPayload) -> None:
-    settings = get_settings()
     db_session = request.state.db_session
-    chatwoot = ChatwootAdminClient(
-        base_url=settings.chatwoot_base_url,
-        api_key=settings.chatwoot_api_key,
-        account_id=settings.chatwoot_support_account_id,
-        platform_api_key=settings.chatwoot_platform_api_key,
-    )
-    uc = DeleteUserUseCase(SQLAlchemyUserProfileRepository(db_session), chatwoot)
-    found = await uc.execute(telegram_id)
-    if not found:
+    user_repo = SQLAlchemyUserProfileRepository(db_session)
+    user = await user_repo.get_by_telegram_id(telegram_id)
+    if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    await user_repo.delete_by_telegram_id(telegram_id)
 
 
 # ---------------------------------------------------------------------------
