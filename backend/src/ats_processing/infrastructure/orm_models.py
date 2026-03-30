@@ -19,6 +19,7 @@ class CallRecordORM(ATSBase):
 
     call_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     audio_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    source: Mapped[str] = mapped_column(String(50), default="call_t2_webhook", nullable=False)
     transcription_t2: Mapped[str | None] = mapped_column(Text, nullable=True)
     transcription_whisper: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration: Mapped[int | None] = mapped_column(Integer, nullable=True)

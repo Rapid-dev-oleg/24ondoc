@@ -17,11 +17,17 @@ class CallStatus(StrEnum):
     ERROR = "error"
 
 
+class SourceType(StrEnum):
+    CALL_T2_WEBHOOK = "call_t2_webhook"
+    CALL_ATS2_POLLING = "call_ats2_polling"
+
+
 class CallRecord(BaseModel):
     """Aggregate Root: запись звонка от АТС Т2."""
 
     call_id: str
     audio_url: str
+    source: SourceType = SourceType.CALL_T2_WEBHOOK
     transcription_t2: str | None = None
     transcription_whisper: str | None = None
     duration: int | None = None

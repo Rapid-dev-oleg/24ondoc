@@ -2,7 +2,7 @@
 
 import pytest
 
-from ..domain.models import CallRecord, CallStatus
+from ..domain.models import CallRecord, CallStatus, SourceType
 
 
 def make_call(call_id: str = "t2_001") -> CallRecord:
@@ -61,3 +61,15 @@ class TestCallRecord:
         call = make_call()
         with pytest.raises(ValueError, match="preview state"):
             call.mark_created()
+
+    def test_call_record_stores_source_type(self) -> None:
+        """AC: CallRecord хранит source_type с дефолтом call_t2_webhook."""
+        call = make_call()
+        assert call.source == SourceType.CALL_T2_WEBHOOK
+
+        call_polling = CallRecord(
+            call_id="ats2_001",
+            audio_url="https://example.com/rec.mp3",
+            source=SourceType.CALL_ATS2_POLLING,
+        )
+        assert call_polling.source == SourceType.CALL_ATS2_POLLING

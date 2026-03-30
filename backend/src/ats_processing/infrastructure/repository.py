@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..domain.models import CallRecord, CallStatus
+from ..domain.models import CallRecord, CallStatus, SourceType
 from ..domain.repository import CallRecordRepository
 from .orm_models import CallRecordORM
 
@@ -28,13 +28,16 @@ class CallRecordRepositoryImpl(CallRecordRepository):
             self._update_orm(row, record)
         await self._session.flush()
 
-    async def get_pending(self, limit: int = 10) -> list[CallRecord]:
-        result = await self._session.execute(
-            select(CallRecordORM)
-            .where(CallRecordORM.status == CallStatus.NEW.value)
-            .order_by(CallRecordORM.created_at.asc())
-            .limit(limit)
+    async def get_pending(
+        self, limit: int = 10, source: SourceType | None = None
+    ) -> list[CallRecord]:
+        query = select(CallRecordORM).where(
+            CallRecordORM.status == CallStatus.NEW.value
         )
+        if source is not None:
+            query = query.where(CallRecordORM.source == source.value)
+        query = query.order_by(CallRecordORM.created_at.asc()).limit(limit)
+        result = await self._session.execute(query)
         return [self._to_domain(row) for row in result.scalars()]
 
     async def find_recent_by_phone(self, phone: str, limit: int = 10) -> list[CallRecord]:
@@ -51,6 +54,7 @@ class CallRecordRepositoryImpl(CallRecordRepository):
         return CallRecord(
             call_id=row.call_id,
             audio_url=row.audio_url,
+            source=SourceType(row.source),
             transcription_t2=row.transcription_t2,
             transcription_whisper=row.transcription_whisper,
             duration=row.duration,
@@ -68,6 +72,7 @@ class CallRecordRepositoryImpl(CallRecordRepository):
         return CallRecordORM(
             call_id=record.call_id,
             audio_url=record.audio_url,
+            source=record.source.value,
             transcription_t2=record.transcription_t2,
             transcription_whisper=record.transcription_whisper,
             duration=record.duration,
@@ -83,6 +88,7 @@ class CallRecordRepositoryImpl(CallRecordRepository):
     @staticmethod
     def _update_orm(row: CallRecordORM, record: CallRecord) -> None:
         row.audio_url = record.audio_url
+        row.source = record.source.value
         row.transcription_t2 = record.transcription_t2
         row.transcription_whisper = record.transcription_whisper
         row.duration = record.duration
