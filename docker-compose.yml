@@ -244,10 +244,14 @@ services:
       - STORAGE_TYPE=local
       - STORAGE_LOCAL_PATH=.local-storage
       - IS_SIGN_UP_DISABLED=${TWENTY_SIGN_UP_DISABLED:-false}
+      - REDIS_URL=redis://redis:6379/2
+      - CACHE_STORAGE_TYPE=redis
     volumes:
       - twenty_data:/app/.local-storage
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
