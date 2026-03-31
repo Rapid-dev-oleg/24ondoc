@@ -62,6 +62,7 @@ def _create_ats2_poller(
     settings: Settings,
     session_factory: async_sessionmaker,  # type: ignore[type-arg]
     twenty_adapter: TwentyRestAdapter | None = None,
+    redis: AsyncRedis | None = None,
 ) -> ATS2PollerService | None:
     """Create ATS2PollerService if ATS2_ENABLED=true, else return None."""
     if not settings.ats2_enabled:
@@ -97,6 +98,7 @@ def _create_ats2_poller(
         ai_port=ai_port,
         twenty_port=twenty_adapter if settings.twenty_api_key else None,
         stt_port=stt_port,
+        redis=redis,
         poll_interval_sec=float(settings.ats2_poll_interval_sec),
     )
 
@@ -126,10 +128,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         api_key=settings.twenty_api_key,
     )
 
-    # STT adapter: self-hosted Whisper primary, OpenAI API fallback
+    # STT adapter: Groq primary, self-hosted Whisper fallback, OpenAI last
     stt_port = OpenRouterSTTAdapter(
         api_key=settings.openai_api_key or settings.openrouter_api_key,
         whisper_url=settings.whisper_base_url,
+        groq_api_key=settings.groq_api_key,
     )
 
     app.state.engine = engine
@@ -154,6 +157,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings,
         session_factory=session_factory,
         twenty_adapter=twenty_adapter if settings.twenty_api_key else None,
+        redis=redis,
     )
     ats2_task: asyncio.Task[None] | None = None
     if ats2_poller is not None:

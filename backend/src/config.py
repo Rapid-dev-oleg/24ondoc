@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Whisper self-hosted
     whisper_base_url: str = "http://whisper:9000"
 
+    # Groq (Whisper transcription)
+    groq_api_key: str = ""
+
     # T2 ATS
     t2_webhook_secret: str
 

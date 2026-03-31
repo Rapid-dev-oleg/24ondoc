@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ai_classification.domain.repository import AIClassificationPort
+from redis.asyncio import Redis as AsyncRedis
 from telegram_ingestion.application.ports import STTPort
 from twenty_integration.domain.ports import TwentyCRMPort
 
@@ -15,6 +16,8 @@ from ..domain.models import CallRecord, SourceType
 from ..domain.repository import CallRecordRepository
 from .ats2_transcription_mapper import ATS2TranscriptionMapper, ATS2Word
 from .ports import ATS2CallSourcePort
+
+_REDIS_LAST_POLL_KEY = "ats2_poller:last_poll_timestamp"
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,7 @@ class ATS2PollerService:
         ai_port: AIClassificationPort | None = None,
         twenty_port: TwentyCRMPort | None = None,
         stt_port: STTPort | None = None,
+        redis: AsyncRedis | None = None,
         poll_interval_sec: float = _DEFAULT_POLL_INTERVAL_SEC,
     ) -> None:
         self._ats2_client = ats2_client
@@ -43,13 +47,33 @@ class ATS2PollerService:
         self._ai_port = ai_port
         self._twenty_port = twenty_port
         self._stt_port = stt_port
+        self._redis = redis
         self._poll_interval_sec = poll_interval_sec
-        self._last_poll_timestamp: datetime = datetime.now(UTC) - timedelta(hours=1)
+        self._last_poll_timestamp: datetime | None = None
         self._running: bool = False
         self._stop_event: asyncio.Event = asyncio.Event()
 
+    async def _load_last_poll_timestamp(self) -> datetime:
+        """Load from Redis or fallback to 1 hour ago."""
+        if self._redis is not None:
+            raw = await self._redis.get(_REDIS_LAST_POLL_KEY)
+            if raw is not None:
+                try:
+                    ts = datetime.fromisoformat(raw.decode())
+                    logger.info("ATS2 Poller: restored timestamp from Redis: %s", ts)
+                    return ts
+                except (ValueError, AttributeError):
+                    pass
+        return datetime.now(UTC) - timedelta(hours=1)
+
+    async def _save_last_poll_timestamp(self, ts: datetime) -> None:
+        """Persist to Redis."""
+        if self._redis is not None:
+            await self._redis.set(_REDIS_LAST_POLL_KEY, ts.isoformat())
+
     async def start(self) -> None:
         """Запустить цикл опроса."""
+        self._last_poll_timestamp = await self._load_last_poll_timestamp()
         self._running = True
         self._stop_event.clear()
         logger.info("ATS2 Poller started, interval=%ss", self._poll_interval_sec)
@@ -100,6 +124,7 @@ class ATS2PollerService:
             logger.info("ATS2 Poller: обработано %d новых звонков", new_count)
 
         self._last_poll_timestamp = now
+        await self._save_last_poll_timestamp(now)
 
     async def _process_new_call(self, raw_call: dict[str, object], call_id: str) -> None:
         """Обработать новый звонок: сохранить → транскрипция → AI → задача."""
