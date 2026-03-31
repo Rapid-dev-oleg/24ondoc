@@ -45,15 +45,20 @@ class OpenRouterSTTAdapter(STTPort):
 
     async def _transcribe_self_hosted(self, file_bytes: bytes) -> str:
         """Call self-hosted openai-whisper-asr-webservice /asr endpoint."""
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+        # Detect format by magic bytes
+        is_mp3 = file_bytes[:3] == b"ID3" or (file_bytes[:2] == b"\xff\xfb")
+        ext = ".mp3" if is_mp3 else ".ogg"
+        mime = "audio/mpeg" if is_mp3 else "audio/ogg"
+
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
             tmp.write(file_bytes)
             tmp_path = tmp.name
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=180.0) as client:
                 with open(tmp_path, "rb") as f:
                     response = await client.post(
                         f"{self._whisper_url}/asr",
-                        files={"audio_file": ("audio.ogg", f, "audio/ogg")},
+                        files={"audio_file": (f"audio{ext}", f, mime)},
                         params={"language": "ru", "output": "txt"},
                     )
                     response.raise_for_status()

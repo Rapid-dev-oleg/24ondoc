@@ -44,7 +44,7 @@ class ATS2PollerService:
         self._twenty_port = twenty_port
         self._stt_port = stt_port
         self._poll_interval_sec = poll_interval_sec
-        self._last_poll_timestamp: datetime = datetime.now(UTC) - timedelta(minutes=5)
+        self._last_poll_timestamp: datetime = datetime.now(UTC) - timedelta(hours=1)
         self._running: bool = False
         self._stop_event: asyncio.Event = asyncio.Event()
 

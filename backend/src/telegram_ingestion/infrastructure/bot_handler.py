@@ -631,7 +631,7 @@ def create_router(
         if isinstance(callback.message, Message):
             await callback.message.edit_text(
                 f"🔗 Ссылка для добавления <b>{role_label}</b>:\n\n"
-                f"<code>{link}</code>\n\n"
+                f"<a href=\"{link}\">Открыть бот и зарегистрироваться</a>\n\n"
                 f"Отправьте эту ссылку пользователю. "
                 f"При переходе он автоматически зарегистрируется в системе.\n"
                 f"Ссылка действительна 7 дней."
