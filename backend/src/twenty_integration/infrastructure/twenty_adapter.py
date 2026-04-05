@@ -256,10 +256,53 @@ class TwentyRestAdapter(TwentyCRMPort):
     # -- TaskCRMPort protocol methods (stub implementations for migration) --
 
     async def get_conversations(
-        self, assignee_id: int, status: str = "open", page: int = 1
+        self, assignee_id: str, status: str = "open", page: int = 1
     ) -> list[Any]:
-        """Получить задачи (stub — TODO: реализовать через Twenty tasks API)."""
-        return []
+        """Получить задачи пользователя из Twenty CRM."""
+        try:
+            # Map status: open → TODO/V_RABOTE
+            status_filter = "TODO"
+            if status == "resolved":
+                status_filter = "VYPOLNENO"
+
+            params: dict[str, str] = {
+                "filter": f"assigneeId[eq]:{assignee_id}",
+                "limit": "20",
+            }
+            response = await self._client.get("/rest/tasks", params=params)
+            response.raise_for_status()
+            data = response.json()
+            tasks = data.get("data", {}).get("tasks", [])
+
+            from types import SimpleNamespace
+            from enum import Enum
+
+            class _Status(Enum):
+                TODO = "TODO"
+                V_RABOTE = "V_RABOTE"
+                VYPOLNENO = "VYPOLNENO"
+                KORZINA = "KORZINA"
+
+            result = []
+            for t in tasks:
+                task_status = t.get("status", "TODO")
+                # Filter by requested status
+                if status == "open" and task_status not in ("TODO", "V_RABOTE"):
+                    continue
+                try:
+                    s = _Status(task_status)
+                except ValueError:
+                    s = _Status.TODO
+                result.append(SimpleNamespace(
+                    task_id=t.get("id", ""),
+                    title=t.get("title", ""),
+                    status=s,
+                    assignee_chatwoot_id=assignee_id,
+                ))
+            return result
+        except Exception:
+            logger.exception("Failed to get tasks from Twenty")
+            return []
 
     async def update_conversation_status(self, task_id: int, status: str) -> None:
         """Обновить статус задачи (stub)."""

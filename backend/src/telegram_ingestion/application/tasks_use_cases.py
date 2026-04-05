@@ -12,7 +12,7 @@ class TaskCRMPort(Protocol):
     """Minimal protocol for task-management CRM operations used by task use cases."""
 
     async def get_conversations(
-        self, assignee_id: int, status: str = "open", page: int = 1
+        self, assignee_id: str, status: str = "open", page: int = 1
     ) -> list[Any]: ...
 
     async def update_conversation_status(self, task_id: int, status: str) -> None: ...
@@ -31,10 +31,10 @@ class GetMyTasksUseCase:
 
     async def execute(self, telegram_id: int, page: int = 1) -> list[Any]:
         profile = await self._user_port.get_profile(telegram_id)
-        if profile is None:
+        if profile is None or not profile.twenty_member_id:
             return []
         result: list[Any] = await self._crm_port.get_conversations(
-            assignee_id=profile.telegram_id,
+            assignee_id=profile.twenty_member_id,
             status="open",
             page=page,
         )
