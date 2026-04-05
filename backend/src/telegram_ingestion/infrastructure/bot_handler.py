@@ -82,6 +82,11 @@ class OperatorLinkStates(StatesGroup):
 class AddUserStates(StatesGroup):
     choosing_member = State()
 
+
+class ATS2TokenStates(StatesGroup):
+    entering_access_token = State()
+    entering_refresh_token = State()
+
 _INVITE_TTL = 86400 * 7  # 7 days
 
 
@@ -148,6 +153,7 @@ def create_router(
     bot_username: str = "",
     call_repo: Any = None,
     settings: Any = None,
+    ats2_auth_manager: Any = None,
 ) -> Router:
     """Create and configure the telegram ingestion router with injected use cases."""
     from ..domain.models import UserRole
@@ -841,7 +847,118 @@ def create_router(
 
         await message.answer("\n".join(lines))
 
+    # ---------- ATS2 token management (admin) ----------
+
+    @router.message(Command("ats2_access_token"))
+    async def cmd_ats2_access_token(message: Message, state: FSMContext) -> None:
+        if message.from_user is None:
+            return
+        profile = await user_port.get_profile(message.from_user.id)
+        if profile is None or profile.role != UserRole.ADMIN:
+            await message.answer("🔒 Нет доступа.")
+            return
+        if ats2_auth_manager is None:
+            await message.answer("⚠️ ATS2 отключён.")
+            return
+        await state.set_state(ATS2TokenStates.entering_access_token)
+        await message.answer("🔑 Отправьте новый <b>Access Token</b> для ATS2:")
+
+    @router.message(ATS2TokenStates.entering_access_token, F.text)
+    async def handle_ats2_access_token(message: Message, state: FSMContext) -> None:
+        if message.from_user is None or message.text is None:
+            return
+        token = message.text.strip()
+        if not token or len(token) < 10:
+            await message.answer("❌ Токен слишком короткий. Попробуйте ещё раз.")
+            return
+
+        try:
+            old_refresh = ats2_auth_manager._refresh_token
+            ats2_auth_manager.update_tokens(access_token=token, refresh_token=old_refresh)
+
+            # Update .env file
+            if settings is not None:
+                _update_env_var(settings.env_file_path, "ATS2_ACCESS_TOKEN", token)
+
+            await state.clear()
+            await message.answer("✅ Access Token обновлён.")
+            # Delete the message with token for security
+            try:
+                await message.delete()
+            except Exception:
+                pass
+        except Exception:
+            logger.exception("Failed to update ATS2 access token")
+            await state.clear()
+            await message.answer("❌ Ошибка обновления токена.")
+
+    @router.message(Command("ats2_refresh_token"))
+    async def cmd_ats2_refresh_token(message: Message, state: FSMContext) -> None:
+        if message.from_user is None:
+            return
+        profile = await user_port.get_profile(message.from_user.id)
+        if profile is None or profile.role != UserRole.ADMIN:
+            await message.answer("🔒 Нет доступа.")
+            return
+        if ats2_auth_manager is None:
+            await message.answer("⚠️ ATS2 отключён.")
+            return
+        await state.set_state(ATS2TokenStates.entering_refresh_token)
+        await message.answer("🔑 Отправьте новый <b>Refresh Token</b> для ATS2:")
+
+    @router.message(ATS2TokenStates.entering_refresh_token, F.text)
+    async def handle_ats2_refresh_token(message: Message, state: FSMContext) -> None:
+        if message.from_user is None or message.text is None:
+            return
+        token = message.text.strip()
+        if not token or len(token) < 10:
+            await message.answer("❌ Токен слишком короткий. Попробуйте ещё раз.")
+            return
+
+        try:
+            old_access = ats2_auth_manager._access_token
+            ats2_auth_manager.update_tokens(access_token=old_access, refresh_token=token)
+
+            # Update .env file
+            if settings is not None:
+                _update_env_var(settings.env_file_path, "ATS2_REFRESH_TOKEN", token)
+
+            await state.clear()
+            await message.answer("✅ Refresh Token обновлён.")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+        except Exception:
+            logger.exception("Failed to update ATS2 refresh token")
+            await state.clear()
+            await message.answer("❌ Ошибка обновления токена.")
+
     return router
+
+
+def _update_env_var(env_path: str, key: str, value: str) -> None:
+    """Update a variable in .env file."""
+    import os
+
+    path = env_path if os.path.isabs(env_path) else f"/app/24ondoc/{env_path}"
+    if not os.path.exists(path):
+        return
+
+    with open(path) as f:
+        lines = f.readlines()
+
+    found = False
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[i] = f"{key}={value}\n"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}\n")
+
+    with open(path, "w") as f:
+        f.writelines(lines)
 
 
 # ---------- Tasks Router ----------

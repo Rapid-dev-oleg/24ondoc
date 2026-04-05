@@ -31,6 +31,12 @@ class ATS2AuthManager:
         self._base_url = base_url.rstrip("/")
         self._proxy_url = proxy_url or None
 
+    def update_tokens(self, access_token: str, refresh_token: str) -> None:
+        """Update tokens in memory (called from admin UI)."""
+        self._access_token = access_token
+        self._refresh_token = refresh_token
+        logger.info("ATS2 tokens updated manually")
+
     async def get_access_token(self) -> str:
         return self._access_token
 

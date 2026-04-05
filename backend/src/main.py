@@ -70,7 +70,7 @@ def _create_ats2_poller(
     session_factory: async_sessionmaker,  # type: ignore[type-arg]
     twenty_adapter: TwentyRestAdapter | None = None,
     redis: AsyncRedis | None = None,
-) -> ATS2PollerService | None:
+) -> tuple[ATS2PollerService, ATS2AuthManager] | None:
     """Create ATS2PollerService if ATS2_ENABLED=true, else return None."""
     if not settings.ats2_enabled:
         return None
@@ -98,7 +98,7 @@ def _create_ats2_poller(
         whisper_url=settings.whisper_base_url,
     )
 
-    return ATS2PollerService(
+    poller = ATS2PollerService(
         ats2_client=ats2_client,
         call_repo=call_repo,  # type: ignore[arg-type]
         transcription_mapper=mapper,
@@ -108,6 +108,7 @@ def _create_ats2_poller(
         redis=redis,
         poll_interval_sec=float(settings.ats2_poll_interval_sec),
     )
+    return poller, auth_manager
 
 
 @asynccontextmanager
@@ -171,16 +172,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ])
 
     # ATS2 Poller (background task)
-    ats2_poller = _create_ats2_poller(
+    ats2_result = _create_ats2_poller(
         settings,
         session_factory=session_factory,
         twenty_adapter=twenty_adapter if settings.twenty_api_key else None,
         redis=redis,
     )
     ats2_task: asyncio.Task[None] | None = None
-    if ats2_poller is not None:
+    if ats2_result is not None:
+        ats2_poller, ats2_auth_manager = ats2_result
         ats2_task = asyncio.create_task(ats2_poller.start())
         app.state.ats2_poller = ats2_poller
+        app.state.ats2_auth_manager = ats2_auth_manager
         logger.info("ATS2 Poller started", interval=settings.ats2_poll_interval_sec)
     else:
         logger.info("ATS2 Poller disabled (ATS2_ENABLED=false)")
@@ -189,7 +192,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     # Shutdown ATS2 Poller
-    if ats2_poller is not None:
+    if ats2_result is not None:
+        ats2_poller, _ = ats2_result
         ats2_poller.stop()
         if ats2_task is not None:
             await asyncio.wait_for(ats2_task, timeout=10.0)

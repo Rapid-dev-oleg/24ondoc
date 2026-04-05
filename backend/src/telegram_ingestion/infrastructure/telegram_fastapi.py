@@ -143,6 +143,7 @@ async def telegram_webhook(
             bot_username=settings.telegram_bot_username,
             call_repo=call_repo,
             settings=settings,
+            ats2_auth_manager=getattr(request.app.state, "ats2_auth_manager", None),
         )
     )
     dp.include_router(
