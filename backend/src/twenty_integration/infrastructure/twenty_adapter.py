@@ -302,7 +302,7 @@ class TwentyRestAdapter(TwentyCRMPort):
                         task_id=t.get("id", ""),
                         title=t.get("title", ""),
                         status=s,
-                        assignee_chatwoot_id=assignee_id,
+                        assignee_crm_id=assignee_id,
                     )
                 )
             return result

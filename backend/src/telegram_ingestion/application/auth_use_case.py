@@ -55,8 +55,6 @@ class RegisterPhoneUseCase:
         self,
         requester_telegram_id: int,
         phone: str,
-        chatwoot_user_id: int,
-        chatwoot_account_id: int,
         role: UserRole = UserRole.AGENT,
     ) -> bool:
         requester = await self._user_port.get_profile(requester_telegram_id)
@@ -65,8 +63,6 @@ class RegisterPhoneUseCase:
         normalized = normalize_phone(phone)
         pending = PendingUser(
             phone=normalized,
-            chatwoot_user_id=chatwoot_user_id,
-            chatwoot_account_id=chatwoot_account_id,
             role=role,
         )
         await self._pending_repo.save(pending)

@@ -16,14 +16,10 @@ from ..infrastructure.pending_user_repository import SQLAlchemyPendingUserReposi
 
 def make_pending_orm(
     phone: str = "79001234567",
-    chatwoot_user_id: int = 10,
-    chatwoot_account_id: int = 1,
     role: str = "agent",
 ) -> PendingUserORM:
     row = PendingUserORM()
     row.phone = phone
-    row.chatwoot_user_id = chatwoot_user_id
-    row.chatwoot_account_id = chatwoot_account_id
     row.role = role
     row.created_at = datetime(2026, 1, 1, tzinfo=UTC)
     return row
@@ -31,14 +27,10 @@ def make_pending_orm(
 
 def make_pending(
     phone: str = "79001234567",
-    chatwoot_user_id: int = 10,
-    chatwoot_account_id: int = 1,
     role: UserRole = UserRole.AGENT,
 ) -> PendingUser:
     return PendingUser(
         phone=phone,
-        chatwoot_user_id=chatwoot_user_id,
-        chatwoot_account_id=chatwoot_account_id,
         role=role,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -66,7 +58,6 @@ class TestSQLAlchemyPendingUserRepository:
 
         assert pending is not None
         assert pending.phone == "79001234567"
-        assert pending.chatwoot_user_id == 10
         assert pending.role == UserRole.AGENT
 
     async def test_get_by_phone_not_found(self) -> None:
@@ -91,7 +82,6 @@ class TestSQLAlchemyPendingUserRepository:
         session.add.assert_called_once()
         added: PendingUserORM = session.add.call_args[0][0]
         assert added.phone == "79001234567"
-        assert added.chatwoot_user_id == 10
         assert added.role == "agent"
 
     async def test_save_updates_existing(self) -> None:
@@ -102,15 +92,11 @@ class TestSQLAlchemyPendingUserRepository:
         repo = SQLAlchemyPendingUserRepository(session)
         pending = PendingUser(
             phone="79001234567",
-            chatwoot_user_id=99,
-            chatwoot_account_id=5,
             role=UserRole.SUPERVISOR,
         )
         await repo.save(pending)
 
         session.add.assert_not_called()
-        assert row.chatwoot_user_id == 99
-        assert row.chatwoot_account_id == 5
         assert row.role == "supervisor"
 
     async def test_delete_found(self) -> None:
@@ -135,15 +121,11 @@ class TestSQLAlchemyPendingUserRepository:
     async def test_to_domain_maps_all_fields(self) -> None:
         row = make_pending_orm(
             phone="79001234567",
-            chatwoot_user_id=42,
-            chatwoot_account_id=7,
             role="admin",
         )
 
         pending = SQLAlchemyPendingUserRepository._to_domain(row)
 
         assert pending.phone == "79001234567"
-        assert pending.chatwoot_user_id == 42
-        assert pending.chatwoot_account_id == 7
         assert pending.role == UserRole.ADMIN
         assert pending.created_at == datetime(2026, 1, 1, tzinfo=UTC)

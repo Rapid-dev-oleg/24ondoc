@@ -43,4 +43,3 @@ class SessionAnalysisCompleted(DomainEvent):
 class TaskCreatedInCRM(DomainEvent):
     session_id: uuid.UUID = field(default_factory=uuid.uuid4)
     user_id: int = 0
-    chatwoot_conversation_id: int = 0

@@ -1,4 +1,4 @@
-"""Tests for STORY-122: Wiring — replace Chatwoot with Twenty in bot_handler, config, main."""
+"""Tests for STORY-122: Wiring — Twenty CRM integration in bot_handler, config, main."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def _build_twenty_router(
     twenty_port: FakeTwentyCRMPort | None = None,
     user_profile: UserProfile | None = None,
 ) -> tuple[Router, FakeTwentyCRMPort]:
-    """Строит router с Twenty CRM вместо Chatwoot."""
+    """Строит router с Twenty CRM."""
     if twenty_port is None:
         twenty_port = FakeTwentyCRMPort()
 
@@ -170,7 +170,7 @@ def _build_twenty_router(
 
 
 class TestStory122Wiring:
-    """Acceptance Criteria для STORY-122: Wiring Chatwoot → Twenty."""
+    """Acceptance Criteria для STORY-122: Wiring Twenty CRM."""
 
     async def test_bot_confirms_task_creates_twenty_task(self) -> None:
         """AC: 'Создать в CRM' вызывает CreateTwentyTaskFromSession."""
@@ -235,17 +235,16 @@ class TestStory122Wiring:
         assert len(twenty_port.created_tasks) == 1
         assert twenty_port.last_assignee_id == "member-abc-123"
 
-    def test_app_starts_without_chatwoot_env_vars(self) -> None:
-        """AC: приложение стартует без переменных CHATWOOT_*."""
+    def test_app_settings_have_no_chatwoot_fields(self) -> None:
+        """AC: Settings не содержит обязательных полей с префиксом chatwoot."""
         from config import Settings
 
-        # Settings should not require any CHATWOOT_* fields
         required_fields = {
             name for name, field_info in Settings.model_fields.items() if field_info.is_required()
         }
-        chatwoot_fields = {f for f in required_fields if f.startswith("chatwoot")}
-        assert chatwoot_fields == set(), (
-            f"Settings still has required Chatwoot fields: {chatwoot_fields}"
+        legacy_fields = {f for f in required_fields if "chatwoot" in f.lower()}
+        assert legacy_fields == set(), (
+            f"Settings still has required legacy CRM fields: {legacy_fields}"
         )
 
     def test_app_twenty_api_key_empty_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:

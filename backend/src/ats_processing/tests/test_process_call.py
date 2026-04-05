@@ -184,18 +184,15 @@ def _make_callback(
 
 def _build_call_router_dp(
     call_record: CallRecord | None = None,
-    chatwoot_port: object | None = None,
 ) -> tuple[Dispatcher, StubCallRepo, MemoryStorage]:
     from telegram_ingestion.infrastructure.bot_handler import (
-        ChatwootPortLike,
         create_call_notification_router,
     )
 
     repo = StubCallRepo(call_record)
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
-    cw_port: ChatwootPortLike | None = chatwoot_port  # type: ignore[assignment]
-    router = create_call_notification_router(call_repo=repo, chatwoot_port=cw_port)
+    router = create_call_notification_router(call_repo=repo)
     dp.include_router(router)
     return dp, repo, storage
 
@@ -217,24 +214,6 @@ class TestCallNotificationRouter:
 
         assert len(repo.saved) == 1
         assert repo.saved[0].status == CallStatus.ERROR
-
-    async def test_telegram_create_action_triggers_chatwoot(self) -> None:
-        """AC: нажатие Создать тикет → chatwoot_port.create_ticket_from_call."""
-        call = _make_call("t2_crt")
-        chatwoot_port = AsyncMock()
-        chatwoot_port.create_ticket_from_call = AsyncMock()
-        dp, repo, _ = _build_call_router_dp(call_record=call, chatwoot_port=chatwoot_port)
-        bot = AsyncMock()
-        bot.id = 42
-        bot.username = "test_bot"
-
-        update = Update(
-            update_id=1,
-            callback_query=_make_callback(data="call_action:t2_crt:create"),
-        )
-        await dp.feed_update(bot, update)
-
-        chatwoot_port.create_ticket_from_call.assert_awaited_once_with("t2_crt")
 
     async def test_telegram_edit_action_returns_message(self) -> None:
         """✏️ Изменить — не крашится."""

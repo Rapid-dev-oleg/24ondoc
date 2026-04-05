@@ -17,7 +17,6 @@ from fastapi.responses import JSONResponse, Response
 from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from admin.infrastructure.router import router as admin_router
 from ai_classification.infrastructure.openrouter_adapter import OpenRouterAdapter
 from ats_processing.application.ats2_poller import ATS2PollerService
 from ats_processing.application.ats2_transcription_mapper import ATS2TranscriptionMapper
@@ -25,7 +24,7 @@ from ats_processing.infrastructure.ats2_client import ATS2AuthManager, ATS2RestC
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
 from ats_processing.infrastructure.webhook_handler import router as t2_router
 from config import Settings, get_settings
-from telegram_ingestion.infrastructure.stt_adapter import OpenRouterSTTAdapter
+from telegram_ingestion.infrastructure.stt_adapter import GroqSTTAdapter
 from telegram_ingestion.infrastructure.telegram_fastapi import router as tg_router
 from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
 
@@ -91,10 +90,7 @@ def _create_ats2_poller(
         api_key=settings.openrouter_api_key or settings.openai_api_key or ""
     )
 
-    stt_port = OpenRouterSTTAdapter(
-        api_key=settings.openai_api_key or settings.openrouter_api_key,
-        whisper_url=settings.whisper_base_url,
-    )
+    stt_port = GroqSTTAdapter(api_key=settings.groq_api_key)
 
     poller = ATS2PollerService(
         ats2_client=ats2_client,
@@ -134,12 +130,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         api_key=settings.twenty_api_key,
     )
 
-    # STT adapter: Groq primary, self-hosted Whisper fallback, OpenAI last
-    stt_port = OpenRouterSTTAdapter(
-        api_key=settings.openai_api_key or settings.openrouter_api_key,
-        whisper_url=settings.whisper_base_url,
-        groq_api_key=settings.groq_api_key,
-    )
+    # STT adapter: Groq Whisper API
+    stt_port = GroqSTTAdapter(api_key=settings.groq_api_key)
 
     app.state.engine = engine
     app.state.session_factory = session_factory
@@ -277,6 +269,5 @@ async def metrics() -> dict[str, str]:
 
 
 # Handlers already define full paths — include WITHOUT extra prefix
-app.include_router(admin_router)  # /api/admin/*
 app.include_router(t2_router)  # POST /webhook/t2/call
 app.include_router(tg_router)  # POST /webhook/telegram

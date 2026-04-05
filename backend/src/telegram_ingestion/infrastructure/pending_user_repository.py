@@ -27,15 +27,11 @@ class SQLAlchemyPendingUserRepository(PendingUserRepository):
             self._session.add(
                 PendingUserORM(
                     phone=pending.phone,
-                    chatwoot_user_id=pending.chatwoot_user_id,
-                    chatwoot_account_id=pending.chatwoot_account_id,
                     role=pending.role.value,
                     created_at=pending.created_at,
                 )
             )
         else:
-            row.chatwoot_user_id = pending.chatwoot_user_id
-            row.chatwoot_account_id = pending.chatwoot_account_id
             row.role = pending.role.value
 
     async def delete(self, phone: str) -> None:
@@ -51,8 +47,6 @@ class SQLAlchemyPendingUserRepository(PendingUserRepository):
     def _to_domain(row: PendingUserORM) -> PendingUser:
         return PendingUser(
             phone=row.phone,
-            chatwoot_user_id=row.chatwoot_user_id,
-            chatwoot_account_id=row.chatwoot_account_id,
             role=UserRole(row.role),
             created_at=row.created_at,
         )

@@ -1,9 +1,9 @@
-"""Tests for STORY-119: Рефакторинг UserProfile — убрать Chatwoot, добавить twenty_member_id.
+"""Tests for STORY-119: Рефакторинг UserProfile — добавить twenty_member_id.
 
 Acceptance criteria:
   1. AutoRegisterUserUseCase.execute() создаёт UserProfile только с telegram_id и role
   2. Если профиль уже есть, возвращает существующий без создания нового
-  3. У UserProfile нет атрибутов chatwoot_user_id, chatwoot_account_id, chatwoot_contact_id
+  3. У UserProfile нет устаревших CRM-атрибутов
   4. Поле twenty_member_id: str | None присутствует
 """
 
@@ -41,12 +41,12 @@ class InMemoryUserProfileRepo(UserProfileRepository):
 
 
 # ---------------------------------------------------------------------------
-# AC1: AutoRegisterUserUseCase creates UserProfile without Chatwoot
+# AC1: AutoRegisterUserUseCase creates minimal UserProfile
 # ---------------------------------------------------------------------------
 
 
-class TestAutoRegisterCreatesProfileWithoutChatwoot:
-    async def test_auto_register_creates_user_profile_without_chatwoot(self) -> None:
+class TestAutoRegisterCreatesMinimalProfile:
+    async def test_auto_register_creates_user_profile(self) -> None:
         repo = InMemoryUserProfileRepo()
         uc = AutoRegisterUserUseCase(repo)
 
@@ -55,7 +55,7 @@ class TestAutoRegisterCreatesProfileWithoutChatwoot:
         assert is_new is True
         assert profile.telegram_id == 42
         assert profile.role == UserRole.AGENT
-        # Chatwoot-полей не должно быть
+        # Legacy CRM fields must not exist
         assert not hasattr(profile, "chatwoot_user_id")
         assert not hasattr(profile, "chatwoot_account_id")
         assert not hasattr(profile, "chatwoot_contact_id")
@@ -85,12 +85,12 @@ class TestAutoRegisterReturnsExisting:
 
 
 # ---------------------------------------------------------------------------
-# AC3: UserProfile has no Chatwoot fields
+# AC3: UserProfile has no legacy CRM fields
 # ---------------------------------------------------------------------------
 
 
-class TestUserProfileHasNoChatwootFields:
-    def test_user_profile_has_no_chatwoot_fields(self) -> None:
+class TestUserProfileHasNoLegacyCRMFields:
+    def test_user_profile_has_no_legacy_crm_fields(self) -> None:
         profile = UserProfile(telegram_id=1, role=UserRole.AGENT)
         assert not hasattr(profile, "chatwoot_user_id")
         assert not hasattr(profile, "chatwoot_account_id")

@@ -22,13 +22,10 @@ class Settings(BaseSettings):
     openrouter_model: str = "anthropic/claude-sonnet-4.6"
     openrouter_fallback_model: str = "openrouter/free"
 
-    # OpenAI (Whisper fallback)
+    # OpenAI (fallback for AI classification)
     openai_api_key: str = ""
 
-    # Whisper self-hosted
-    whisper_base_url: str = "http://whisper:9000"
-
-    # Groq (Whisper transcription)
+    # Groq (STT transcription)
     groq_api_key: str = ""
 
     # T2 ATS
@@ -46,21 +43,12 @@ class Settings(BaseSettings):
     twenty_base_url: str = "https://24ondoc.ru"
     twenty_api_key: str = ""
 
-    # MinIO
-    minio_endpoint: str = "minio:9000"
-    minio_access_key: str
-    minio_secret_key: str
-    minio_bucket_voices: str = "voice-samples"
-
-    # Admin panel
-    admin_jwt_secret: str
-    admin_password: str
+    # Misc
     env_file_path: str = ".env"
     telegram_bot_username: str = ""
 
     # App
     log_level: str = "INFO"
-    voice_match_threshold: float = 0.85
 
 
 def get_settings() -> Settings:

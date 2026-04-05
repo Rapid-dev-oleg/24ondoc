@@ -1,1 +1,0 @@
-"""Admin panel infrastructure layer."""

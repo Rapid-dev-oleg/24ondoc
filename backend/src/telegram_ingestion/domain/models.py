@@ -33,8 +33,6 @@ class PendingUser(BaseModel):
     """Value Object: предварительно зарегистрированный пользователь (по телефону)."""
 
     phone: str  # normalized (digits only, 7XXXXXXXXXX for Russian)
-    chatwoot_user_id: int
-    chatwoot_account_id: int
     role: UserRole = UserRole.AGENT
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

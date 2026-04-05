@@ -108,8 +108,6 @@ class TestAuthByPhoneUseCase:
         user_repo = InMemoryUserProfileRepository()
         pending = PendingUser(
             phone="79001234567",
-            chatwoot_user_id=10,
-            chatwoot_account_id=1,
             role=UserRole.AGENT,
         )
         await pending_repo.save(pending)
@@ -144,8 +142,6 @@ class TestAuthByPhoneUseCase:
         user_repo = InMemoryUserProfileRepository()
         pending = PendingUser(
             phone="79001234567",
-            chatwoot_user_id=20,
-            chatwoot_account_id=2,
         )
         await pending_repo.save(pending)
 
@@ -175,14 +171,11 @@ class TestRegisterPhoneUseCase:
         ok = await uc.execute(
             requester_telegram_id=1,
             phone="+79001234567",
-            chatwoot_user_id=50,
-            chatwoot_account_id=1,
         )
 
         assert ok is True
         pending = await pending_repo.get_by_phone("79001234567")
         assert pending is not None
-        assert pending.chatwoot_user_id == 50
 
     async def test_supervisor_can_register_phone(self) -> None:
         pending_repo = InMemoryPendingUserRepository()
@@ -196,8 +189,6 @@ class TestRegisterPhoneUseCase:
         ok = await uc.execute(
             requester_telegram_id=2,
             phone="+79001111111",
-            chatwoot_user_id=60,
-            chatwoot_account_id=1,
         )
 
         assert ok is True
@@ -216,8 +207,6 @@ class TestRegisterPhoneUseCase:
         ok = await uc.execute(
             requester_telegram_id=3,
             phone="+79002222222",
-            chatwoot_user_id=70,
-            chatwoot_account_id=1,
         )
 
         assert ok is False
@@ -231,8 +220,6 @@ class TestRegisterPhoneUseCase:
         ok = await uc.execute(
             requester_telegram_id=999,
             phone="+79003333333",
-            chatwoot_user_id=80,
-            chatwoot_account_id=1,
         )
 
         assert ok is False

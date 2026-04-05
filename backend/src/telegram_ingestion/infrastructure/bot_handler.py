@@ -1117,7 +1117,7 @@ def create_tasks_router(
                 "task_id": t.task_id,
                 "title": t.title,
                 "status": t.status.value,
-                "assignee_crm_id": t.assignee_chatwoot_id,
+                "assignee_crm_id": t.assignee_crm_id,
             }
             for t in tickets
         ]
@@ -1249,12 +1249,12 @@ def create_tasks_router(
             return
         parts = callback.data.split(":")  # type: ignore[union-attr]
         task_id = int(parts[1])
-        target_chatwoot_id = int(parts[2])
+        target_crm_id = int(parts[2])
 
         ok = await reassign_task.execute(
             requester_telegram_id=callback.from_user.id,
             task_id=task_id,
-            target_user_id=target_chatwoot_id,
+            target_user_id=target_crm_id,
         )
         if ok:
             await callback.answer("✅ Задача переназначена!")
@@ -1538,7 +1538,6 @@ def _call_notification_keyboard(call_id: str) -> InlineKeyboardMarkup:
 
 def create_call_notification_router(
     call_repo: CallRecordRepositoryLike,
-    chatwoot_port: ChatwootPortLike | None = None,
 ) -> Router:
     """Роутер для обработки callback-кнопок уведомления о звонке."""
     router = Router(name="call_notification")
@@ -1558,14 +1557,7 @@ def create_call_notification_router(
         await callback.answer()
 
         if action == "create":
-            if chatwoot_port is not None and isinstance(callback.message, Message):
-                await callback.message.edit_text(f"⏳ Создаём тикет для звонка {call_id}...")
-                try:
-                    await chatwoot_port.create_ticket_from_call(call_id)
-                    await callback.message.edit_text(f"✅ Тикет для звонка {call_id} создан в CRM.")
-                except Exception:
-                    await callback.message.edit_text("❌ Ошибка создания тикета.")
-            elif isinstance(callback.message, Message):
+            if isinstance(callback.message, Message):
                 await callback.message.edit_text(
                     f"✅ Создание тикета для звонка {call_id} запланировано."
                 )
@@ -1596,8 +1588,3 @@ def create_call_notification_router(
 class CallRecordRepositoryLike(Protocol):
     async def get_by_id(self, call_id: str) -> Any: ...
     async def save(self, record: Any) -> None: ...
-
-
-@runtime_checkable
-class ChatwootPortLike(Protocol):
-    async def create_ticket_from_call(self, call_id: str) -> None: ...

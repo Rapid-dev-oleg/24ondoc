@@ -17,9 +17,6 @@ from aiogram.types import (
     User,
 )
 
-from chatwoot_integration.domain.models import SupportTicket, TicketStatus
-from chatwoot_integration.domain.repository import ChatwootPort
-
 from ..application.ports import UserProfilePort
 from ..application.tasks_use_cases import (
     AddTaskCommentUseCase,
@@ -29,6 +26,28 @@ from ..application.tasks_use_cases import (
 )
 from ..domain.models import UserProfile, UserRole
 from ..infrastructure.bot_handler import TelegramFSMStates, create_tasks_router
+
+# ---------- Local stand-in types (crm_integration deleted) ----------
+
+
+class TicketStatus:
+    OPEN = "open"
+    RESOLVED = "resolved"
+
+
+class SupportTicket:
+    def __init__(
+        self,
+        task_id: int = 0,
+        title: str = "",
+        assignee_crm_id: int | None = None,
+        status: str = "open",
+    ) -> None:
+        self.task_id = task_id
+        self.title = title
+        self.assignee_crm_id = assignee_crm_id
+        self.status = status
+
 
 # ---------- Stubs ----------
 
@@ -59,26 +78,25 @@ class StubUserProfilePort(UserProfilePort):
         return None
 
 
-class InMemoryChatwootPort(ChatwootPort):
+class InMemoryCRMPort:
+    """In-memory stub implementing TaskCRMPort protocol."""
+
     def __init__(self, tickets: list[SupportTicket] | None = None) -> None:
         self._tickets: list[SupportTicket] = tickets or []
         self.status_updates: list[tuple[int, str]] = []
         self.assignee_updates: list[tuple[int, int]] = []
         self.messages: list[tuple[int, str, bool]] = []
 
-    async def create_conversation(self, command: object) -> SupportTicket:
-        raise NotImplementedError
-
     async def update_conversation_status(self, task_id: int, status: str) -> None:
         self.status_updates.append((task_id, status))
 
     async def get_conversations(
-        self, assignee_id: int, status: str = "open", page: int = 1
+        self, assignee_id: int | str, status: str = "open", page: int = 1
     ) -> list[SupportTicket]:
         return self._tickets
 
-    async def update_conversation_assignee(self, task_id: int, assignee_chatwoot_id: int) -> None:
-        self.assignee_updates.append((task_id, assignee_chatwoot_id))
+    async def update_conversation_assignee(self, task_id: int, assignee_id: int) -> None:
+        self.assignee_updates.append((task_id, assignee_id))
 
     async def add_message(self, task_id: int, content: str, private: bool = True) -> None:
         self.messages.append((task_id, content, private))
@@ -103,7 +121,7 @@ def _make_ticket(
     return SupportTicket(
         task_id=task_id,
         title=title,
-        assignee_chatwoot_id=assignee_crm_id,
+        assignee_crm_id=assignee_crm_id,
         status=status,
     )
 
@@ -115,20 +133,20 @@ class TestGetMyTasksUseCase:
     async def test_returns_tasks_for_user(self) -> None:
         profile = _make_agent_profile(telegram_id=100)
         tickets = [_make_ticket(task_id=1), _make_ticket(task_id=2)]
-        uc = GetMyTasksUseCase(StubUserProfilePort(profile), InMemoryChatwootPort(tickets))
+        uc = GetMyTasksUseCase(StubUserProfilePort(profile), InMemoryCRMPort(tickets))
         result = await uc.execute(telegram_id=100)
         assert len(result) == 2
 
     async def test_returns_empty_list_if_user_not_found(self) -> None:
-        uc = GetMyTasksUseCase(StubUserProfilePort(None), InMemoryChatwootPort([]))
+        uc = GetMyTasksUseCase(StubUserProfilePort(None), InMemoryCRMPort([]))
         result = await uc.execute(telegram_id=999)
         assert result == []
 
-    async def test_passes_page_to_chatwoot(self) -> None:
+    async def test_passes_page_to_crm(self) -> None:
         profile = _make_agent_profile()
-        InMemoryChatwootPort([_make_ticket()])
+        InMemoryCRMPort([_make_ticket()])
 
-        class TrackingChatwoot(InMemoryChatwootPort):
+        class TrackingCRM(InMemoryCRMPort):
             def __init__(self) -> None:
                 super().__init__([_make_ticket()])
                 self.last_page = 0
@@ -139,21 +157,21 @@ class TestGetMyTasksUseCase:
                 self.last_page = page
                 return self._tickets
 
-        tracking = TrackingChatwoot()
+        tracking = TrackingCRM()
         uc = GetMyTasksUseCase(StubUserProfilePort(profile), tracking)
         await uc.execute(telegram_id=100, page=3)
         assert tracking.last_page == 3
 
-    async def test_returns_empty_list_on_chatwoot_error(self) -> None:
+    async def test_returns_empty_list_on_crm_error(self) -> None:
         profile = _make_agent_profile()
 
-        class FailingChatwoot(InMemoryChatwootPort):
+        class FailingCRM(InMemoryCRMPort):
             async def get_conversations(
                 self, assignee_id: int, status: str = "open", page: int = 1
             ) -> list[SupportTicket]:
                 return []
 
-        uc = GetMyTasksUseCase(StubUserProfilePort(profile), FailingChatwoot())
+        uc = GetMyTasksUseCase(StubUserProfilePort(profile), FailingCRM())
         result = await uc.execute(telegram_id=100)
         assert result == []
 
@@ -164,8 +182,8 @@ class TestGetMyTasksUseCase:
 class TestUpdateTaskStatusUseCase:
     async def test_assignee_can_resolve(self) -> None:
         profile = _make_agent_profile(telegram_id=100)
-        chatwoot = InMemoryChatwootPort()
-        uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), chatwoot)
+        crm = InMemoryCRMPort()
+        uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), crm)
         ok = await uc.execute(
             requester_telegram_id=100,
             task_id=1,
@@ -173,12 +191,12 @@ class TestUpdateTaskStatusUseCase:
             new_status="resolved",
         )
         assert ok is True
-        assert (1, "resolved") in chatwoot.status_updates
+        assert (1, "resolved") in crm.status_updates
 
     async def test_assignee_can_reopen(self) -> None:
         profile = _make_agent_profile(telegram_id=100)
-        chatwoot = InMemoryChatwootPort()
-        uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), chatwoot)
+        crm = InMemoryCRMPort()
+        uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), crm)
         ok = await uc.execute(
             requester_telegram_id=100,
             task_id=5,
@@ -186,13 +204,13 @@ class TestUpdateTaskStatusUseCase:
             new_status="open",
         )
         assert ok is True
-        assert (5, "open") in chatwoot.status_updates
+        assert (5, "open") in crm.status_updates
 
     async def test_non_assignee_cannot_change_status(self) -> None:
         # telegram_id=100 does NOT match assignee_crm_id=10
         profile = _make_agent_profile(telegram_id=100)
-        chatwoot = InMemoryChatwootPort()
-        uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), chatwoot)
+        crm = InMemoryCRMPort()
+        uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), crm)
         ok = await uc.execute(
             requester_telegram_id=100,
             task_id=1,
@@ -200,11 +218,11 @@ class TestUpdateTaskStatusUseCase:
             new_status="resolved",
         )
         assert ok is False
-        assert len(chatwoot.status_updates) == 0
+        assert len(crm.status_updates) == 0
 
     async def test_returns_false_if_user_not_found(self) -> None:
-        chatwoot = InMemoryChatwootPort()
-        uc = UpdateTaskStatusUseCase(StubUserProfilePort(None), chatwoot)
+        crm = InMemoryCRMPort()
+        uc = UpdateTaskStatusUseCase(StubUserProfilePort(None), crm)
         ok = await uc.execute(
             requester_telegram_id=999,
             task_id=1,
@@ -215,8 +233,8 @@ class TestUpdateTaskStatusUseCase:
 
     async def test_returns_false_if_no_assignee(self) -> None:
         profile = _make_agent_profile(telegram_id=100)
-        chatwoot = InMemoryChatwootPort()
-        uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), chatwoot)
+        crm = InMemoryCRMPort()
+        uc = UpdateTaskStatusUseCase(StubUserProfilePort(profile), crm)
         ok = await uc.execute(
             requester_telegram_id=100,
             task_id=1,
@@ -232,31 +250,31 @@ class TestUpdateTaskStatusUseCase:
 class TestReassignTaskUseCase:
     async def test_supervisor_can_reassign(self) -> None:
         profile = _make_agent_profile(telegram_id=100, role=UserRole.SUPERVISOR)
-        chatwoot = InMemoryChatwootPort()
-        uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
+        crm = InMemoryCRMPort()
+        uc = ReassignTaskUseCase(StubUserProfilePort(profile), crm)
         ok = await uc.execute(requester_telegram_id=100, task_id=1, target_user_id=20)
         assert ok is True
-        assert (1, 20) in chatwoot.assignee_updates
+        assert (1, 20) in crm.assignee_updates
 
     async def test_admin_can_reassign(self) -> None:
         profile = _make_agent_profile(telegram_id=100, role=UserRole.ADMIN)
-        chatwoot = InMemoryChatwootPort()
-        uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
+        crm = InMemoryCRMPort()
+        uc = ReassignTaskUseCase(StubUserProfilePort(profile), crm)
         ok = await uc.execute(requester_telegram_id=100, task_id=2, target_user_id=30)
         assert ok is True
-        assert (2, 30) in chatwoot.assignee_updates
+        assert (2, 30) in crm.assignee_updates
 
     async def test_agent_cannot_reassign(self) -> None:
         profile = _make_agent_profile(telegram_id=100, role=UserRole.AGENT)
-        chatwoot = InMemoryChatwootPort()
-        uc = ReassignTaskUseCase(StubUserProfilePort(profile), chatwoot)
+        crm = InMemoryCRMPort()
+        uc = ReassignTaskUseCase(StubUserProfilePort(profile), crm)
         ok = await uc.execute(requester_telegram_id=100, task_id=1, target_user_id=20)
         assert ok is False
-        assert len(chatwoot.assignee_updates) == 0
+        assert len(crm.assignee_updates) == 0
 
     async def test_returns_false_if_requester_not_found(self) -> None:
-        chatwoot = InMemoryChatwootPort()
-        uc = ReassignTaskUseCase(StubUserProfilePort(None), chatwoot)
+        crm = InMemoryCRMPort()
+        uc = ReassignTaskUseCase(StubUserProfilePort(None), crm)
         ok = await uc.execute(requester_telegram_id=999, task_id=1, target_user_id=20)
         assert ok is False
 
@@ -266,16 +284,16 @@ class TestReassignTaskUseCase:
 
 class TestAddTaskCommentUseCase:
     async def test_adds_private_comment(self) -> None:
-        chatwoot = InMemoryChatwootPort()
-        uc = AddTaskCommentUseCase(chatwoot)
+        crm = InMemoryCRMPort()
+        uc = AddTaskCommentUseCase(crm)
         await uc.execute(task_id=1, content="Тестовый комментарий")
-        assert (1, "Тестовый комментарий", True) in chatwoot.messages
+        assert (1, "Тестовый комментарий", True) in crm.messages
 
     async def test_adds_different_task_comment(self) -> None:
-        chatwoot = InMemoryChatwootPort()
-        uc = AddTaskCommentUseCase(chatwoot)
+        crm = InMemoryCRMPort()
+        uc = AddTaskCommentUseCase(crm)
         await uc.execute(task_id=42, content="Другой комментарий")
-        assert (42, "Другой комментарий", True) in chatwoot.messages
+        assert (42, "Другой комментарий", True) in crm.messages
 
 
 # ---------- aiogram test helpers ----------
@@ -336,13 +354,13 @@ def _build_dispatcher(
     agents: list[UserProfile] | None = None,
     tickets: list[SupportTicket] | None = None,
     bot_id: int = 42,
-) -> tuple[Dispatcher, InMemoryChatwootPort, MemoryStorage]:
+) -> tuple[Dispatcher, InMemoryCRMPort, MemoryStorage]:
     user_port = StubUserProfilePort(profile, agents)
-    chatwoot = InMemoryChatwootPort(tickets)
-    get_tasks = GetMyTasksUseCase(user_port, chatwoot)
-    update_status = UpdateTaskStatusUseCase(user_port, chatwoot)
-    reassign = ReassignTaskUseCase(user_port, chatwoot)
-    add_comment = AddTaskCommentUseCase(chatwoot)
+    crm_port = InMemoryCRMPort(tickets)
+    get_tasks = GetMyTasksUseCase(user_port, crm_port)
+    update_status = UpdateTaskStatusUseCase(user_port, crm_port)
+    reassign = ReassignTaskUseCase(user_port, crm_port)
+    add_comment = AddTaskCommentUseCase(crm_port)
 
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
@@ -354,7 +372,7 @@ def _build_dispatcher(
         user_port=user_port,
     )
     dp.include_router(router)
-    return dp, chatwoot, storage
+    return dp, crm_port, storage
 
 
 def _storage_key(user_id: int = 100, bot_id: int = 42) -> StorageKey:
@@ -472,7 +490,7 @@ class TestMyTasksBotHandlers:
     async def test_resolve_callback_for_assignee(self) -> None:
         profile = _make_agent_profile(telegram_id=100)
         tickets = [_make_ticket(task_id=3, assignee_crm_id=100)]
-        dp, chatwoot, _ = _build_dispatcher(profile=profile, tickets=tickets)
+        dp, crm, _ = _build_dispatcher(profile=profile, tickets=tickets)
         bot = _make_mock_bot()
 
         cb_update = Update(
@@ -480,11 +498,11 @@ class TestMyTasksBotHandlers:
             callback_query=_make_callback(user_id=100, data="task_resolve:3:100"),
         )
         await dp.feed_update(bot, cb_update)
-        assert (3, "resolved") in chatwoot.status_updates
+        assert (3, "resolved") in crm.status_updates
 
     async def test_reopen_callback_for_assignee(self) -> None:
         profile = _make_agent_profile(telegram_id=100)
-        dp, chatwoot, _ = _build_dispatcher(profile=profile, tickets=[])
+        dp, crm, _ = _build_dispatcher(profile=profile, tickets=[])
         bot = _make_mock_bot()
 
         cb_update = Update(
@@ -492,12 +510,12 @@ class TestMyTasksBotHandlers:
             callback_query=_make_callback(user_id=100, data="task_reopen:5:100"),
         )
         await dp.feed_update(bot, cb_update)
-        assert (5, "open") in chatwoot.status_updates
+        assert (5, "open") in crm.status_updates
 
     async def test_resolve_denied_for_non_assignee(self) -> None:
         # telegram_id=100, but assignee is 10 — mismatch
         profile = _make_agent_profile(telegram_id=100)
-        dp, chatwoot, _ = _build_dispatcher(profile=profile, tickets=[])
+        dp, crm, _ = _build_dispatcher(profile=profile, tickets=[])
         bot = _make_mock_bot()
 
         cb_update = Update(
@@ -505,14 +523,14 @@ class TestMyTasksBotHandlers:
             callback_query=_make_callback(user_id=100, data="task_resolve:3:10"),
         )
         await dp.feed_update(bot, cb_update)
-        assert len(chatwoot.status_updates) == 0
+        assert len(crm.status_updates) == 0
 
     async def test_reassign_callback_for_supervisor(self) -> None:
         profile = _make_agent_profile(telegram_id=100, role=UserRole.SUPERVISOR)
         agents = [
             _make_agent_profile(telegram_id=200, role=UserRole.AGENT),
         ]
-        dp, chatwoot, _ = _build_dispatcher(profile=profile, agents=agents, tickets=[])
+        dp, crm, _ = _build_dispatcher(profile=profile, agents=agents, tickets=[])
         bot = _make_mock_bot()
 
         # Reassign task 3 to agent with telegram_id 20
@@ -521,7 +539,7 @@ class TestMyTasksBotHandlers:
             callback_query=_make_callback(user_id=100, data="reassign_to:3:20"),
         )
         await dp.feed_update(bot, cb_update)
-        assert (3, 20) in chatwoot.assignee_updates
+        assert (3, 20) in crm.assignee_updates
 
     async def test_comment_callback_sets_adding_comment_state(self) -> None:
         profile = _make_agent_profile(telegram_id=100)
@@ -555,7 +573,7 @@ class TestMyTasksBotHandlers:
 
     async def test_comment_text_submitted_calls_use_case(self) -> None:
         profile = _make_agent_profile(telegram_id=100)
-        dp, chatwoot, storage = _build_dispatcher(profile=profile, tickets=[])
+        dp, crm, storage = _build_dispatcher(profile=profile, tickets=[])
         bot = _make_mock_bot(bot_id=42)
         key = _storage_key(100)
 
@@ -569,4 +587,4 @@ class TestMyTasksBotHandlers:
             update_id=2,
         )
         await dp.feed_update(bot, msg_update)
-        assert (7, "Мой комментарий", True) in chatwoot.messages
+        assert (7, "Мой комментарий", True) in crm.messages

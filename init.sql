@@ -11,9 +11,6 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'twenty_db')\gexec
 -- Пользователи (UserProfile)
 CREATE TABLE IF NOT EXISTS users (
     telegram_id BIGINT PRIMARY KEY,
-    chatwoot_user_id INTEGER UNIQUE NOT NULL,
-    chatwoot_account_id INTEGER NOT NULL,
-    chatwoot_contact_id INTEGER NULL,
     role VARCHAR(20) DEFAULT 'agent' CHECK (role IN ('agent', 'supervisor', 'admin')),
     phone_internal VARCHAR(20),
     voice_sample_url VARCHAR(255),
@@ -26,8 +23,6 @@ CREATE TABLE IF NOT EXISTS users (
 -- Предварительная регистрация по телефону (PendingUser)
 CREATE TABLE IF NOT EXISTS pending_users (
     phone VARCHAR(20) PRIMARY KEY,
-    chatwoot_user_id INTEGER UNIQUE NOT NULL,
-    chatwoot_account_id INTEGER NOT NULL,
     role VARCHAR(20) DEFAULT 'agent' CHECK (role IN ('agent', 'supervisor', 'admin')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

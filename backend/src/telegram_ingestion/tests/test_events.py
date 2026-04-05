@@ -64,8 +64,7 @@ class TestDomainEvents:
 
     def test_task_created_in_crm(self) -> None:
         sid = uuid.uuid4()
-        event = TaskCreatedInCRM(session_id=sid, user_id=1, chatwoot_conversation_id=100)
-        assert event.chatwoot_conversation_id == 100
+        event = TaskCreatedInCRM(session_id=sid, user_id=1)
         assert event.user_id == 1
 
     def test_events_are_frozen(self) -> None:
