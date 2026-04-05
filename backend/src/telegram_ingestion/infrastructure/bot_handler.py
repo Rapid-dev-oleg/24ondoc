@@ -123,8 +123,6 @@ def _format_preview(
     ]
     if r.deadline:
         lines.append(f"<b>Дедлайн:</b> {r.deadline}")
-    if r.assignee_hint:
-        lines.append(f"<b>Исполнитель:</b> {r.assignee_hint}")
     return "\n".join(lines)
 
 
