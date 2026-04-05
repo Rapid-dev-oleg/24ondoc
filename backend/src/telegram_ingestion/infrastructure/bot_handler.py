@@ -154,6 +154,7 @@ def create_router(
     call_repo: Any = None,
     settings: Any = None,
     ats2_auth_manager: Any = None,
+    ats2_poller: Any = None,
 ) -> Router:
     """Create and configure the telegram ingestion router with injected use cases."""
     from ..domain.models import UserRole
@@ -720,24 +721,26 @@ def create_router(
             lines.append(f"❌ Twenty CRM — {e}")
 
         # 3. Proxy + ATS2
-        if settings is not None and settings.ats2_proxy_url:
+        ats2_connected = False
+        if settings is not None and settings.ats2_proxy_url and ats2_auth_manager is not None:
             import httpx as _httpx
 
             proxy_url = settings.ats2_proxy_url
             try:
+                current_token = await ats2_auth_manager.get_access_token()
                 async with _httpx.AsyncClient(
                     proxy=proxy_url, timeout=10.0
                 ) as _client:
                     resp = await _client.get("https://ats2.t2.ru/crm/openapi/call-records/active", headers={
-                        "Authorization": settings.ats2_access_token,
+                        "Authorization": current_token,
                     })
                     if resp.status_code == 403:
-                        # Token expired but proxy works
                         lines.append("✅ Прокси ATS2 — OK")
                         lines.append("⚠️ ATS2 (Теле2) — токен истёк (403)")
                     elif resp.status_code < 400:
                         lines.append("✅ Прокси ATS2 — OK")
                         lines.append("✅ ATS2 (Теле2) — OK")
+                        ats2_connected = True
                     else:
                         lines.append("✅ Прокси ATS2 — OK")
                         lines.append(f"⚠️ ATS2 (Теле2) — HTTP {resp.status_code}")
@@ -789,6 +792,16 @@ def create_router(
             lines.append("⚪ OpenRouter — ключ не задан")
 
         await message.answer("\n".join(lines))
+
+        # 6. Sync ATS2 calls if connected
+        if ats2_connected and ats2_poller is not None:
+            try:
+                await message.answer("🔄 Синхронизация звонков ATS2...")
+                await ats2_poller.poll_once()
+                await message.answer("✅ Синхронизация звонков завершена.")
+            except Exception as e:
+                logger.exception("ATS2 sync from /health failed")
+                await message.answer(f"❌ Ошибка синхронизации: {e}")
 
     # ---------- /logs command (admin) ----------
 
