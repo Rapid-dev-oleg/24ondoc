@@ -88,8 +88,10 @@ _INVITE_TTL = 86400 * 7  # 7 days
 def _collect_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📎 Собрать", callback_data="collect")],
-            [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel")],
+            [
+                InlineKeyboardButton(text="▶ Отправить", callback_data="collect"),
+                InlineKeyboardButton(text="✕ Отмена", callback_data="cancel"),
+            ],
         ]
     )
 
@@ -97,10 +99,12 @@ def _collect_keyboard() -> InlineKeyboardMarkup:
 def _preview_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Создать в CRM", callback_data="create_crm")],
-            [InlineKeyboardButton(text="✏️ Добавить/Изменить", callback_data="edit_session")],
-            [InlineKeyboardButton(text="🔄 Переанализировать", callback_data="reanalyze")],
-            [InlineKeyboardButton(text="❌ Удалить черновик", callback_data="cancel")],
+            [InlineKeyboardButton(text="▶ Создать задачу", callback_data="create_crm")],
+            [
+                InlineKeyboardButton(text="＋ Дополнить", callback_data="edit_session"),
+                InlineKeyboardButton(text="⟳ Заново", callback_data="reanalyze"),
+            ],
+            [InlineKeyboardButton(text="✕ Удалить", callback_data="cancel")],
         ]
     )
 
@@ -236,9 +240,7 @@ def create_router(
         await state.update_data(session_id=str(session.session_id))
         try:
             await message.answer(
-                "📝 Опишите задачу. Отправляйте текст, голосовые сообщения, фото и файлы.\n"
-                "Нажмите '📎 Собрать' когда закончите.",
-                reply_markup=_collect_keyboard(),
+                "📝 Опишите задачу — отправьте текст, голосовое, фото или файл."
             )
         except TelegramAPIError:
             logger.warning("Failed to send /new_task reply to chat %s", message.chat.id)
