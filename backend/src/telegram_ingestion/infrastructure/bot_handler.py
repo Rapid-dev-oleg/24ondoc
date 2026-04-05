@@ -508,7 +508,11 @@ def create_router(
                 raw = await bot.download_file(tg_file.file_path)
                 if not isinstance(raw, io.BytesIO):
                     return None
-                filename = tg_file.file_path.split("/")[-1] if "/" in tg_file.file_path else tg_file.file_path
+                filename = (
+                    tg_file.file_path.split("/")[-1]
+                    if "/" in tg_file.file_path
+                    else tg_file.file_path
+                )
                 content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
                 return raw.read(), filename, content_type
 
@@ -734,10 +738,13 @@ def create_router(
                 async with _httpx.AsyncClient(
                     proxy=proxy_url or None, timeout=10.0
                 ) as _client:
-                    resp = await _client.get("https://ats2.t2.ru/crm/openapi/call-records/active", headers={
-                        "Authorization": current_token,
-                        "Accept": "application/json",
-                    })
+                    resp = await _client.get(
+                        "https://ats2.t2.ru/crm/openapi/call-records/active",
+                        headers={
+                            "Authorization": current_token,
+                            "Accept": "application/json",
+                        },
+                    )
                     if resp.status_code == 403:
                         lines.append("✅ Прокси ATS2 — OK")
                         lines.append("⚠️ ATS2 (Теле2) — токен истёк (403)")
@@ -844,7 +851,7 @@ def create_router(
             "call_ats2_polling": "ATS2 Поллер",
         }
 
-        lines = [f"<b>Последние 10 заявок:</b>\n"]
+        lines = ["<b>Последние 10 заявок:</b>\n"]
         for i, r in enumerate(records, 1):
             icon = status_icons.get(r.status.value, "❓")
             source = source_labels.get(r.source.value, r.source.value)
@@ -1193,7 +1200,7 @@ def create_tasks_router(
             await callback.answer("❌ Задача не найдена.")
             return
         try:
-            await twenty_crm_port.update_task_status(task_id, "VYPOLNENO")
+            await twenty_crm_port.update_task_status(task_id, "VYPOLNENO")  # noqa: F821
             await callback.answer("✅ Задача решена!")
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(f"✅ Задача «{title}» решена.")
@@ -1216,7 +1223,7 @@ def create_tasks_router(
             await callback.answer("❌ Задача не найдена.")
             return
         try:
-            await twenty_crm_port.update_task_status(task_id, "TODO")
+            await twenty_crm_port.update_task_status(task_id, "TODO")  # noqa: F821
             await callback.answer("🔓 Задача открыта!")
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(f"🔓 Задача «{title}» открыта.")

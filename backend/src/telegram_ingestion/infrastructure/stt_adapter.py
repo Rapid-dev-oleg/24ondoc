@@ -51,7 +51,11 @@ class OpenRouterSTTAdapter(STTPort):
 
     def _detect_format(self, file_bytes: bytes) -> tuple[str, str]:
         """Return (extension, mime_type) based on magic bytes."""
-        if file_bytes[:3] == b"ID3" or (len(file_bytes) > 1 and file_bytes[0] == 0xFF and file_bytes[1] in (0xFB, 0xF3, 0xF2)):
+        if file_bytes[:3] == b"ID3" or (
+            len(file_bytes) > 1
+            and file_bytes[0] == 0xFF
+            and file_bytes[1] in (0xFB, 0xF3, 0xF2)
+        ):
             return ".mp3", "audio/mpeg"
         return ".ogg", "audio/ogg"
 

@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
-
-import logging
 
 import httpx
 
 from twenty_integration.domain.models import TwentyMember, TwentyPerson, TwentyTask
+from twenty_integration.domain.ports import TwentyCRMPort
 
 logger = logging.getLogger(__name__)
-from twenty_integration.domain.ports import TwentyCRMPort
 
 
 class TwentyRestAdapter(TwentyCRMPort):
@@ -122,7 +121,10 @@ class TwentyRestAdapter(TwentyCRMPort):
                 break
         except Exception:
             logger.exception("Failed to fetch task field options from Twenty metadata")
-        logger.info("fetch_task_field_options: kategoriya=%d, vazhnost=%d", len(result["kategoriya"]), len(result["vazhnost"]))
+        logger.info(
+            "fetch_task_field_options: kategoriya=%d, vazhnost=%d",
+            len(result["kategoriya"]), len(result["vazhnost"]),
+        )
         return result
 
     async def create_task(
@@ -193,7 +195,10 @@ class TwentyRestAdapter(TwentyCRMPort):
 
     _ATTACHMENT_FILE_FIELD_ID = "0d953c19-1809-41e8-8f78-80d18836bd9d"
 
-    async def upload_file(self, file_bytes: bytes, filename: str, content_type: str = "application/octet-stream") -> str | None:
+    async def upload_file(
+        self, file_bytes: bytes, filename: str,
+        content_type: str = "application/octet-stream",
+    ) -> str | None:
         """Загрузить файл в Twenty через GraphQL multipart upload. Возвращает file ID."""
         import json as _json
 
@@ -261,10 +266,6 @@ class TwentyRestAdapter(TwentyCRMPort):
         """Получить задачи пользователя из Twenty CRM."""
         try:
             # Map status: open → TODO/V_RABOTE
-            status_filter = "TODO"
-            if status == "resolved":
-                status_filter = "VYPOLNENO"
-
             params: dict[str, str] = {
                 "filter": f"assigneeId[eq]:{assignee_id}",
                 "limit": "20",
@@ -274,8 +275,8 @@ class TwentyRestAdapter(TwentyCRMPort):
             data = response.json()
             tasks = data.get("data", {}).get("tasks", [])
 
-            from types import SimpleNamespace
             from enum import Enum
+            from types import SimpleNamespace
 
             class _Status(Enum):
                 TODO = "TODO"

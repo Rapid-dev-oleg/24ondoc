@@ -7,8 +7,9 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ai_classification.domain.repository import AIClassificationPort
 from redis.asyncio import Redis as AsyncRedis
+
+from ai_classification.domain.repository import AIClassificationPort
 from telegram_ingestion.application.ports import STTPort
 from twenty_integration.domain.ports import TwentyCRMPort
 
@@ -162,7 +163,10 @@ class ATS2PollerService:
                 try:
                     audio_bytes = await self._ats2_client.download_recording(filename)
                     transcription_text = await self._stt_port.transcribe(audio_bytes)
-                    logger.info("ATS2 Poller: Whisper транскрипция для %s (%d bytes)", call_id, len(audio_bytes))
+                    logger.info(
+                        "ATS2 Poller: Whisper транскрипция для %s (%d bytes)",
+                        call_id, len(audio_bytes),
+                    )
                 except Exception:
                     logger.warning("ATS2 Poller: транскрипция недоступна для %s", call_id)
 
@@ -278,7 +282,11 @@ class ATS2PollerService:
                 label = f"{caller_name} ({caller_phone})" if caller_name else caller_phone
                 body_parts.append(f"- Звонящий: {label}")
             if callee_phone or callee_name:
-                label = f"{callee_name} ({callee_phone})" if callee_name and callee_phone else (callee_name or callee_phone)
+                label = (
+                    f"{callee_name} ({callee_phone})"
+                    if callee_name and callee_phone
+                    else (callee_name or callee_phone)
+                )
                 body_parts.append(f"- Принял: {label}")
             if duration:
                 mins, secs = divmod(duration, 60)

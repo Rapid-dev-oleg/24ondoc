@@ -74,7 +74,11 @@ class ATS2AuthManager:
         """Save current tokens to .env file so they survive restarts."""
         import os
 
-        path = self._env_file_path if os.path.isabs(self._env_file_path) else f"/app/{self._env_file_path}"
+        path = (
+            self._env_file_path
+            if os.path.isabs(self._env_file_path)
+            else f"/app/{self._env_file_path}"
+        )
         if not os.path.exists(path):
             logger.warning("Cannot persist ATS2 tokens: %s not found", path)
             return

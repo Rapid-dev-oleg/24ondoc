@@ -18,6 +18,7 @@ from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from admin.infrastructure.router import router as admin_router
+from ai_classification.infrastructure.openrouter_adapter import OpenRouterAdapter
 from ats_processing.application.ats2_poller import ATS2PollerService
 from ats_processing.application.ats2_transcription_mapper import ATS2TranscriptionMapper
 from ats_processing.infrastructure.ats2_client import ATS2AuthManager, ATS2RestClient
@@ -29,9 +30,6 @@ from telegram_ingestion.infrastructure.telegram_fastapi import router as tg_rout
 from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
 
 logger = structlog.get_logger(__name__)
-
-
-from ai_classification.infrastructure.openrouter_adapter import OpenRouterAdapter
 
 
 class _PollerCallRepo:
@@ -251,9 +249,9 @@ async def db_session_middleware(request: Request, call_next: object) -> Response
     return response
 
 
-import os
+import os  # noqa: E402
 
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse  # noqa: E402
 
 _ATTACHMENTS_DIR = "/app/data/attachments"
 

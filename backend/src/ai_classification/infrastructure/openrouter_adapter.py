@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from ..domain.models import Category, ClassificationEntities, ClassificationResult, Priority, TaskFieldSelection
+from ..domain.models import (
+    Category,
+    ClassificationEntities,
+    ClassificationResult,
+    Priority,
+    TaskFieldSelection,
+)
 from ..domain.repository import AIClassificationPort
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +159,8 @@ class OpenRouterAdapter(AIClassificationPort):
         )
 
     TASK_FIELDS_PROMPT = """\
-Ты — помощник системы 24ondoc. Проанализируй текст обращения и выбери наиболее подходящие значения из предложенных списков.
+Ты — помощник системы 24ondoc. Проанализируй текст обращения \
+и выбери наиболее подходящие значения из предложенных списков.
 
 Доступные категории (kategoriya):
 {kategoriya_list}
@@ -227,7 +233,10 @@ class OpenRouterAdapter(AIClassificationPort):
                     kategoriya=kat_value if kat_value in valid_kat else None,
                     vazhnost=vazh_value if vazh_value in valid_vazh else None,
                 )
-                logger.info("select_task_fields OK (model=%s): kat=%s, vazh=%s", model, result.kategoriya, result.vazhnost)
+                logger.info(
+                    "select_task_fields OK (model=%s): kat=%s, vazh=%s",
+                    model, result.kategoriya, result.vazhnost,
+                )
                 return result
             except Exception:
                 logger.warning("select_task_fields failed with model=%s", model, exc_info=True)
