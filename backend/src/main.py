@@ -10,6 +10,7 @@ from typing import cast
 import structlog
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BotCommand
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -157,6 +158,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         drop_pending_updates=True,
     )
     logger.info("Telegram webhook registered", url=webhook_url)
+
+    # Register bot commands menu
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Начать работу"),
+        BotCommand(command="new_task", description="Создать задачу"),
+        BotCommand(command="my_tasks", description="Мои задачи"),
+        BotCommand(command="settings", description="Настройки профиля"),
+        BotCommand(command="operators", description="Операторы"),
+        BotCommand(command="health", description="Здоровье системы"),
+        BotCommand(command="logs", description="Последние заявки"),
+    ])
 
     # ATS2 Poller (background task)
     ats2_poller = _create_ats2_poller(
