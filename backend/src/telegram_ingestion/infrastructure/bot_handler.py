@@ -941,8 +941,9 @@ def _update_env_var(env_path: str, key: str, value: str) -> None:
     """Update a variable in .env file."""
     import os
 
-    path = env_path if os.path.isabs(env_path) else f"/app/24ondoc/{env_path}"
+    path = env_path if os.path.isabs(env_path) else f"/app/{env_path}"
     if not os.path.exists(path):
+        logger.warning("_update_env_var: file %s not found", path)
         return
 
     with open(path) as f:
