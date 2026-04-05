@@ -48,3 +48,10 @@ class ClassificationResult(BaseModel):
 
     def is_urgent(self) -> bool:
         return self.priority in (Priority.URGENT, Priority.HIGH)
+
+
+class TaskFieldSelection(BaseModel):
+    """Result of AI selecting kategoriya and vazhnost from Twenty option lists."""
+
+    kategoriya: str | None = None
+    vazhnost: str | None = None

@@ -112,7 +112,7 @@ async def telegram_webhook(
     ai_port = OpenRouterAdapter(
         api_key=settings.openrouter_api_key or settings.openai_api_key or ""
     )
-    create_twenty_task = CreateTwentyTaskFromSession(twenty_adapter)
+    create_twenty_task = CreateTwentyTaskFromSession(twenty_adapter, ai_port=ai_port)
 
     # Dispatcher with Redis FSM storage (shared state across per-request instances)
     storage = RedisStorage(redis=redis)

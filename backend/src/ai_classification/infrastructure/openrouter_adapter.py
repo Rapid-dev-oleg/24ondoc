@@ -9,8 +9,12 @@ from dataclasses import dataclass, field
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from ..domain.models import Category, ClassificationEntities, ClassificationResult, Priority
+from ..domain.models import Category, ClassificationEntities, ClassificationResult, Priority, TaskFieldSelection
 from ..domain.repository import AIClassificationPort
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 CLASSIFICATION_PROMPT = """\
 Ты — классификатор медицинских обращений для системы 24ondoc.
@@ -139,3 +143,76 @@ class OpenRouterAdapter(AIClassificationPort):
             assignee_hint=parsed.get("assignee_hint"),
             model_used=model,
         )
+
+    TASK_FIELDS_PROMPT = """\
+Ты — помощник системы 24ondoc. Проанализируй текст обращения и выбери наиболее подходящие значения из предложенных списков.
+
+Доступные категории (kategoriya):
+{kategoriya_list}
+
+Доступные уровни важности (vazhnost):
+{vazhnost_list}
+
+Правила:
+- Если ни одна категория не подходит — верни null для kategoriya.
+- Если не можешь определить важность — верни null для vazhnost.
+- Возвращай ТОЛЬКО value из списка, не label.
+
+Ответь ТОЛЬКО JSON-объектом:
+{{"kategoriya": "<value или null>", "vazhnost": "<value или null>"}}"""
+
+    async def select_task_fields(
+        self,
+        text: str,
+        kategoriya_options: list[dict[str, str]],
+        vazhnost_options: list[dict[str, str]],
+    ) -> TaskFieldSelection:
+        """Use AI to select best kategoriya and vazhnost from provided options."""
+        kat_list = "\n".join(
+            f'- value="{o["value"]}", label="{o["label"]}"' for o in kategoriya_options
+        ) or "(список пуст)"
+        vazh_list = "\n".join(
+            f'- value="{o["value"]}", label="{o["label"]}"' for o in vazhnost_options
+        ) or "(список пуст)"
+
+        prompt = self.TASK_FIELDS_PROMPT.format(
+            kategoriya_list=kat_list, vazhnost_list=vazh_list
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self._BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self._primary_model,
+                        "messages": [
+                            {"role": "system", "content": prompt},
+                            {"role": "user", "content": text},
+                        ],
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                response.raise_for_status()
+
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            parsed = json.loads(content)
+
+            kat_value = parsed.get("kategoriya")
+            vazh_value = parsed.get("vazhnost")
+
+            # Validate against actual options
+            valid_kat = {o["value"] for o in kategoriya_options}
+            valid_vazh = {o["value"] for o in vazhnost_options}
+
+            return TaskFieldSelection(
+                kategoriya=kat_value if kat_value in valid_kat else None,
+                vazhnost=vazh_value if vazh_value in valid_vazh else None,
+            )
+        except Exception:
+            logger.warning("AI select_task_fields failed, returning defaults")
+            return TaskFieldSelection()

@@ -21,8 +21,24 @@ class TwentyCRMPort(ABC):
     async def create_person(self, telegram_id: int, name: str) -> TwentyPerson: ...
 
     @abstractmethod
+    async def fetch_task_field_options(self) -> dict[str, list[dict[str, str]]]:
+        """Fetch current kategoriya and vazhnost options from Twenty metadata.
+
+        Returns dict like:
+            {"kategoriya": [{"label": "...", "value": "..."}, ...],
+             "vazhnost": [{"label": "...", "value": "..."}, ...]}
+        """
+        ...
+
+    @abstractmethod
     async def create_task(
-        self, title: str, body: str, due_at: datetime | None, assignee_id: str | None
+        self,
+        title: str,
+        body: str,
+        due_at: datetime | None,
+        assignee_id: str | None,
+        kategoriya: str | None = None,
+        vazhnost: str | None = None,
     ) -> TwentyTask: ...
 
     @abstractmethod

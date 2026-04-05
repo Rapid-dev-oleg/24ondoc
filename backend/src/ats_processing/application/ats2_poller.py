@@ -285,11 +285,28 @@ class ATS2PollerService:
                 body_parts.append(f"- Длительность разговора: {mins}м {secs}с")
             body_parts.append(f"\n**Транскрипция:**\n{transcription}")
 
+            # Подобрать kategoriya и vazhnost из актуальных списков Twenty
+            kategoriya_value: str | None = None
+            vazhnost_value: str | None = None
+            try:
+                options = await self._twenty_port.fetch_task_field_options()
+                selection = await self._ai_port.select_task_fields(
+                    full_text,
+                    options.get("kategoriya", []),
+                    options.get("vazhnost", []),
+                )
+                kategoriya_value = selection.kategoriya
+                vazhnost_value = selection.vazhnost
+            except Exception:
+                logger.warning("ATS2 Poller: failed to select task fields for %s", call_id)
+
             task = await self._twenty_port.create_task(
                 title=f"📞 {classification.title}",
                 body="\n".join(body_parts),
                 due_at=call_datetime,
                 assignee_id=None,
+                kategoriya=kategoriya_value,
+                vazhnost=vazhnost_value,
             )
             logger.info(
                 "ATS2 call %s → Twenty task created: %s", call_id, task.twenty_id

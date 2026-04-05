@@ -100,12 +100,38 @@ class TwentyRestAdapter(TwentyCRMPort):
         except httpx.HTTPError as e:
             raise RuntimeError(f"Failed to create person: {e}") from e
 
+    async def fetch_task_field_options(self) -> dict[str, list[dict[str, str]]]:
+        """Запросить актуальные списки kategoriya и vazhnost из метаданных Twenty."""
+        result: dict[str, list[dict[str, str]]] = {"kategoriya": [], "vazhnost": []}
+        try:
+            response = await self._client.get("/rest/metadata/objects")
+            response.raise_for_status()
+            objects = response.json().get("data", {}).get("objects", [])
+            for obj in objects:
+                if obj.get("nameSingular") != "task":
+                    continue
+                for fld in obj.get("fields", []):
+                    name = fld.get("name", "")
+                    if name in ("kategoriya", "vazhnost"):
+                        options = fld.get("options", [])
+                        result[name] = [
+                            {"label": o["label"], "value": o["value"]}
+                            for o in options
+                            if "label" in o and "value" in o
+                        ]
+                break
+        except Exception:
+            logger.warning("Failed to fetch task field options from Twenty metadata")
+        return result
+
     async def create_task(
         self,
         title: str,
         body: str,
         due_at: datetime | None,
         assignee_id: str | None,
+        kategoriya: str | None = None,
+        vazhnost: str | None = None,
     ) -> TwentyTask:
         """Создать задачу."""
         try:
@@ -120,6 +146,12 @@ class TwentyRestAdapter(TwentyCRMPort):
 
             if assignee_id is not None:
                 payload["assigneeId"] = assignee_id
+
+            if kategoriya is not None:
+                payload["kategoriya"] = kategoriya
+
+            if vazhnost is not None:
+                payload["vazhnost"] = vazhnost
 
             response = await self._client.post("/rest/tasks", json=payload)
             if response.status_code >= 400:

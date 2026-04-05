@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from ai_classification.domain.repository import AIClassificationPort
 from telegram_ingestion.domain.models import DraftSession
 from twenty_integration.domain.models import TwentyTask
 from twenty_integration.domain.ports import TwentyCRMPort
@@ -31,8 +32,9 @@ def _parse_deadline(deadline_str: str | None) -> datetime | None:
 class CreateTwentyTaskFromSession:
     """Use Case: создать задачу в Twenty из завершённой DraftSession."""
 
-    def __init__(self, port: TwentyCRMPort) -> None:
+    def __init__(self, port: TwentyCRMPort, ai_port: AIClassificationPort | None = None) -> None:
         self._port = port
+        self._ai_port = ai_port
 
     async def execute(
         self,
@@ -57,12 +59,31 @@ class CreateTwentyTaskFromSession:
         if session.ai_result is None:
             raise ValueError("DraftSession должна иметь ai_result")
 
-        # 1. Создать Task с назначением оператора как ответственного (workspace member)
+        # 1. Подобрать kategoriya и vazhnost из актуальных списков Twenty
+        kategoriya_value: str | None = None
+        vazhnost_value: str | None = None
+        if self._ai_port is not None:
+            try:
+                options = await self._port.fetch_task_field_options()
+                task_text = f"{session.ai_result.title}\n{session.ai_result.description}"
+                selection = await self._ai_port.select_task_fields(
+                    task_text,
+                    options.get("kategoriya", []),
+                    options.get("vazhnost", []),
+                )
+                kategoriya_value = selection.kategoriya
+                vazhnost_value = selection.vazhnost
+            except Exception:
+                logger.warning("Failed to select task fields, creating without them")
+
+        # 2. Создать Task с назначением оператора как ответственного (workspace member)
         task = await self._port.create_task(
             title=session.ai_result.title,
             body=session.ai_result.description,
             due_at=_parse_deadline(session.ai_result.deadline),
             assignee_id=assignee_id,
+            kategoriya=kategoriya_value,
+            vazhnost=vazhnost_value,
         )
 
         # 4. Загрузить файлы в Twenty и прикрепить к задаче
