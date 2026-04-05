@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import pytest
 
 from ..application.ports import VoiceEmbeddingPort
@@ -11,7 +9,7 @@ from ..application.use_cases import (
     EnrollVoiceSampleUseCase,
     IdentifyAgentByVoice,
 )
-from ..domain.models import CallRecord, CallStatus
+from ..domain.models import CallRecord
 from ..domain.repository import AgentVoiceSampleRepository, CallRecordRepository
 
 # ---------- Stubs ----------
