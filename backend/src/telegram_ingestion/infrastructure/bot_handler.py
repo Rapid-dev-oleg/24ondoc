@@ -724,17 +724,19 @@ def create_router(
 
         # 3. Proxy + ATS2
         ats2_connected = False
-        if settings is not None and settings.ats2_proxy_url and ats2_auth_manager is not None:
+        if settings is not None and settings.ats2_enabled and ats2_auth_manager is not None:
             import httpx as _httpx
 
-            proxy_url = settings.ats2_proxy_url
+            # Use proxy from auth_manager (updated at runtime via /ats2_proxy)
+            proxy_url = getattr(ats2_auth_manager, "_proxy_url", None) or settings.ats2_proxy_url
             try:
                 current_token = await ats2_auth_manager.get_access_token()
                 async with _httpx.AsyncClient(
-                    proxy=proxy_url, timeout=10.0
+                    proxy=proxy_url or None, timeout=10.0
                 ) as _client:
                     resp = await _client.get("https://ats2.t2.ru/crm/openapi/call-records/active", headers={
                         "Authorization": current_token,
+                        "Accept": "application/json",
                     })
                     if resp.status_code == 403:
                         lines.append("✅ Прокси ATS2 — OK")
@@ -1060,24 +1062,13 @@ def _tasks_list_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _task_detail_keyboard(
-    task_id: Any, assignee_crm_id: Any, status: str, is_supervisor: bool
-) -> InlineKeyboardMarkup:
+def _task_detail_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для детального просмотра задачи."""
-    buttons: list[list[InlineKeyboardButton]] = []
-
-    if status in ("TODO", "V_RABOTE", "open", "pending"):
-        buttons.append(
-            [InlineKeyboardButton(text="✅ Решить", callback_data="task_resolve")]
-        )
-    else:
-        buttons.append(
-            [InlineKeyboardButton(text="🔓 Открыть", callback_data="task_reopen")]
-        )
-
-    buttons.append([InlineKeyboardButton(text="◀ К списку", callback_data="tasks_back")])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="◀ К списку", callback_data="tasks_back")],
+        ]
+    )
 
 
 def _reassign_keyboard(task_id: int, agents: Sequence[Any]) -> InlineKeyboardMarkup:

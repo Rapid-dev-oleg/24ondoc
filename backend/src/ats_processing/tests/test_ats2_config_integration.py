@@ -18,8 +18,6 @@ class TestSettingsLoadsAts2Config:
         monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "fake-secret")
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         monkeypatch.setenv("T2_WEBHOOK_SECRET", "fake-t2")
-        monkeypatch.setenv("MINIO_ACCESS_KEY", "fake-minio-key")
-        monkeypatch.setenv("MINIO_SECRET_KEY", "fake-minio-secret")
         monkeypatch.setenv("ADMIN_JWT_SECRET", "fake-admin-jwt-secret-32chars!!")
         monkeypatch.setenv("ADMIN_PASSWORD", "fake-admin-password")
 
@@ -47,8 +45,6 @@ class TestSettingsLoadsAts2Config:
         monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "fake-secret")
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         monkeypatch.setenv("T2_WEBHOOK_SECRET", "fake-t2")
-        monkeypatch.setenv("MINIO_ACCESS_KEY", "fake-minio-key")
-        monkeypatch.setenv("MINIO_SECRET_KEY", "fake-minio-secret")
         monkeypatch.setenv("ADMIN_JWT_SECRET", "fake-admin-jwt-secret-32chars!!")
         monkeypatch.setenv("ADMIN_PASSWORD", "fake-admin-password")
 

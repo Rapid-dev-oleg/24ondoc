@@ -7,74 +7,17 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 
-import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
 from ..domain.models import CallRecord, CallStatus
 from ..domain.repository import AgentVoiceSampleRepository, CallRecordRepository
-from .ports import AudioStoragePort, VoiceEmbeddingPort
+from .ports import VoiceEmbeddingPort
 
 logger = logging.getLogger(__name__)
-
-_AUDIO_BUCKET_KEY_TEMPLATE = "calls/{call_id}.ogg"
-_AUDIO_TIMEOUT = 30.0
-_AUDIO_MAX_ATTEMPTS = 3
 
 # Regex fallback: ищет имя агента в транскрипции
 _AGENT_NAME_PATTERN = re.compile(
     r"\b(меня зовут|это|говорит|агент)\s+([А-ЯЁA-Z][а-яёa-z]+(?:\s+[А-ЯЁA-Z][а-яёa-z]+)?)",
     re.IGNORECASE,
 )
-
-
-class FetchAudioRecording:
-    """
-    Use case: скачать аудио по audio_url, загрузить в MinIO, запустить транскрипцию Whisper.
-
-    После успеха обновляет CallRecord.status → PROCESSING и сохраняет транскрипцию.
-    """
-
-    def __init__(
-        self,
-        audio_storage: AudioStoragePort,
-        call_repo: CallRecordRepository,
-        stt_port: STTPortLike | None = None,
-    ) -> None:
-        self._storage = audio_storage
-        self._call_repo = call_repo
-        self._stt_port = stt_port
-
-    async def execute(self, call_record: CallRecord) -> str:
-        """Download audio, store in MinIO, transcribe. Returns storage path."""
-        audio_bytes = await self._download_audio(call_record.audio_url)
-
-        key = _AUDIO_BUCKET_KEY_TEMPLATE.format(call_id=call_record.call_id)
-        storage_path = await self._storage.upload(key, audio_bytes)
-
-        call_record.start_processing()
-        call_record.status = CallStatus.PROCESSING
-
-        if self._stt_port is not None:
-            try:
-                text = await self._stt_port.transcribe(audio_bytes)
-                call_record.set_transcription(text, source="whisper")
-            except Exception:
-                logger.exception("Whisper transcription failed for %s", call_record.call_id)
-
-        await self._call_repo.save(call_record)
-        return storage_path
-
-    @retry(
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError)),
-        stop=stop_after_attempt(_AUDIO_MAX_ATTEMPTS),
-        wait=wait_exponential(multiplier=0.1, min=0.1, max=2),
-        reraise=True,
-    )
-    async def _download_audio(self, url: str) -> bytes:
-        async with httpx.AsyncClient(timeout=_AUDIO_TIMEOUT) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.content
 
 
 # Type alias (избегаем circular import)
@@ -188,7 +131,7 @@ class ProcessCallWebhook:
     Оркестратор полного flow обработки звонка (ТЗ раздел 4.2):
 
     1. Получить CallRecord по call_id
-    2. FetchAudioRecording → скачать + транскрибировать
+    2. Скачать + транскрибировать аудио
     3. IdentifyAgentByVoice → биометрия
     4. Обновить статус CallRecord → PREVIEW + DraftSession
     5. SendCallNotification в Telegram
@@ -198,13 +141,11 @@ class ProcessCallWebhook:
     def __init__(
         self,
         call_repo: CallRecordRepository,
-        fetch_audio: FetchAudioRecording,
         identify_agent: IdentifyAgentByVoice,
         notification_port: TelegramNotificationPort,
         dispatcher_chat_id: int,
     ) -> None:
         self._call_repo = call_repo
-        self._fetch_audio = fetch_audio
         self._identify_agent = identify_agent
         self._notification_port = notification_port
         self._dispatcher_chat_id = dispatcher_chat_id
@@ -217,18 +158,15 @@ class ProcessCallWebhook:
             return None
 
         try:
-            # Step 2: fetch + transcribe
-            await self._fetch_audio.execute(call_record)
-
-            # Step 3: voice biometry
+            # Step 2: voice biometry
             await self._identify_agent.execute(call_record, audio_bytes=b"")
 
-            # Step 4: transition to PREVIEW
+            # Step 3: transition to PREVIEW
             session_id = uuid.uuid4()
             call_record.mark_preview(session_id)
             await self._call_repo.save(call_record)
 
-            # Step 5: Telegram notification
+            # Step 4: Telegram notification
             await self._notification_port.send_call_notification(
                 self._dispatcher_chat_id, call_record
             )

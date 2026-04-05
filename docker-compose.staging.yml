@@ -129,9 +129,6 @@ services:
       - CHATWOOT_PLATFORM_API_KEY=${CHATWOOT_PLATFORM_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - WHISPER_BASE_URL=${WHISPER_BASE_URL:-http://whisper:9000}
-      - MINIO_ENDPOINT=minio-staging:9000
-      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
-      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
@@ -155,33 +152,11 @@ services:
     networks:
       - staging
 
-  # --- MinIO (staging) ---
-  minio-staging:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY}
-      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
-    ports:
-      - "9100:9000"
-      - "9101:9001"
-    volumes:
-      - staging_minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
-    networks:
-      - staging
-
 volumes:
   staging_postgres_data:
   staging_redis_data:
   staging_chatwoot_data:
   staging_voice_samples:
-  staging_minio_data:
 
 networks:
   staging:

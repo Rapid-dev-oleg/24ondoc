@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -93,31 +93,34 @@ def _make_ats2_call(
     duration: int = 120,
     call_date: str = "2026-03-30T12:00:00",
 ) -> dict[str, object]:
+    # Match the field names used in ATS2PollerService._process_new_call
     return {
-        "id": call_id,
-        "filename": filename,
-        "callerPhone": caller_phone,
-        "agentExt": agent_ext,
-        "duration": duration,
-        "callDate": call_date,
+        "uuid": call_id,
+        "recordFileName": filename,
+        "callerNumber": caller_phone,
+        "calleeNumber": agent_ext,
+        "conversationDuration": duration,
+        "date": call_date,
+        "callerName": None,
+        "calleeName": None,
+        "callType": "SINGLE_CHANNEL",
+        "callStatus": "ANSWERED_COMMON",
+        "destinationNumber": agent_ext,
     }
 
 
 def _build_poller(
     call_repo: StubCallRepo | None = None,
     ats2_client: StubATS2Client | None = None,
-    process_call: AsyncMock | None = None,
     poll_interval: float = 60.0,
 ) -> ATS2PollerService:
     repo = call_repo or StubCallRepo()
     client = ats2_client or StubATS2Client()
-    process = process_call or AsyncMock()
     mapper = ATS2TranscriptionMapper()
 
     return ATS2PollerService(
         ats2_client=client,
         call_repo=repo,
-        process_call_webhook=process,
         transcription_mapper=mapper,
         poll_interval_sec=poll_interval,
     )
@@ -134,8 +137,7 @@ class TestATS2PollerService:
         """AC: поллер запрашивает записи начиная с last_poll_timestamp."""
         client = StubATS2Client(call_records=[_make_ats2_call()])
         repo = StubCallRepo()
-        process = AsyncMock()
-        poller = _build_poller(call_repo=repo, ats2_client=client, process_call=process)
+        poller = _build_poller(call_repo=repo, ats2_client=client)
 
         # Set a known last_poll_timestamp
         last_ts = datetime(2026, 3, 30, 10, 0, 0, tzinfo=UTC)
@@ -159,13 +161,10 @@ class TestATS2PollerService:
         repo.seed(existing)
 
         client = StubATS2Client(call_records=[_make_ats2_call(call_id="ats2_dup")])
-        process = AsyncMock()
-        poller = _build_poller(call_repo=repo, ats2_client=client, process_call=process)
+        poller = _build_poller(call_repo=repo, ats2_client=client)
 
         await poller.poll_once()
 
-        # ProcessCallWebhook should NOT be called for duplicates
-        process.execute.assert_not_awaited()
         # No new records saved (only the seed exists)
         assert len(repo.saved) == 0
 
@@ -174,8 +173,7 @@ class TestATS2PollerService:
         """AC: новая запись создаётся с source=CALL_ATS2_POLLING."""
         client = StubATS2Client(call_records=[_make_ats2_call(call_id="ats2_new")])
         repo = StubCallRepo()
-        process = AsyncMock()
-        poller = _build_poller(call_repo=repo, ats2_client=client, process_call=process)
+        poller = _build_poller(call_repo=repo, ats2_client=client)
 
         await poller.poll_once()
 
@@ -189,33 +187,34 @@ class TestATS2PollerService:
         """AC: ошибка API не роняет поллер, он продолжает работу."""
         client = StubATS2Client(raise_on_get=ConnectionError("ATS2 unavailable"))
         repo = StubCallRepo()
-        process = AsyncMock()
-        poller = _build_poller(call_repo=repo, ats2_client=client, process_call=process)
+        poller = _build_poller(call_repo=repo, ats2_client=client)
 
         # Should not raise
         await poller.poll_once()
 
-        # No records saved, no processing triggered
+        # No records saved
         assert len(repo.saved) == 0
-        process.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_poller_updates_last_poll_timestamp_on_success(self) -> None:
         """AC: после успешного опроса last_poll_timestamp обновляется."""
         client = StubATS2Client(call_records=[_make_ats2_call()])
         repo = StubCallRepo()
-        process = AsyncMock()
-        poller = _build_poller(call_repo=repo, ats2_client=client, process_call=process)
+        poller = _build_poller(call_repo=repo, ats2_client=client)
 
-        before = poller._last_poll_timestamp
+        # Initialize last_poll_timestamp
+        from datetime import UTC
+        before = datetime.now(UTC) - timedelta(minutes=5)
+        poller._last_poll_timestamp = before
+        
         await poller.poll_once()
         after = poller._last_poll_timestamp
 
         assert after > before
 
     @pytest.mark.asyncio
-    async def test_poller_downloads_recording_and_transcription(self) -> None:
-        """AC: для нового звонка скачивается запись и транскрипция."""
+    async def test_poller_fetches_transcription_from_ats2(self) -> None:
+        """AC: транскрипция получается от ATS2 STT API."""
         transcription_data: dict[str, object] = {
             "words": [
                 {"channel": "A", "startTime": 0.0, "endTime": 0.5, "word": "Алло"},
@@ -227,19 +226,18 @@ class TestATS2PollerService:
             transcription=transcription_data,
         )
         repo = StubCallRepo()
-        process = AsyncMock()
-        poller = _build_poller(call_repo=repo, ats2_client=client, process_call=process)
+        poller = _build_poller(call_repo=repo, ats2_client=client)
 
         await poller.poll_once()
 
-        # Recording was downloaded
-        assert "rec_rec.mp3" in client.download_calls
-        # Transcription was fetched
+        # Transcription was fetched from ATS2
         assert "rec_rec.mp3" in client.transcription_calls
         # Saved record has transcription_t2 set
         assert len(repo.saved) == 1
         assert repo.saved[0].transcription_t2 is not None
         assert "Алло" in repo.saved[0].transcription_t2  # type: ignore[operator]
+        # Recording was NOT downloaded (transcription from ATS2 is sufficient)
+        assert "rec_rec.mp3" not in client.download_calls
 
     @pytest.mark.asyncio
     async def test_poller_graceful_shutdown(self) -> None:
@@ -264,12 +262,10 @@ class TestATS2PollerService:
             ]
         )
         repo = StubCallRepo()
-        process = AsyncMock()
-        poller = _build_poller(call_repo=repo, ats2_client=client, process_call=process)
+        poller = _build_poller(call_repo=repo, ats2_client=client)
 
         await poller.poll_once()
 
         assert len(repo.saved) == 2
-        assert process.execute.await_count == 2
         saved_ids = {r.call_id for r in repo.saved}
         assert saved_ids == {"ats2_a", "ats2_b"}

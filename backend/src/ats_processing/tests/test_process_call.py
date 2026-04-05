@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from aiogram import Dispatcher
 from aiogram.enums import ChatType
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
-from ..application.ports import AudioStoragePort, VoiceEmbeddingPort
+from ..application.ports import VoiceEmbeddingPort
 from ..application.use_cases import (
-    FetchAudioRecording,
     IdentifyAgentByVoice,
     ProcessCallWebhook,
     TelegramNotificationPort,
 )
-from ..domain.models import CallRecord, CallStatus, SourceType
+from ..domain.models import CallRecord, CallStatus
 from ..domain.repository import AgentVoiceSampleRepository, CallRecordRepository
 
 # ---------- Stubs ----------
@@ -36,20 +35,12 @@ class StubCallRepo(CallRecordRepository):
         self._record = record
 
     async def get_pending(
-        self, limit: int = 10, source: SourceType | None = None
+        self, limit: int = 10, source: object | None = None
     ) -> list[CallRecord]:
         return []
 
     async def find_recent_by_phone(self, phone: str, limit: int = 10) -> list[CallRecord]:
         return []
-
-
-class StubAudioStorage(AudioStoragePort):
-    async def upload(self, key: str, data: bytes, content_type: str = "audio/ogg") -> str:
-        return f"voice-samples/{key}"
-
-    async def get_presigned_url(self, key: str) -> str:
-        return f"http://minio/presigned/{key}"
 
 
 class StubEmbeddingPort(VoiceEmbeddingPort):
@@ -86,30 +77,26 @@ def _make_call(call_id: str = "t2_001") -> CallRecord:
 
 def _build_process_call_webhook(
     call_record: CallRecord | None = None,
-    fetch_audio_raises: Exception | None = None,
+    identify_raises: Exception | None = None,
     dispatcher_chat_id: int = 999,
 ) -> tuple[ProcessCallWebhook, StubCallRepo, StubNotificationPort]:
     repo = StubCallRepo(call_record)
     notification = StubNotificationPort()
 
-    storage_port = StubAudioStorage()
     embedding_port = StubEmbeddingPort()
     voice_repo = StubVoiceRepo()
 
-    fetch_audio = FetchAudioRecording(audio_storage=storage_port, call_repo=repo)
     identify_agent = IdentifyAgentByVoice(embedding_port, voice_repo)
 
-    if fetch_audio_raises:
-        # Patch _download_audio to raise
+    if identify_raises:
 
-        async def patched_execute(cr: CallRecord) -> str:
-            raise fetch_audio_raises
+        async def patched_execute(cr: CallRecord, audio_bytes: bytes) -> int | None:
+            raise identify_raises
 
-        fetch_audio.execute = patched_execute  # type: ignore[assignment]
+        identify_agent.execute = patched_execute  # type: ignore[assignment]
 
     uc = ProcessCallWebhook(
         call_repo=repo,
-        fetch_audio=fetch_audio,
         identify_agent=identify_agent,
         notification_port=notification,
         dispatcher_chat_id=dispatcher_chat_id,
@@ -125,35 +112,22 @@ def _build_process_call_webhook(
 class TestProcessCallWebhook:
     async def test_process_call_webhook_full_flow(self) -> None:
         """AC: полный flow без ошибок, статус PREVIEW."""
-        from unittest.mock import patch
-
         call = _make_call("t2_full")
         uc, repo, notification = _build_process_call_webhook(call_record=call)
 
-        # Patch httpx download
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_response = MagicMock()
-            mock_response.content = b"audio"
-            mock_response.raise_for_status = MagicMock()
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
-
-            result = await uc.execute("t2_full")
+        result = await uc.execute("t2_full")
 
         assert result is not None
         assert result.status == CallStatus.PREVIEW
         assert len(notification.sent) == 1
         assert notification.sent[0][0] == 999
 
-    async def test_process_call_webhook_handles_fetch_error(self) -> None:
-        """AC: ошибка fetch → статус ERROR."""
+    async def test_process_call_webhook_handles_identify_error(self) -> None:
+        """AC: ошибка identify → статус ERROR."""
         call = _make_call("t2_err")
         uc, repo, notification = _build_process_call_webhook(
             call_record=call,
-            fetch_audio_raises=RuntimeError("Network error"),
+            identify_raises=RuntimeError("Voice processing error"),
         )
 
         result = await uc.execute("t2_err")
@@ -170,24 +144,12 @@ class TestProcessCallWebhook:
 
     async def test_telegram_notification_sent_with_inline_buttons(self) -> None:
         """AC: уведомление с кнопками (notification_port.send called)."""
-        from unittest.mock import patch
-
         call = _make_call("t2_notif")
         uc, repo, notification = _build_process_call_webhook(
             call_record=call, dispatcher_chat_id=12345
         )
 
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_response = MagicMock()
-            mock_response.content = b"audio"
-            mock_response.raise_for_status = MagicMock()
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
-
-            await uc.execute("t2_notif")
+        await uc.execute("t2_notif")
 
         assert len(notification.sent) == 1
         assert notification.sent[0][0] == 12345
