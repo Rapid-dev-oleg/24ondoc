@@ -76,8 +76,8 @@ class OpenRouterAdapter(AIClassificationPort):
     def __init__(
         self,
         api_key: str,
-        primary_model: str = "anthropic/claude-3.5-sonnet",
-        fallback_model: str = "openai/gpt-4o",
+        primary_model: str = "anthropic/claude-sonnet-4",
+        fallback_model: str = "anthropic/claude-3.7-sonnet",
     ) -> None:
         self._api_key = api_key
         self._primary_model = primary_model
@@ -179,40 +179,44 @@ class OpenRouterAdapter(AIClassificationPort):
             kategoriya_list=kat_list, vazhnost_list=vazh_list
         )
 
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    f"{self._BASE_URL}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self._primary_model,
-                        "messages": [
-                            {"role": "system", "content": prompt},
-                            {"role": "user", "content": text},
-                        ],
-                        "response_format": {"type": "json_object"},
-                    },
+        valid_kat = {o["value"] for o in kategoriya_options}
+        valid_vazh = {o["value"] for o in vazhnost_options}
+
+        for model in (self._primary_model, self._fallback_model):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        f"{self._BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self._api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": prompt},
+                                {"role": "user", "content": text},
+                            ],
+                            "response_format": {"type": "json_object"},
+                        },
+                    )
+                    response.raise_for_status()
+
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                parsed = json.loads(content)
+
+                kat_value = parsed.get("kategoriya")
+                vazh_value = parsed.get("vazhnost")
+
+                result = TaskFieldSelection(
+                    kategoriya=kat_value if kat_value in valid_kat else None,
+                    vazhnost=vazh_value if vazh_value in valid_vazh else None,
                 )
-                response.raise_for_status()
+                logger.info("select_task_fields OK (model=%s): kat=%s, vazh=%s", model, result.kategoriya, result.vazhnost)
+                return result
+            except Exception:
+                logger.warning("select_task_fields failed with model=%s", model, exc_info=True)
 
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            parsed = json.loads(content)
-
-            kat_value = parsed.get("kategoriya")
-            vazh_value = parsed.get("vazhnost")
-
-            # Validate against actual options
-            valid_kat = {o["value"] for o in kategoriya_options}
-            valid_vazh = {o["value"] for o in vazhnost_options}
-
-            return TaskFieldSelection(
-                kategoriya=kat_value if kat_value in valid_kat else None,
-                vazhnost=vazh_value if vazh_value in valid_vazh else None,
-            )
-        except Exception:
-            logger.exception("AI select_task_fields failed, returning defaults")
-            return TaskFieldSelection()
+        logger.error("select_task_fields: all models failed, returning defaults")
+        return TaskFieldSelection()
