@@ -167,6 +167,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         BotCommand(command="my_tasks", description="Мои задачи"),
         BotCommand(command="settings", description="Настройки профиля"),
         BotCommand(command="operators", description="Операторы"),
+        BotCommand(command="add_member", description="Добавить участника"),
+        BotCommand(command="add_admin", description="Добавить администратора"),
         BotCommand(command="health", description="Здоровье системы"),
         BotCommand(command="logs", description="Последние заявки"),
         BotCommand(command="ats2_access_token", description="Токен ATS2"),
