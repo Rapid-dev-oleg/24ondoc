@@ -7,7 +7,7 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 
-from ..domain.models import CallRecord, CallStatus
+from ..domain.models import CallRecord
 from ..domain.repository import AgentVoiceSampleRepository, CallRecordRepository
 from .ports import VoiceEmbeddingPort
 
