@@ -86,6 +86,7 @@ class AddUserStates(StatesGroup):
 class ATS2TokenStates(StatesGroup):
     entering_access_token = State()
     entering_refresh_token = State()
+    entering_proxy = State()
 
 _INVITE_TTL = 86400 * 7  # 7 days
 
@@ -155,6 +156,7 @@ def create_router(
     settings: Any = None,
     ats2_auth_manager: Any = None,
     ats2_poller: Any = None,
+    ats2_client: Any = None,
 ) -> Router:
     """Create and configure the telegram ingestion router with injected use cases."""
     from ..domain.models import UserRole
@@ -946,6 +948,49 @@ def create_router(
             logger.exception("Failed to update ATS2 refresh token")
             await state.clear()
             await message.answer("❌ Ошибка обновления токена.")
+
+    @router.message(Command("ats2_proxy"))
+    async def cmd_ats2_proxy(message: Message, state: FSMContext) -> None:
+        if message.from_user is None:
+            return
+        profile = await user_port.get_profile(message.from_user.id)
+        if profile is None or profile.role != UserRole.ADMIN:
+            await message.answer("🔒 Нет доступа.")
+            return
+        if ats2_client is None:
+            await message.answer("⚠️ ATS2 отключён.")
+            return
+        await state.set_state(ATS2TokenStates.entering_proxy)
+        await message.answer(
+            "🌐 Отправьте новый прокси для ATS2:\n"
+            "<code>http://login:password@ip:port</code>"
+        )
+
+    @router.message(ATS2TokenStates.entering_proxy, F.text)
+    async def handle_ats2_proxy(message: Message, state: FSMContext) -> None:
+        if message.from_user is None or message.text is None:
+            return
+        proxy = message.text.strip()
+        if not proxy.startswith("http"):
+            await message.answer("❌ Прокси должен начинаться с http:// или https://")
+            return
+
+        try:
+            await ats2_client.update_proxy(proxy)
+
+            if settings is not None:
+                _update_env_var(settings.env_file_path, "ATS2_PROXY_URL", proxy)
+
+            await state.clear()
+            await message.answer("✅ Прокси ATS2 обновлён.")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+        except Exception:
+            logger.exception("Failed to update ATS2 proxy")
+            await state.clear()
+            await message.answer("❌ Ошибка обновления прокси.")
 
     return router
 

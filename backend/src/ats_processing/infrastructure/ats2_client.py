@@ -39,6 +39,11 @@ class ATS2AuthManager:
         self._refresh_token = refresh_token
         logger.info("ATS2 tokens updated manually")
 
+    def update_proxy(self, proxy_url: str) -> None:
+        """Update proxy URL in memory."""
+        self._proxy_url = proxy_url or None
+        logger.info("ATS2 auth proxy updated")
+
     async def get_access_token(self) -> str:
         return self._access_token
 
@@ -111,6 +116,17 @@ class ATS2RestClient(ATS2CallSourcePort):
             timeout=_DEFAULT_TIMEOUT,
             proxy=proxy_url or None,
         )
+
+    async def update_proxy(self, proxy_url: str) -> None:
+        """Update proxy — recreate HTTP client."""
+        await self._http.aclose()
+        self._http = httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=_DEFAULT_TIMEOUT,
+            proxy=proxy_url or None,
+        )
+        self._auth.update_proxy(proxy_url)
+        logger.info("ATS2 client proxy updated")
 
     def _headers(self, token: str) -> dict[str, str]:
         return {

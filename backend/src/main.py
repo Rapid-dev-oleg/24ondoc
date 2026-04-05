@@ -108,7 +108,7 @@ def _create_ats2_poller(
         redis=redis,
         poll_interval_sec=float(settings.ats2_poll_interval_sec),
     )
-    return poller, auth_manager
+    return poller, auth_manager, ats2_client
 
 
 @asynccontextmanager
@@ -171,6 +171,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         BotCommand(command="health", description="Здоровье системы"),
         BotCommand(command="ats2_access_token", description="Токен ATS2"),
         BotCommand(command="ats2_refresh_token", description="Refresh токен ATS2"),
+        BotCommand(command="ats2_proxy", description="Прокси ATS2"),
     ])
 
     # ATS2 Poller (background task)
@@ -182,10 +183,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     ats2_task: asyncio.Task[None] | None = None
     if ats2_result is not None:
-        ats2_poller, ats2_auth_manager = ats2_result
+        ats2_poller, ats2_auth_manager, ats2_client = ats2_result
         ats2_task = asyncio.create_task(ats2_poller.start())
         app.state.ats2_poller = ats2_poller
         app.state.ats2_auth_manager = ats2_auth_manager
+        app.state.ats2_client = ats2_client
         logger.info("ATS2 Poller started", interval=settings.ats2_poll_interval_sec)
     else:
         logger.info("ATS2 Poller disabled (ATS2_ENABLED=false)")
@@ -195,7 +197,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Shutdown ATS2 Poller
     if ats2_result is not None:
-        ats2_poller, _ = ats2_result
+        ats2_poller, _, _ = ats2_result
         ats2_poller.stop()
         if ats2_task is not None:
             await asyncio.wait_for(ats2_task, timeout=10.0)
