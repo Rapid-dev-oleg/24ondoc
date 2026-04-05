@@ -367,7 +367,7 @@ def create_router(
                     kategoriya_label = kat_map.get(kategoriya_value or "")
                     vazhnost_label = vazh_map.get(vazhnost_value or "")
                 except Exception:
-                    logger.warning("Failed to select task fields during preview")
+                    logger.exception("Failed to select task fields during preview")
 
             await state.update_data(
                 twenty_kategoriya=kategoriya_value,
@@ -383,6 +383,7 @@ def create_router(
                     reply_markup=_preview_keyboard(),
                 )
         except Exception:
+            logger.exception("AI analysis failed")
             await state.set_state(fallback_state)
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(
