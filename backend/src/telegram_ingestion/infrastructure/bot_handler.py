@@ -963,17 +963,28 @@ def create_router(
         await state.set_state(ATS2TokenStates.entering_proxy)
         await message.answer(
             "🌐 Отправьте новый прокси для ATS2:\n"
-            "<code>http://login:password@ip:port</code>"
+            "<code>host:port:login:password</code>"
         )
 
     @router.message(ATS2TokenStates.entering_proxy, F.text)
     async def handle_ats2_proxy(message: Message, state: FSMContext) -> None:
         if message.from_user is None or message.text is None:
             return
-        proxy = message.text.strip()
-        if not proxy.startswith("http"):
-            await message.answer("❌ Прокси должен начинаться с http:// или https://")
-            return
+        raw = message.text.strip()
+
+        # Parse host:port:login:pass format
+        if not raw.startswith("http"):
+            parts = raw.split(":")
+            if len(parts) == 4:
+                host, port, login, pwd = parts
+                proxy = f"http://{login}:{pwd}@{host}:{port}"
+            elif len(parts) == 2:
+                proxy = f"http://{raw}"
+            else:
+                await message.answer("❌ Формат: <code>host:port:login:pass</code>")
+                return
+        else:
+            proxy = raw
 
         try:
             await ats2_client.update_proxy(proxy)
