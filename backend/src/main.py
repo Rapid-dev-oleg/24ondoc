@@ -68,7 +68,7 @@ def _create_ats2_poller(
     session_factory: async_sessionmaker,  # type: ignore[type-arg]
     twenty_adapter: TwentyRestAdapter | None = None,
     redis: AsyncRedis | None = None,
-) -> tuple[ATS2PollerService, ATS2AuthManager] | None:
+) -> tuple[ATS2PollerService, ATS2AuthManager, ATS2RestClient] | None:
     """Create ATS2PollerService if ATS2_ENABLED=true, else return None."""
     if not settings.ats2_enabled:
         return None

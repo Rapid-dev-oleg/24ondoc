@@ -1165,14 +1165,6 @@ def create_tasks_router(
         status = ticket["status"]
         title = ticket["title"]
 
-        profile = await user_port.get_profile(callback.from_user.id)
-        from ..domain.models import UserRole
-
-        is_supervisor = profile is not None and profile.role in (
-            UserRole.SUPERVISOR,
-            UserRole.ADMIN,
-        )
-
         await state.set_state(TelegramFSMStates.task_detail)
         await state.update_data(
             current_task_id=task_id,
@@ -1181,7 +1173,7 @@ def create_tasks_router(
             current_task_status=status,
         )
 
-        keyboard = _task_detail_keyboard(task_id, assignee_crm_id, status, is_supervisor)
+        keyboard = _task_detail_keyboard()
         await callback.answer()
         if isinstance(callback.message, Message):
             await callback.message.edit_text(
@@ -1205,7 +1197,7 @@ def create_tasks_router(
             await callback.answer("❌ Задача не найдена.")
             return
         try:
-            await twenty_crm_port.update_task_status(task_id, "VYPOLNENO")  # noqa: F821
+            await twenty_crm_port.update_task_status(task_id, "VYPOLNENO")  # type: ignore[name-defined]  # noqa: F821
             await callback.answer("✅ Задача решена!")
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(f"✅ Задача «{title}» решена.")
@@ -1228,7 +1220,7 @@ def create_tasks_router(
             await callback.answer("❌ Задача не найдена.")
             return
         try:
-            await twenty_crm_port.update_task_status(task_id, "TODO")  # noqa: F821
+            await twenty_crm_port.update_task_status(task_id, "TODO")  # type: ignore[name-defined]  # noqa: F821
             await callback.answer("🔓 Задача открыта!")
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(f"🔓 Задача «{title}» открыта.")

@@ -221,14 +221,14 @@ class TwentyRestAdapter(TwentyCRMPort):
             "0": (filename, file_bytes, content_type),
         }
         try:
-            response = await self._client.post("/metadata", files=files)
+            response = await self._client.post("/metadata", files=files)  # type: ignore[arg-type]
             response.raise_for_status()
             data = response.json()
             uploaded = data.get("data", {}).get("uploadFilesFieldFile", {})
             file_id = uploaded.get("id")
             if not file_id:
                 logger.warning("Twenty upload_file: no id in response: %s", data)
-            return file_id
+            return file_id  # type: ignore[no-any-return]
         except httpx.HTTPError as e:
             logger.warning("Twenty upload_file failed for %s: %s", filename, e)
             return None

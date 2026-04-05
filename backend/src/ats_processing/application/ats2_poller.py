@@ -101,7 +101,7 @@ class ATS2PollerService:
         now = datetime.now(UTC)
         try:
             raw_calls = await self._ats2_client.get_call_records(
-                date_from=self._last_poll_timestamp,
+                date_from=self._last_poll_timestamp,  # type: ignore[arg-type]
                 date_to=now,
             )
         except Exception:
@@ -289,7 +289,7 @@ class ATS2PollerService:
                 label = (
                     f"{callee_name} ({callee_phone})"
                     if callee_name and callee_phone
-                    else (callee_name or callee_phone)
+                    else (callee_name or callee_phone or "")
                 )
                 body_parts.append(f"- Принял: {label}")
             if duration:
