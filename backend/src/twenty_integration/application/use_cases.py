@@ -74,7 +74,7 @@ class CreateTwentyTaskFromSession:
                 kategoriya_value = selection.kategoriya
                 vazhnost_value = selection.vazhnost
             except Exception:
-                logger.warning("Failed to select task fields, creating without them")
+                logger.exception("Failed to select task fields, creating without them")
 
         # 2. Создать Task с назначением оператора как ответственного (workspace member)
         task = await self._port.create_task(

@@ -121,7 +121,8 @@ class TwentyRestAdapter(TwentyCRMPort):
                         ]
                 break
         except Exception:
-            logger.warning("Failed to fetch task field options from Twenty metadata")
+            logger.exception("Failed to fetch task field options from Twenty metadata")
+        logger.info("fetch_task_field_options: kategoriya=%d, vazhnost=%d", len(result["kategoriya"]), len(result["vazhnost"]))
         return result
 
     async def create_task(

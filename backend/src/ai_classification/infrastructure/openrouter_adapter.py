@@ -214,5 +214,5 @@ class OpenRouterAdapter(AIClassificationPort):
                 vazhnost=vazh_value if vazh_value in valid_vazh else None,
             )
         except Exception:
-            logger.warning("AI select_task_fields failed, returning defaults")
+            logger.exception("AI select_task_fields failed, returning defaults")
             return TaskFieldSelection()
