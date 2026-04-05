@@ -25,11 +25,13 @@ class ATS2AuthManager:
         refresh_token: str,
         base_url: str,
         proxy_url: str = "",
+        env_file_path: str = ".env",
     ) -> None:
         self._access_token = access_token
         self._refresh_token = refresh_token
         self._base_url = base_url.rstrip("/")
         self._proxy_url = proxy_url or None
+        self._env_file_path = env_file_path
 
     def update_tokens(self, access_token: str, refresh_token: str) -> None:
         """Update tokens in memory (called from admin UI)."""
@@ -60,7 +62,37 @@ class ATS2AuthManager:
             self._access_token = data["accessToken"]
             self._refresh_token = data["refreshToken"]
             logger.info("ATS2 tokens refreshed successfully")
+            self._persist_tokens()
             return self._access_token
+
+    def _persist_tokens(self) -> None:
+        """Save current tokens to .env file so they survive restarts."""
+        import os
+
+        path = self._env_file_path if os.path.isabs(self._env_file_path) else f"/app/{self._env_file_path}"
+        if not os.path.exists(path):
+            logger.warning("Cannot persist ATS2 tokens: %s not found", path)
+            return
+        try:
+            with open(path) as f:
+                lines = f.readlines()
+
+            updates = {
+                "ATS2_ACCESS_TOKEN": self._access_token,
+                "ATS2_REFRESH_TOKEN": self._refresh_token,
+            }
+            for i, line in enumerate(lines):
+                key = line.split("=", 1)[0]
+                if key in updates:
+                    lines[i] = f"{key}={updates.pop(key)}\n"
+            for key, val in updates.items():
+                lines.append(f"{key}={val}\n")
+
+            with open(path, "w") as f:
+                f.writelines(lines)
+            logger.info("ATS2 tokens persisted to %s", path)
+        except Exception:
+            logger.exception("Failed to persist ATS2 tokens to %s", path)
 
 
 class ATS2RestClient(ATS2CallSourcePort):
