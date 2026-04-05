@@ -47,6 +47,14 @@ class CallRecordRepositoryImpl(CallRecordRepository):
         )
         return [self._to_domain(row) for row in result.scalars()]
 
+    async def get_recent(self, limit: int = 10) -> list[CallRecord]:
+        result = await self._session.execute(
+            select(CallRecordORM)
+            .order_by(CallRecordORM.created_at.desc())
+            .limit(limit)
+        )
+        return [self._to_domain(row) for row in result.scalars()]
+
     @staticmethod
     def _to_domain(row: CallRecordORM) -> CallRecord:
         return CallRecord(

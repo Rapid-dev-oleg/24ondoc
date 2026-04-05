@@ -22,6 +22,9 @@ class CallRecordRepository(ABC):
     @abstractmethod
     async def find_recent_by_phone(self, phone: str, limit: int = 10) -> list[CallRecord]: ...
 
+    @abstractmethod
+    async def get_recent(self, limit: int = 10) -> list[CallRecord]: ...
+
 
 class AgentVoiceSampleRepository(ABC):
     """Repository for agent voice embeddings (pgvector)."""

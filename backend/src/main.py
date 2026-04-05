@@ -54,6 +54,12 @@ class _PollerCallRepo:
     async def get_pending(self, limit: int = 10, source: object = None) -> list:  # type: ignore[type-arg]
         return []
 
+    async def get_recent(self, limit: int = 10) -> list:  # type: ignore[type-arg]
+        async with self._session_factory() as session:
+            async with session.begin():
+                repo = CallRecordRepositoryImpl(session)
+                return await repo.get_recent(limit)
+
     async def find_recent_by_phone(self, phone: str, limit: int = 10) -> list:  # type: ignore[type-arg]
         return []
 

@@ -140,6 +140,8 @@ def create_router(
     twenty_crm_port: Any = None,
     redis: Any = None,
     bot_username: str = "",
+    call_repo: Any = None,
+    settings: Any = None,
 ) -> Router:
     """Create and configure the telegram ingestion router with injected use cases."""
     from ..domain.models import UserRole
@@ -636,6 +638,169 @@ def create_router(
                 f"При переходе он автоматически зарегистрируется в системе.\n"
                 f"Ссылка действительна 7 дней."
             )
+
+    # ---------- /health command (admin) ----------
+
+    @router.message(Command("health"))
+    async def cmd_health(message: Message, state: FSMContext) -> None:
+        if message.from_user is None:
+            return
+        profile = await user_port.get_profile(message.from_user.id)
+        if profile is None or profile.role != UserRole.ADMIN:
+            await message.answer("🔒 Нет доступа. Только для адм��нистраторов.")
+            return
+
+        await message.answer("⏳ П��оверяю сервисы...")
+
+        lines: list[str] = ["<b>Здоровье системы:</b>\n"]
+
+        # 1. Redis
+        try:
+            if redis is not None:
+                await redis.ping()
+                lines.append("✅ Redis — OK")
+            else:
+                lines.append("⚠️ Redis — не настроен")
+        except Exception as e:
+            lines.append(f"❌ Redis — {e}")
+
+        # 2. Twenty CRM
+        try:
+            if twenty_crm_port is not None:
+                members = await twenty_crm_port.list_workspace_members()
+                lines.append(f"✅ Twenty CRM — OK ({len(members)} участников)")
+            else:
+                lines.append("⚠️ Twenty CRM — не настроен")
+        except Exception as e:
+            lines.append(f"❌ Twenty CRM — {e}")
+
+        # 3. Proxy + ATS2
+        if settings is not None and settings.ats2_proxy_url:
+            import httpx as _httpx
+
+            proxy_url = settings.ats2_proxy_url
+            try:
+                async with _httpx.AsyncClient(
+                    proxy=proxy_url, timeout=10.0
+                ) as _client:
+                    resp = await _client.get("https://ats2.t2.ru/crm/openapi/call-records/active", headers={
+                        "Authorization": settings.ats2_access_token,
+                    })
+                    if resp.status_code == 403:
+                        # Token expired but proxy works
+                        lines.append("✅ Прокси ATS2 — OK")
+                        lines.append("⚠️ ATS2 (Теле2) — токен истёк (403)")
+                    elif resp.status_code < 400:
+                        lines.append("✅ Прокси ATS2 — OK")
+                        lines.append("✅ ATS2 (Теле2) — OK")
+                    else:
+                        lines.append("✅ Прокси ATS2 — OK")
+                        lines.append(f"⚠️ ATS2 (Теле2) — HTTP {resp.status_code}")
+            except Exception as e:
+                lines.append(f"❌ Прокси ATS2 — {e}")
+                lines.append("❌ ATS2 (Теле2) — недоступен")
+        elif settings is not None and settings.ats2_enabled:
+            lines.append("⚠️ Прокси ATS2 — не настроен")
+        else:
+            lines.append("⚪ ATS2 — отключён")
+
+        # 4. Groq STT
+        if settings is not None and settings.groq_api_key:
+            import httpx as _httpx
+
+            try:
+                async with _httpx.AsyncClient(timeout=10.0) as _client:
+                    resp = await _client.get(
+                        "https://api.groq.com/openai/v1/models",
+                        headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                    )
+                    if resp.status_code < 400:
+                        lines.append("✅ Groq STT — OK")
+                    else:
+                        lines.append(f"❌ Groq STT — HTTP {resp.status_code}")
+            except Exception as e:
+                lines.append(f"❌ Groq STT — {e}")
+        else:
+            lines.append("⚪ Groq STT — ключ не задан")
+
+        # 5. OpenRouter
+        if settings is not None and (settings.openrouter_api_key or settings.openai_api_key):
+            import httpx as _httpx
+
+            api_key = settings.openrouter_api_key or settings.openai_api_key
+            try:
+                async with _httpx.AsyncClient(timeout=10.0) as _client:
+                    resp = await _client.get(
+                        "https://openrouter.ai/api/v1/models",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                    )
+                    if resp.status_code < 400:
+                        lines.append("✅ OpenRouter — OK")
+                    else:
+                        lines.append(f"❌ OpenRouter — HTTP {resp.status_code}")
+            except Exception as e:
+                lines.append(f"❌ OpenRouter — {e}")
+        else:
+            lines.append("⚪ OpenRouter — ключ не задан")
+
+        await message.answer("\n".join(lines))
+
+    # ---------- /logs command (admin) ----------
+
+    @router.message(Command("logs"))
+    async def cmd_logs(message: Message, state: FSMContext) -> None:
+        if message.from_user is None:
+            return
+        profile = await user_port.get_profile(message.from_user.id)
+        if profile is None or profile.role != UserRole.ADMIN:
+            await message.answer("🔒 Нет доступа. Только для администраторов.")
+            return
+
+        if call_repo is None:
+            await message.answer("❌ Репозиторий звонков недоступен.")
+            return
+
+        try:
+            records = await call_repo.get_recent(limit=10)
+        except Exception:
+            await message.answer("❌ Ошибка загрузки записей.")
+            return
+
+        if not records:
+            await message.answer("�� Нет записей.")
+            return
+
+        status_icons = {
+            "new": "🆕",
+            "processing": "⏳",
+            "preview": "👁",
+            "created": "✅",
+            "error": "❌",
+        }
+        source_labels = {
+            "call_t2_webhook": "T2 Webhook",
+            "call_ats2_polling": "ATS2 Поллер",
+        }
+
+        lines = [f"<b>Последние 10 заявок:</b>\n"]
+        for i, r in enumerate(records, 1):
+            icon = status_icons.get(r.status.value, "❓")
+            source = source_labels.get(r.source.value, r.source.value)
+            phone = r.caller_phone or "��"
+            duration_str = ""
+            if r.duration is not None:
+                m, s = divmod(r.duration, 60)
+                duration_str = f" ({m}м{s}с)"
+            dt = r.created_at.strftime("%d.%m %H:%M") if r.created_at else ""
+            has_text = "📝" if r.transcription_t2 or r.transcription_whisper else ""
+
+            lines.append(
+                f"{i}. {icon} {dt} | {source}\n"
+                f"   📞 {phone}{duration_str} {has_text}\n"
+                f"   ID: <code>{r.call_id[:16]}</code> [{r.status.value}]"
+            )
+
+        await message.answer("\n".join(lines))
 
     return router
 
