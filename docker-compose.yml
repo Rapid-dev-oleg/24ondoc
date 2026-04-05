@@ -12,8 +12,6 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-      pgadmin:
-        condition: service_healthy
       twenty:
         condition: service_healthy
     restart: unless-stopped
@@ -134,7 +132,7 @@ services:
     networks:
       - backend
 
-  # --- MinIO (Object Storage) ---
+  # --- MinIO (Object Storage, optional) ---
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -149,10 +147,12 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
+    profiles:
+      - minio
     networks:
       - backend
 
-  # --- pgAdmin 4 (Web UI for PostgreSQL) ---
+  # --- pgAdmin 4 (Web UI for PostgreSQL, optional) ---
   pgadmin:
     image: dpage/pgadmin4:latest
     environment:
@@ -183,6 +183,8 @@ services:
       retries: 3
       start_period: 60s
     restart: unless-stopped
+    profiles:
+      - pgadmin
     networks:
       - frontend
       - backend
