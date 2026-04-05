@@ -132,7 +132,11 @@ class OpenRouterAdapter(AIClassificationPort):
         content = data["choices"][0]["message"]["content"]
         if not content:
             raise ValueError(f"Empty content from model {model}")
-        parsed = json.loads(content)
+        # Strip markdown code fences if present
+        text_to_parse = content.strip()
+        if text_to_parse.startswith("```"):
+            text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        parsed = json.loads(text_to_parse)
 
         return ClassificationResult(
             source_text=text,
@@ -206,7 +210,12 @@ class OpenRouterAdapter(AIClassificationPort):
 
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
-                parsed = json.loads(content)
+                if not content:
+                    raise ValueError(f"Empty content from model {model}")
+                text_to_parse = content.strip()
+                if text_to_parse.startswith("```"):
+                    text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                parsed = json.loads(text_to_parse)
 
                 kat_value = parsed.get("kategoriya")
                 vazh_value = parsed.get("vazhnost")
