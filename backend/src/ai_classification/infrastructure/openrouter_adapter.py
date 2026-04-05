@@ -104,7 +104,7 @@ class OpenRouterAdapter(AIClassificationPort):
             return fallback_result
 
     @retry(
-        retry=retry_if_exception_type(httpx.HTTPError),
+        retry=retry_if_exception_type((httpx.HTTPError, json.JSONDecodeError, ValueError)),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
@@ -130,6 +130,8 @@ class OpenRouterAdapter(AIClassificationPort):
 
         data = response.json()
         content = data["choices"][0]["message"]["content"]
+        if not content:
+            raise ValueError(f"Empty content from model {model}")
         parsed = json.loads(content)
 
         return ClassificationResult(
