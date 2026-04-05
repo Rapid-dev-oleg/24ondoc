@@ -43,6 +43,8 @@ class CreateTwentyTaskFromSession:
         user_name: str,
         assignee_id: str | None = None,
         file_downloader: FileDownloader | None = None,
+        kategoriya: str | None = None,
+        vazhnost: str | None = None,
     ) -> TwentyTask:
         """Создать задачу в Twenty из сессии.
 
@@ -52,6 +54,8 @@ class CreateTwentyTaskFromSession:
             user_name: Имя пользователя
             assignee_id: ID ответственного (опционально)
             file_downloader: Async callback (file_id) -> (bytes, filename) | None
+            kategoriya: Pre-selected kategoriya value from Twenty options
+            vazhnost: Pre-selected vazhnost value from Twenty options
 
         Returns:
             Созданная TwentyTask
@@ -59,10 +63,8 @@ class CreateTwentyTaskFromSession:
         if session.ai_result is None:
             raise ValueError("DraftSession должна иметь ai_result")
 
-        # 1. Подобрать kategoriya и vazhnost из актуальных списков Twenty
-        kategoriya_value: str | None = None
-        vazhnost_value: str | None = None
-        if self._ai_port is not None:
+        # If kategoriya/vazhnost not pre-selected, try to determine now
+        if kategoriya is None and vazhnost is None and self._ai_port is not None:
             try:
                 options = await self._port.fetch_task_field_options()
                 task_text = f"{session.ai_result.title}\n{session.ai_result.description}"
@@ -71,19 +73,18 @@ class CreateTwentyTaskFromSession:
                     options.get("kategoriya", []),
                     options.get("vazhnost", []),
                 )
-                kategoriya_value = selection.kategoriya
-                vazhnost_value = selection.vazhnost
+                kategoriya = selection.kategoriya
+                vazhnost = selection.vazhnost
             except Exception:
                 logger.exception("Failed to select task fields, creating without them")
 
-        # 2. Создать Task с назначением оператора как ответственного (workspace member)
         task = await self._port.create_task(
             title=session.ai_result.title,
             body=session.ai_result.description,
             due_at=_parse_deadline(session.ai_result.deadline),
             assignee_id=assignee_id,
-            kategoriya=kategoriya_value,
-            vazhnost=vazhnost_value,
+            kategoriya=kategoriya,
+            vazhnost=vazhnost,
         )
 
         # 4. Загрузить файлы в Twenty и прикрепить к задаче

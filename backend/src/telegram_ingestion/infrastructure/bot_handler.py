@@ -105,7 +105,11 @@ def _preview_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _format_preview(session: DraftSession) -> str:
+def _format_preview(
+    session: DraftSession,
+    kategoriya_label: str | None = None,
+    vazhnost_label: str | None = None,
+) -> str:
     r = session.ai_result
     if r is None:
         return "❓ Результат анализа недоступен."
@@ -114,8 +118,8 @@ def _format_preview(session: DraftSession) -> str:
         "",
         f"<b>Заголовок:</b> {r.title}",
         f"<b>Описание:</b> {r.description}",
-        f"<b>Категория:</b> {r.category}",
-        f"<b>Приоритет:</b> {r.priority}",
+        f"<b>Категория:</b> {kategoriya_label or '—'}",
+        f"<b>Важность:</b> {vazhnost_label or '—'}",
     ]
     if r.deadline:
         lines.append(f"<b>Дедлайн:</b> {r.deadline}")
@@ -340,10 +344,42 @@ def create_router(
             updated = await set_analysis_result.execute(session.session_id, ai_result)
             if updated is None:
                 raise ValueError("Session not found after analysis")
+
+            # Select kategoriya/vazhnost from Twenty CRM options
+            kategoriya_value: str | None = None
+            vazhnost_value: str | None = None
+            kategoriya_label: str | None = None
+            vazhnost_label: str | None = None
+            if twenty_crm_port is not None:
+                try:
+                    options = await twenty_crm_port.fetch_task_field_options()
+                    task_text = f"{classification.title}\n{classification.description}"
+                    selection = await ai_port.select_task_fields(
+                        task_text,
+                        options.get("kategoriya", []),
+                        options.get("vazhnost", []),
+                    )
+                    kategoriya_value = selection.kategoriya
+                    vazhnost_value = selection.vazhnost
+                    # Resolve labels for preview
+                    kat_map = {o["value"]: o["label"] for o in options.get("kategoriya", [])}
+                    vazh_map = {o["value"]: o["label"] for o in options.get("vazhnost", [])}
+                    kategoriya_label = kat_map.get(kategoriya_value or "")
+                    vazhnost_label = vazh_map.get(vazhnost_value or "")
+                except Exception:
+                    logger.warning("Failed to select task fields during preview")
+
+            await state.update_data(
+                twenty_kategoriya=kategoriya_value,
+                twenty_vazhnost=vazhnost_value,
+                twenty_kategoriya_label=kategoriya_label,
+                twenty_vazhnost_label=vazhnost_label,
+            )
+
             await state.set_state(TelegramFSMStates.preview)
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(
-                    _format_preview(updated),
+                    _format_preview(updated, kategoriya_label, vazhnost_label),
                     reply_markup=_preview_keyboard(),
                 )
         except Exception:
@@ -472,6 +508,8 @@ def create_router(
                 user_name=callback.from_user.first_name or "",
                 assignee_id=assignee_id,
                 file_downloader=_download_tg_file,
+                kategoriya=data.get("twenty_kategoriya"),
+                vazhnost=data.get("twenty_vazhnost"),
             )
 
             await cancel_session.execute(callback.from_user.id)
