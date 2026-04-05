@@ -1043,9 +1043,10 @@ def _tasks_list_keyboard(
     buttons: list[list[InlineKeyboardButton]] = []
     start = page * _TASKS_PAGE_SIZE
     end = start + _TASKS_PAGE_SIZE
-    for ticket in tickets[start:end]:
-        label = f"📋 #{ticket['task_id']} {ticket['title'][:40]}"
-        cb_data = f"task_detail:{ticket['task_id']}:{ticket.get('assignee_crm_id') or 0}"
+    for idx, ticket in enumerate(tickets[start:end], start=start):
+        title_short = ticket['title'][:45]
+        label = f"📋 {title_short}"
+        cb_data = f"task_detail:{idx}"
         buttons.append([InlineKeyboardButton(text=label, callback_data=cb_data)])
 
     nav_row: list[InlineKeyboardButton] = []
@@ -1060,39 +1061,18 @@ def _tasks_list_keyboard(
 
 
 def _task_detail_keyboard(
-    task_id: int, assignee_crm_id: int, status: str, is_supervisor: bool
+    task_id: Any, assignee_crm_id: Any, status: str, is_supervisor: bool
 ) -> InlineKeyboardMarkup:
     """Клавиатура для детального просмотра задачи."""
     buttons: list[list[InlineKeyboardButton]] = []
 
-    if status == "open" or status == "pending":
+    if status in ("TODO", "V_RABOTE", "open", "pending"):
         buttons.append(
-            [
-                InlineKeyboardButton(
-                    text="✅ Решить", callback_data=f"task_resolve:{task_id}:{assignee_crm_id}"
-                )
-            ]
+            [InlineKeyboardButton(text="✅ Решить", callback_data="task_resolve")]
         )
     else:
         buttons.append(
-            [
-                InlineKeyboardButton(
-                    text="🔓 Открыть", callback_data=f"task_reopen:{task_id}:{assignee_crm_id}"
-                )
-            ]
-        )
-
-    buttons.append(
-        [InlineKeyboardButton(text="💬 Комментарий", callback_data=f"task_comment:{task_id}")]
-    )
-
-    if is_supervisor:
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text="👤 Переназначить", callback_data=f"task_reassign_list:{task_id}"
-                )
-            ]
+            [InlineKeyboardButton(text="🔓 Открыть", callback_data="task_reopen")]
         )
 
     buttons.append([InlineKeyboardButton(text="◀ К списку", callback_data="tasks_back")])
@@ -1169,9 +1149,18 @@ def create_tasks_router(
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")  # type: ignore[union-attr]
-        task_id = int(parts[1])
-        assignee_crm_id = int(parts[2])
+        idx = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+
+        data = await state.get_data()
+        tasks = data.get("tasks", [])
+        if idx >= len(tasks):
+            await callback.answer("❌ Задача не найдена.")
+            return
+        ticket = tasks[idx]
+        task_id = ticket["task_id"]
+        assignee_crm_id = ticket.get("assignee_crm_id") or ""
+        status = ticket["status"]
+        title = ticket["title"]
 
         profile = await user_port.get_profile(callback.from_user.id)
         from ..domain.models import UserRole
@@ -1181,15 +1170,10 @@ def create_tasks_router(
             UserRole.ADMIN,
         )
 
-        data = await state.get_data()
-        tasks = data.get("tasks", [])
-        ticket = next((t for t in tasks if t["task_id"] == task_id), None)
-        status = ticket["status"] if ticket else "open"
-        title = ticket["title"] if ticket else f"Задача #{task_id}"
-
         await state.set_state(TelegramFSMStates.task_detail)
         await state.update_data(
             current_task_id=task_id,
+            current_task_idx=idx,
             current_assignee_crm_id=assignee_crm_id,
             current_task_status=status,
         )
@@ -1202,49 +1186,51 @@ def create_tasks_router(
                 reply_markup=keyboard,
             )
 
-    @router.callback_query(F.data.startswith("task_resolve:"))
+    @router.callback_query(F.data == "task_resolve")
     async def callback_task_resolve(callback: CallbackQuery, state: FSMContext) -> None:
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")  # type: ignore[union-attr]
-        task_id = int(parts[1])
-        assignee_crm_id = int(parts[2]) if parts[2] != "0" else None
-
-        ok = await update_task_status.execute(
-            requester_telegram_id=callback.from_user.id,
-            task_id=task_id,
-            assignee_crm_id=assignee_crm_id,
-            new_status="resolved",
-        )
-        if ok:
+        data = await state.get_data()
+        task_id = data.get("current_task_id")
+        title = ""
+        tasks = data.get("tasks", [])
+        idx = data.get("current_task_idx", 0)
+        if idx < len(tasks):
+            title = tasks[idx].get("title", "")
+        if task_id is None:
+            await callback.answer("❌ Задача не найдена.")
+            return
+        try:
+            await twenty_crm_port.update_task_status(task_id, "VYPOLNENO")
             await callback.answer("✅ Задача решена!")
             if isinstance(callback.message, Message):
-                await callback.message.edit_text(f"✅ Задача #{task_id} решена.")
-        else:
-            await callback.answer("❌ Нет прав для изменения статуса.", show_alert=True)
+                await callback.message.edit_text(f"✅ Задача «{title}» решена.")
+        except Exception:
+            await callback.answer("❌ Ошибка.", show_alert=True)
 
-    @router.callback_query(F.data.startswith("task_reopen:"))
+    @router.callback_query(F.data == "task_reopen")
     async def callback_task_reopen(callback: CallbackQuery, state: FSMContext) -> None:
         if callback.from_user is None:
             await callback.answer()
             return
-        parts = callback.data.split(":")  # type: ignore[union-attr]
-        task_id = int(parts[1])
-        assignee_crm_id = int(parts[2]) if parts[2] != "0" else None
-
-        ok = await update_task_status.execute(
-            requester_telegram_id=callback.from_user.id,
-            task_id=task_id,
-            assignee_crm_id=assignee_crm_id,
-            new_status="open",
-        )
-        if ok:
+        data = await state.get_data()
+        task_id = data.get("current_task_id")
+        title = ""
+        tasks = data.get("tasks", [])
+        idx = data.get("current_task_idx", 0)
+        if idx < len(tasks):
+            title = tasks[idx].get("title", "")
+        if task_id is None:
+            await callback.answer("❌ Задача не найдена.")
+            return
+        try:
+            await twenty_crm_port.update_task_status(task_id, "TODO")
             await callback.answer("🔓 Задача открыта!")
             if isinstance(callback.message, Message):
-                await callback.message.edit_text(f"🔓 Задача #{task_id} открыта.")
-        else:
-            await callback.answer("❌ Нет прав для изменения статуса.", show_alert=True)
+                await callback.message.edit_text(f"🔓 Задача «{title}» открыта.")
+        except Exception:
+            await callback.answer("❌ Ошибка.", show_alert=True)
 
     @router.callback_query(F.data.startswith("task_reassign_list:"))
     async def callback_reassign_list(callback: CallbackQuery, state: FSMContext) -> None:

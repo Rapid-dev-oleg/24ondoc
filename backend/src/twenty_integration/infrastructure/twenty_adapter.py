@@ -304,8 +304,14 @@ class TwentyRestAdapter(TwentyCRMPort):
             logger.exception("Failed to get tasks from Twenty")
             return []
 
+    async def update_task_status(self, task_id: str, status: str) -> None:
+        """Update task status in Twenty CRM."""
+        payload = {"status": status}
+        response = await self._client.patch(f"/rest/tasks/{task_id}", json=payload)
+        response.raise_for_status()
+
     async def update_conversation_status(self, task_id: int, status: str) -> None:
-        """Обновить статус задачи (stub)."""
+        """Обновить статус задачи (legacy stub)."""
 
     async def update_conversation_assignee(self, task_id: int, assignee_id: int) -> None:
         """Переназначить задачу (stub)."""
