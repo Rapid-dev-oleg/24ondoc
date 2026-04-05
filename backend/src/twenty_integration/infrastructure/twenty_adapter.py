@@ -123,7 +123,8 @@ class TwentyRestAdapter(TwentyCRMPort):
             logger.exception("Failed to fetch task field options from Twenty metadata")
         logger.info(
             "fetch_task_field_options: kategoriya=%d, vazhnost=%d",
-            len(result["kategoriya"]), len(result["vazhnost"]),
+            len(result["kategoriya"]),
+            len(result["vazhnost"]),
         )
         return result
 
@@ -196,20 +197,24 @@ class TwentyRestAdapter(TwentyCRMPort):
     _ATTACHMENT_FILE_FIELD_ID = "0d953c19-1809-41e8-8f78-80d18836bd9d"
 
     async def upload_file(
-        self, file_bytes: bytes, filename: str,
+        self,
+        file_bytes: bytes,
+        filename: str,
         content_type: str = "application/octet-stream",
     ) -> str | None:
         """Загрузить файл в Twenty через GraphQL multipart upload. Возвращает file ID."""
         import json as _json
 
-        operations = _json.dumps({
-            "query": (
-                "mutation UploadFilesFieldFile($file: Upload!, $fieldMetadataId: String!) "
-                "{ uploadFilesFieldFile(file: $file, fieldMetadataId: $fieldMetadataId) "
-                "{ id path } }"
-            ),
-            "variables": {"file": None, "fieldMetadataId": self._ATTACHMENT_FILE_FIELD_ID},
-        })
+        operations = _json.dumps(
+            {
+                "query": (
+                    "mutation UploadFilesFieldFile($file: Upload!, $fieldMetadataId: String!) "
+                    "{ uploadFilesFieldFile(file: $file, fieldMetadataId: $fieldMetadataId) "
+                    "{ id path } }"
+                ),
+                "variables": {"file": None, "fieldMetadataId": self._ATTACHMENT_FILE_FIELD_ID},
+            }
+        )
         files = {
             "operations": (None, operations, "application/json"),
             "map": (None, '{"0":["variables.file"]}', "application/json"),
@@ -228,9 +233,7 @@ class TwentyRestAdapter(TwentyCRMPort):
             logger.warning("Twenty upload_file failed for %s: %s", filename, e)
             return None
 
-    async def create_attachment(
-        self, task_id: str, name: str, uploaded_file_id: str
-    ) -> None:
+    async def create_attachment(self, task_id: str, name: str, uploaded_file_id: str) -> None:
         """Создать attachment с загруженным файлом, привязать к задаче."""
         try:
             payload = {
@@ -294,12 +297,14 @@ class TwentyRestAdapter(TwentyCRMPort):
                     s = _Status(task_status)
                 except ValueError:
                     s = _Status.TODO
-                result.append(SimpleNamespace(
-                    task_id=t.get("id", ""),
-                    title=t.get("title", ""),
-                    status=s,
-                    assignee_chatwoot_id=assignee_id,
-                ))
+                result.append(
+                    SimpleNamespace(
+                        task_id=t.get("id", ""),
+                        title=t.get("title", ""),
+                        status=s,
+                        assignee_chatwoot_id=assignee_id,
+                    )
+                )
             return result
         except Exception:
             logger.exception("Failed to get tasks from Twenty")

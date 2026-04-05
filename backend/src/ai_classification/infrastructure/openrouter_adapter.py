@@ -183,16 +183,16 @@ class OpenRouterAdapter(AIClassificationPort):
         vazhnost_options: list[dict[str, str]],
     ) -> TaskFieldSelection:
         """Use AI to select best kategoriya and vazhnost from provided options."""
-        kat_list = "\n".join(
-            f'- value="{o["value"]}", label="{o["label"]}"' for o in kategoriya_options
-        ) or "(список пуст)"
-        vazh_list = "\n".join(
-            f'- value="{o["value"]}", label="{o["label"]}"' for o in vazhnost_options
-        ) or "(список пуст)"
-
-        prompt = self.TASK_FIELDS_PROMPT.format(
-            kategoriya_list=kat_list, vazhnost_list=vazh_list
+        kat_list = (
+            "\n".join(f'- value="{o["value"]}", label="{o["label"]}"' for o in kategoriya_options)
+            or "(список пуст)"
         )
+        vazh_list = (
+            "\n".join(f'- value="{o["value"]}", label="{o["label"]}"' for o in vazhnost_options)
+            or "(список пуст)"
+        )
+
+        prompt = self.TASK_FIELDS_PROMPT.format(kategoriya_list=kat_list, vazhnost_list=vazh_list)
 
         valid_kat = {o["value"] for o in kategoriya_options}
         valid_vazh = {o["value"] for o in vazhnost_options}
@@ -235,7 +235,9 @@ class OpenRouterAdapter(AIClassificationPort):
                 )
                 logger.info(
                     "select_task_fields OK (model=%s): kat=%s, vazh=%s",
-                    model, result.kategoriya, result.vazhnost,
+                    model,
+                    result.kategoriya,
+                    result.vazhnost,
                 )
                 return result
             except Exception:

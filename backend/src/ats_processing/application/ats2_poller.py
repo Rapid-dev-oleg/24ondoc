@@ -165,7 +165,8 @@ class ATS2PollerService:
                     transcription_text = await self._stt_port.transcribe(audio_bytes)
                     logger.info(
                         "ATS2 Poller: Whisper транскрипция для %s (%d bytes)",
-                        call_id, len(audio_bytes),
+                        call_id,
+                        len(audio_bytes),
                     )
                 except Exception:
                     logger.warning("ATS2 Poller: транскрипция недоступна для %s", call_id)
@@ -183,7 +184,10 @@ class ATS2PollerService:
         await self._call_repo.save(record)
         logger.info(
             "ATS2 call saved: %s, phone=%s, duration=%s, has_transcription=%s",
-            call_id, caller_phone, duration, bool(transcription_text),
+            call_id,
+            caller_phone,
+            duration,
+            bool(transcription_text),
         )
 
         # AI-анализ + создание задачи в Twenty
@@ -316,9 +320,7 @@ class ATS2PollerService:
                 kategoriya=kategoriya_value,
                 vazhnost=vazhnost_value,
             )
-            logger.info(
-                "ATS2 call %s → Twenty task created: %s", call_id, task.twenty_id
-            )
+            logger.info("ATS2 call %s → Twenty task created: %s", call_id, task.twenty_id)
             return True
         except Exception:
             logger.exception("ATS2 Poller: ошибка создания задачи для %s", call_id)

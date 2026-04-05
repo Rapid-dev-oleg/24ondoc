@@ -43,9 +43,7 @@ class AddTextContentUseCase:
         session = await self._repo.get_active_by_user(telegram_id)
         if session is None:
             return None
-        session.add_content_block(
-            ContentBlock(type=block_type, content=text, file_id=file_id)
-        )
+        session.add_content_block(ContentBlock(type=block_type, content=text, file_id=file_id))
         await self._repo.save(session)
         return session
 

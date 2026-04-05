@@ -34,7 +34,11 @@ class UserProfilePortAdapter(UserProfilePort):
         return profile
 
     async def upsert_user(
-        self, telegram_id: int, twenty_member_id: str, role: str, display_name: str = "",
+        self,
+        telegram_id: int,
+        twenty_member_id: str,
+        role: str,
+        display_name: str = "",
     ) -> UserProfile:
         from ..domain.models import UserRole
 

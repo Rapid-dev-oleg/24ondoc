@@ -203,9 +203,10 @@ class TestATS2PollerService:
 
         # Initialize last_poll_timestamp
         from datetime import UTC
+
         before = datetime.now(UTC) - timedelta(minutes=5)
         poller._last_poll_timestamp = before
-        
+
         await poller.poll_once()
         after = poller._last_poll_timestamp
 

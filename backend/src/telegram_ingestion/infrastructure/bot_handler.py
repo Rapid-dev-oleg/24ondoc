@@ -88,6 +88,7 @@ class ATS2TokenStates(StatesGroup):
     entering_refresh_token = State()
     entering_proxy = State()
 
+
 _INVITE_TTL = 86400 * 7  # 7 days
 
 
@@ -176,6 +177,7 @@ def create_router(
             raw = await redis.get(f"invite:{token}")
             if raw is not None:
                 import json as _json
+
                 invite = _json.loads(raw.decode())
                 first_name = message.from_user.first_name or ""
                 last_name = message.from_user.last_name or ""
@@ -248,9 +250,7 @@ def create_router(
         await state.set_state(TelegramFSMStates.collecting)
         await state.update_data(session_id=str(session.session_id))
         try:
-            await message.answer(
-                "📝 Опишите задачу — отправьте текст, голосовое, фото или файл."
-            )
+            await message.answer("📝 Опишите задачу — отправьте текст, голосовое, фото или файл.")
         except TelegramAPIError:
             logger.warning("Failed to send /new_task reply to chat %s", message.chat.id)
 
@@ -415,7 +415,9 @@ def create_router(
             await callback.message.edit_text("⏳ Анализирую... Пожалуйста, подождите.")
 
         await _run_ai_analysis(
-            session, callback, state,
+            session,
+            callback,
+            state,
             fallback_state=TelegramFSMStates.collecting,
             fallback_keyboard=_collect_keyboard(),
         )
@@ -466,7 +468,9 @@ def create_router(
             await callback.message.edit_text("⏳ Переанализирую...")
 
         await _run_ai_analysis(
-            session, callback, state,
+            session,
+            callback,
+            state,
             fallback_state=TelegramFSMStates.preview,
             fallback_keyboard=_preview_keyboard(),
         )
@@ -626,10 +630,12 @@ def create_router(
             role_label = "администратора" if target_role == "admin" else "участника"
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text=f"{m.first_name} {m.last_name}",
-                        callback_data=f"adduser:{target_role}:{m.twenty_id}",
-                    )]
+                    [
+                        InlineKeyboardButton(
+                            text=f"{m.first_name} {m.last_name}",
+                            callback_data=f"adduser:{target_role}:{m.twenty_id}",
+                        )
+                    ]
                     for m in members
                 ]
             )
@@ -670,10 +676,12 @@ def create_router(
         import json as _json
 
         token = f"inv_{uuid.uuid4().hex[:12]}"
-        invite_data = _json.dumps({
-            "twenty_member_id": twenty_member_id,
-            "role": target_role,
-        })
+        invite_data = _json.dumps(
+            {
+                "twenty_member_id": twenty_member_id,
+                "role": target_role,
+            }
+        )
         await redis.set(f"invite:{token}", invite_data, ex=_INVITE_TTL)
 
         username = bot_username or "aidevl_bot"
@@ -685,7 +693,7 @@ def create_router(
         if isinstance(callback.message, Message):
             await callback.message.edit_text(
                 f"🔗 Ссылка для добавления <b>{role_label}</b>:\n\n"
-                f"<a href=\"{link}\">Открыть бот и зарегистрироваться</a>\n\n"
+                f'<a href="{link}">Открыть бот и зарегистрироваться</a>\n\n'
                 f"Отправьте эту ссылку пользователю. "
                 f"При переходе он автоматически зарегистрируется в системе.\n"
                 f"Ссылка действительна 7 дней."
@@ -735,9 +743,7 @@ def create_router(
             proxy_url = getattr(ats2_auth_manager, "_proxy_url", None) or settings.ats2_proxy_url
             try:
                 current_token = await ats2_auth_manager.get_access_token()
-                async with _httpx.AsyncClient(
-                    proxy=proxy_url or None, timeout=10.0
-                ) as _client:
+                async with _httpx.AsyncClient(proxy=proxy_url or None, timeout=10.0) as _client:
                     resp = await _client.get(
                         "https://ats2.t2.ru/crm/openapi/call-records/active",
                         headers={
@@ -971,8 +977,7 @@ def create_router(
             return
         await state.set_state(ATS2TokenStates.entering_proxy)
         await message.answer(
-            "🌐 Отправьте новый прокси для ATS2:\n"
-            "<code>host:port:login:password</code>"
+            "🌐 Отправьте новый прокси для ATS2:\n<code>host:port:login:password</code>"
         )
 
     @router.message(ATS2TokenStates.entering_proxy, F.text)
@@ -1053,7 +1058,7 @@ def _tasks_list_keyboard(
     start = page * _TASKS_PAGE_SIZE
     end = start + _TASKS_PAGE_SIZE
     for idx, ticket in enumerate(tickets[start:end], start=start):
-        title_short = ticket['title'][:45]
+        title_short = ticket["title"][:45]
         label = f"📋 {title_short}"
         cb_data = f"task_detail:{idx}"
         buttons.append([InlineKeyboardButton(text=label, callback_data=cb_data)])
@@ -1565,9 +1570,7 @@ def create_call_notification_router(
                 await callback.message.edit_text(f"⏳ Создаём тикет для звонка {call_id}...")
                 try:
                     await chatwoot_port.create_ticket_from_call(call_id)
-                    await callback.message.edit_text(
-                        f"✅ Тикет для звонка {call_id} создан в CRM."
-                    )
+                    await callback.message.edit_text(f"✅ Тикет для звонка {call_id} создан в CRM.")
                 except Exception:
                     await callback.message.edit_text("❌ Ошибка создания тикета.")
             elif isinstance(callback.message, Message):

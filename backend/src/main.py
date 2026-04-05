@@ -159,18 +159,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Telegram webhook registered", url=webhook_url)
 
     # Register bot commands menu
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Начать работу"),
-        BotCommand(command="new_task", description="Создать задачу"),
-        BotCommand(command="my_tasks", description="Мои задачи"),
-        BotCommand(command="settings", description="Настройки профиля"),
-        BotCommand(command="add_member", description="Добавить участника"),
-        BotCommand(command="add_admin", description="Добавить администратора"),
-        BotCommand(command="health", description="Здоровье системы"),
-        BotCommand(command="ats2_access_token", description="Токен ATS2"),
-        BotCommand(command="ats2_refresh_token", description="Refresh токен ATS2"),
-        BotCommand(command="ats2_proxy", description="Прокси ATS2"),
-    ])
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Начать работу"),
+            BotCommand(command="new_task", description="Создать задачу"),
+            BotCommand(command="my_tasks", description="Мои задачи"),
+            BotCommand(command="settings", description="Настройки профиля"),
+            BotCommand(command="add_member", description="Добавить участника"),
+            BotCommand(command="add_admin", description="Добавить администратора"),
+            BotCommand(command="health", description="Здоровье системы"),
+            BotCommand(command="ats2_access_token", description="Токен ATS2"),
+            BotCommand(command="ats2_refresh_token", description="Refresh токен ATS2"),
+            BotCommand(command="ats2_proxy", description="Прокси ATS2"),
+        ]
+    )
 
     # ATS2 Poller (background task)
     ats2_result = _create_ats2_poller(

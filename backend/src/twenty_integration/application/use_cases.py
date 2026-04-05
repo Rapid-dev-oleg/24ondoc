@@ -96,13 +96,9 @@ class CreateTwentyTaskFromSession:
                         if result is not None:
                             file_bytes, filename, content_type = result
                             # Upload file to Twenty storage
-                            path = await self._port.upload_file(
-                                file_bytes, filename, content_type
-                            )
+                            path = await self._port.upload_file(file_bytes, filename, content_type)
                             if path:
-                                await self._port.create_attachment(
-                                    task.twenty_id, filename, path
-                                )
+                                await self._port.create_attachment(task.twenty_id, filename, path)
                     except Exception:
                         logger.exception(
                             "Failed to attach file %s to task %s",

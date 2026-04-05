@@ -45,7 +45,11 @@ class UserProfilePort(ABC):
 
     @abstractmethod
     async def upsert_user(
-        self, telegram_id: int, twenty_member_id: str, role: str, display_name: str = "",
+        self,
+        telegram_id: int,
+        twenty_member_id: str,
+        role: str,
+        display_name: str = "",
     ) -> UserProfile:
         """Create or update a user with role and twenty_member_id."""
         ...
