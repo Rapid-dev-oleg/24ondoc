@@ -169,6 +169,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         BotCommand(command="operators", description="Операторы"),
         BotCommand(command="health", description="Здоровье системы"),
         BotCommand(command="logs", description="Последние заявки"),
+        BotCommand(command="ats2_access_token", description="Токен ATS2"),
+        BotCommand(command="ats2_refresh_token", description="Refresh токен ATS2"),
     ])
 
     # ATS2 Poller (background task)
