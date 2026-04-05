@@ -19,8 +19,8 @@ class Settings(BaseSettings):
 
     # OpenRouter
     openrouter_api_key: str
-    openrouter_model: str = "anthropic/claude-sonnet-4"
-    openrouter_fallback_model: str = "anthropic/claude-3.7-sonnet"
+    openrouter_model: str = "anthropic/claude-sonnet-4.6"
+    openrouter_fallback_model: str = "openrouter/free"
 
     # OpenAI (Whisper fallback)
     openai_api_key: str = ""

@@ -76,8 +76,8 @@ class OpenRouterAdapter(AIClassificationPort):
     def __init__(
         self,
         api_key: str,
-        primary_model: str = "anthropic/claude-sonnet-4",
-        fallback_model: str = "anthropic/claude-3.7-sonnet",
+        primary_model: str = "anthropic/claude-sonnet-4.6",
+        fallback_model: str = "openrouter/free",
     ) -> None:
         self._api_key = api_key
         self._primary_model = primary_model
