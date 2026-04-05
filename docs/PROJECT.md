@@ -28,6 +28,17 @@ ATS2 Poller ──────────┤
 
 ---
 
+## Модули backend (`backend/src/`)
+
+| Модуль | Назначение |
+|--------|------------|
+| `telegram_ingestion` | Telegram-бот (webhook), приём сообщений, голос, STT |
+| `ai_classification` | AI-классификация через OpenRouter/OpenAI |
+| `ats_processing` | Интеграция с АТС Т2 (ATS2) — поллер звонков, транскрибация, webhook |
+| `twenty_integration` | Синхронизация с Twenty CRM |
+
+---
+
 ## Сервисы (Docker Compose)
 
 | Сервис | Образ | Назначение |
@@ -37,11 +48,18 @@ ATS2 Poller ──────────┤
 | **backend** | custom (Python 3.11) | FastAPI, Telegram webhook, ATS2 poller |
 | **postgres** | pgvector/pgvector:pg15 | БД (PostgreSQL 15 + pgvector) |
 | **redis** | redis:7-alpine | FSM-состояния, кеш, poll timestamp |
-| **pgadmin** | dpage/pgadmin4 | Web UI для PostgreSQL |
 | **twenty** | twentycrm/twenty | CRM-система (24ondoc.ru) |
-| **minio** | minio/minio | Object storage (голосовые семплы) |
 | **pg-backup** | postgres-backup-local:15 | Ежедневные бекапы БД |
-| **whisper** | openai-whisper-asr | Self-hosted Whisper STT (опционально, профиль `whisper`) |
+
+### Опциональные (profile)
+
+| Сервис | Профиль | Назначение |
+|--------|---------|------------|
+| **pgadmin** | `pgadmin` | Web UI для PostgreSQL |
+| **minio** | `minio` | Object storage |
+| **whisper** | `whisper` | Self-hosted Whisper STT |
+
+Запуск с профилем: `docker compose --profile pgadmin up -d`
 
 ---
 
@@ -52,7 +70,7 @@ ATS2 Poller ──────────┤
 - **Hostname:** v722264.hosted-by-vdsina.com
 - **ОС:** Ubuntu (kernel 6.8.0)
 - **Проект на сервере:** /app/24ondoc
-- **Репозиторий:** git@github.com:Rapid-dev-oleg/24ondoc.git
+- **Репозиторий:** github.com/Rapid-dev-oleg/24ondoc
 
 ---
 
@@ -90,16 +108,11 @@ ATS2 Poller ──────────┤
 - **Интервал опроса:** `ATS2_POLL_INTERVAL_SEC` (default: 60)
 - **Включён:** `ATS2_ENABLED` (true/false)
 - Токены сохраняются в `.env` автоматически после refresh
-- Можно обновить вручную через Telegram: `/ats2_access_token`, `/ats2_refresh_token`
+- Можно обновить вручную через Telegram: `/ats2_access_token`, `/ats2_refresh_token`, `/ats2_proxy`
 
-### OpenAI (fallback транскрипция)
+### OpenAI (fallback для AI-классификации)
 - **Ключ:** `OPENAI_API_KEY`
-- **Используется:** последний fallback для Whisper STT
-
-### MinIO (Object Storage)
-- **Endpoint:** `MINIO_ENDPOINT` (minio:9000)
-- **Ключи:** `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`
-- **Bucket:** voice-samples
+- **Используется:** fallback API key для OpenRouter адаптера
 
 ---
 
@@ -116,25 +129,22 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
 OPENROUTER_API_KEY=
 T2_WEBHOOK_SECRET=
-ADMIN_JWT_SECRET=
-ADMIN_PASSWORD=
 TWENTY_API_KEY=
 TWENTY_APP_SECRET=
 ```
 
 ### Опциональные
 ```
-GROQ_API_KEY=                  # Groq Whisper (primary STT)
-OPENAI_API_KEY=                # OpenAI Whisper (fallback STT)
+GROQ_API_KEY=                  # Groq Whisper (STT)
+OPENAI_API_KEY=                # Fallback для AI-классификации
 ATS2_ACCESS_TOKEN=             # ATS2 Теле2
 ATS2_REFRESH_TOKEN=            # ATS2 Теле2
 ATS2_PROXY_URL=                # Прокси для ATS2
 ATS2_ENABLED=false             # Включить ATS2 poller
 ATS2_POLL_INTERVAL_SEC=60      # Интервал опроса
-MINIO_ACCESS_KEY=              # MinIO
-MINIO_SECRET_KEY=              # MinIO
 TELEGRAM_BOT_USERNAME=         # Для invite-ссылок
 TELEGRAM_WEBHOOK_BASE_URL=https://24ondoc.ru
+TWENTY_BASE_URL=http://twenty:3000  # Внутренний адрес Twenty
 LOG_LEVEL=INFO
 ```
 
@@ -148,18 +158,17 @@ LOG_LEVEL=INFO
 | `/start` | Начать работу / регистрация по invite-ссылке |
 | `/new_task` | Создать задачу (текст, голос, фото, файл → AI-анализ → CRM) |
 | `/my_tasks` | Список моих задач |
-| `/settings` | Настройки профиля (имя, email, голосовой семпл) |
 
 ### Только для администраторов
 | Команда | Описание |
 |---------|----------|
 | `/add_member` | Добавить участника (invite-ссылка) |
 | `/add_admin` | Добавить администратора (invite-ссылка) |
-| `/operators` | Привязка оператора к Twenty |
 | `/health` | Статус сервисов + синхронизация ATS2 звонков |
 | `/logs` | 10 последних заявок со статусами |
 | `/ats2_access_token` | Обновить ATS2 access token |
 | `/ats2_refresh_token` | Обновить ATS2 refresh token |
+| `/ats2_proxy` | Обновить прокси ATS2 |
 
 ---
 
@@ -182,10 +191,20 @@ LOG_LEVEL=INFO
 
 ---
 
-## Деплой
+## CI/CD
+
+### GitHub Actions
+
+- **CI** (`ci.yml`) — ruff check, ruff format, mypy strict, pytest (тесты с `continue-on-error`)
+- **Deploy** (`deploy.yml`) — SSH на сервер, git pull, docker compose build + up
+
+### Деплой
+
+Автоматический при push в `main`. Ручной:
 
 ```bash
 cd /app/24ondoc
-git fetch origin && git reset --hard origin/main
-docker compose up -d --build --force-recreate backend
+git pull origin main
+docker compose build backend
+docker compose up -d --no-deps backend
 ```
