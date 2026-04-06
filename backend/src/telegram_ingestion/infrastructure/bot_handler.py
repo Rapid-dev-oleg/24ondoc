@@ -744,11 +744,18 @@ def create_router(
             try:
                 current_token = await ats2_auth_manager.get_access_token()
                 async with _httpx.AsyncClient(proxy=proxy_url or None, timeout=10.0) as _client:
+                    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                    _now = _dt.now(_tz.utc)
                     resp = await _client.get(
-                        "https://ats2.t2.ru/crm/openapi/call-records/active",
+                        "https://ats2.t2.ru/crm/openapi/call-records/info",
                         headers={
                             "Authorization": current_token,
                             "Accept": "application/json",
+                        },
+                        params={
+                            "start": (_now - _td(hours=1)).isoformat(),
+                            "end": _now.isoformat(),
+                            "size": "1",
                         },
                     )
                     if resp.status_code == 403:
