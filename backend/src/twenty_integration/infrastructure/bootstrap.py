@@ -156,6 +156,8 @@ TASK_LOG = ObjectSpec(
         FieldSpec("actorId", "ID актора", "TEXT"),
         FieldSpec("actorName", "Имя актора", "TEXT"),
         FieldSpec("details", "Описание", "RICH_TEXT_V2"),
+        FieldSpec("meta", "Мета", "RICH_TEXT_V2",
+                  description="JSON с payload события (updatedFields, priority и т.п.)"),
         FieldSpec("occurredAt", "Время события", "DATE_TIME"),
     ),
 )
