@@ -78,6 +78,173 @@ class TwentyRestAdapter(TwentyCRMPort):
         except httpx.HTTPError:
             return None
 
+    async def find_person_by_phone(self, phone: str) -> dict[str, Any] | None:
+        """Найти контакт по телефону.
+
+        Возвращает сырой словарь полей Person из Twenty, либо None если не найден.
+        Используется вместо доменного TwentyPerson, потому что нам нужны location-поля.
+        """
+        normalized = phone.strip()
+        if not normalized:
+            return None
+        try:
+            response = await self._client.get(
+                "/rest/people",
+                params={"filter": f"phones.primaryPhoneNumber[eq]:{normalized}"},
+            )
+            response.raise_for_status()
+            items = response.json().get("data", {}).get("people", [])
+            return items[0] if items else None
+        except httpx.HTTPError:
+            logger.exception("find_person_by_phone failed phone=%s", normalized)
+            return None
+
+    async def create_person_with_phone(
+        self,
+        phone: str,
+        name: str | None = None,
+        country_code: str = "RU",
+    ) -> dict[str, Any]:
+        """Создать Person с телефоном в стандартном поле `phones`.
+
+        Возвращает сырой словарь Person из Twenty.
+        """
+        payload: dict[str, Any] = {
+            "phones": {
+                "primaryPhoneNumber": phone,
+                "primaryPhoneCountryCode": country_code,
+                "primaryPhoneCallingCode": "+7" if country_code == "RU" else "",
+            },
+        }
+        if name:
+            payload["name"] = {"firstName": name, "lastName": ""}
+        response = await self._client.post("/rest/people", json=payload)
+        if response.status_code >= 400:
+            logger.error(
+                "Twenty create_person_with_phone failed: %s %s",
+                response.status_code,
+                response.text[:300],
+            )
+        response.raise_for_status()
+        data = response.json().get("data", {})
+        return dict(data.get("createPerson", data))
+
+    async def update_person_location_fields(
+        self,
+        person_id: str,
+        *,
+        location_prefix: str | None = None,
+        location_number: str | None = None,
+        location_address: str | None = None,
+    ) -> None:
+        """Заполнить пустые location-поля на Person (не перетирает уже заполненные).
+
+        Вызывающий код должен предварительно получить текущего Person через
+        find_person_by_phone, чтобы решить, какие поля действительно пусты.
+        Здесь мы просто отправляем патч — если поле пустое, Twenty его заполнит.
+        """
+        patch: dict[str, Any] = {}
+        if location_prefix is not None:
+            patch["locationPrefix"] = location_prefix
+        if location_number is not None:
+            patch["locationNumber"] = location_number
+        if location_address is not None:
+            patch["locationAddress"] = location_address
+        if not patch:
+            return
+        response = await self._client.patch(f"/rest/people/{person_id}", json=patch)
+        if response.status_code >= 400:
+            logger.error(
+                "Twenty update_person_location_fields failed: %s %s",
+                response.status_code,
+                response.text[:300],
+            )
+            response.raise_for_status()
+
+    async def find_location_by_phone(self, phone: str) -> dict[str, Any] | None:
+        """Найти точку по телефону (custom object Location)."""
+        normalized = phone.strip()
+        if not normalized:
+            return None
+        try:
+            response = await self._client.get(
+                "/rest/locations",
+                params={"filter": f"phone[eq]:{normalized}"},
+            )
+            response.raise_for_status()
+            items = response.json().get("data", {}).get("locations", [])
+            return items[0] if items else None
+        except httpx.HTTPError:
+            logger.exception("find_location_by_phone failed phone=%s", normalized)
+            return None
+
+    async def create_location(
+        self,
+        phone: str,
+        *,
+        prefix: str | None = None,
+        number: str | None = None,
+        address: str | None = None,
+    ) -> dict[str, Any]:
+        """Создать Location. Обязательный ключ — phone."""
+        payload: dict[str, Any] = {"phone": phone}
+        if prefix:
+            payload["prefix"] = prefix
+        if number:
+            payload["number"] = number
+        if address:
+            payload["locationAddress"] = address
+        response = await self._client.post("/rest/locations", json=payload)
+        if response.status_code >= 400:
+            logger.error(
+                "Twenty create_location failed: %s %s",
+                response.status_code,
+                response.text[:300],
+            )
+        response.raise_for_status()
+        data = response.json().get("data", {})
+        return dict(data.get("createLocation", data))
+
+    async def update_location(
+        self,
+        location_id: str,
+        *,
+        prefix: str | None = None,
+        number: str | None = None,
+        address: str | None = None,
+    ) -> None:
+        """Обновить отдельные поля Location (только переданные параметры)."""
+        patch: dict[str, Any] = {}
+        if prefix is not None:
+            patch["prefix"] = prefix
+        if number is not None:
+            patch["number"] = number
+        if address is not None:
+            patch["locationAddress"] = address
+        if not patch:
+            return
+        response = await self._client.patch(f"/rest/locations/{location_id}", json=patch)
+        if response.status_code >= 400:
+            logger.error(
+                "Twenty update_location failed: %s %s",
+                response.status_code,
+                response.text[:300],
+            )
+            response.raise_for_status()
+
+    async def link_person_to_location(self, person_id: str, location_id: str) -> None:
+        """Прикрепить Person к Location через relation locationRelId."""
+        response = await self._client.patch(
+            f"/rest/people/{person_id}", json={"locationRelId": location_id}
+        )
+        if response.status_code >= 400:
+            logger.error(
+                "Twenty link_person_to_location failed: %s %s",
+                response.status_code,
+                response.text[:300],
+            )
+            response.raise_for_status()
+
     async def create_person(self, telegram_id: int, name: str) -> TwentyPerson:
         """Создать контакт."""
         try:
@@ -183,6 +350,12 @@ class TwentyRestAdapter(TwentyCRMPort):
         assignee_id: str | None,
         kategoriya: str | None = None,
         vazhnost: str | None = None,
+        *,
+        klient_id: str | None = None,
+        location_rel_id: str | None = None,
+        call_record_rel_id: str | None = None,
+        povtornoe_obrashchenie: bool | None = None,
+        parent_task_id: str | None = None,
     ) -> TwentyTask:
         """Создать задачу."""
         try:
@@ -203,6 +376,21 @@ class TwentyRestAdapter(TwentyCRMPort):
 
             if vazhnost is not None:
                 payload["vazhnost"] = vazhnost
+
+            if klient_id is not None:
+                payload["klientId"] = klient_id
+
+            if location_rel_id is not None:
+                payload["locationRelId"] = location_rel_id
+
+            if call_record_rel_id is not None:
+                payload["callRecordRelId"] = call_record_rel_id
+
+            if povtornoe_obrashchenie is not None:
+                payload["povtornoeObrashchenie"] = povtornoe_obrashchenie
+
+            if parent_task_id is not None:
+                payload["parentTaskId"] = parent_task_id
 
             response = await self._client.post("/rest/tasks", json=payload)
             if response.status_code >= 400:

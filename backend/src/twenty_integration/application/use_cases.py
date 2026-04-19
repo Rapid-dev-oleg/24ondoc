@@ -45,6 +45,9 @@ class CreateTwentyTaskFromSession:
         file_downloader: FileDownloader | None = None,
         kategoriya: str | None = None,
         vazhnost: str | None = None,
+        *,
+        caller_phone: str | None = None,
+        dialogue_text: str | None = None,
     ) -> TwentyTask:
         """Создать задачу в Twenty из сессии.
 
@@ -78,6 +81,12 @@ class CreateTwentyTaskFromSession:
             except Exception:
                 logger.exception("Failed to select task fields, creating without them")
 
+        # If a caller phone is known, resolve Person and Location in Twenty
+        # so the task is anchored to the right client and outlet.
+        klient_id, location_rel_id = await self._resolve_person_and_location(
+            caller_phone, dialogue_text
+        )
+
         task = await self._port.create_task(
             title=session.ai_result.title,
             body=session.ai_result.description,
@@ -85,6 +94,8 @@ class CreateTwentyTaskFromSession:
             assignee_id=assignee_id,
             kategoriya=kategoriya,
             vazhnost=vazhnost,
+            klient_id=klient_id,
+            location_rel_id=location_rel_id,
         )
 
         # 4. Загрузить файлы в Twenty и прикрепить к задаче
@@ -107,3 +118,87 @@ class CreateTwentyTaskFromSession:
                         )
 
         return task
+
+    async def _resolve_person_and_location(
+        self,
+        caller_phone: str | None,
+        dialogue_text: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Найти или создать Person + Location по номеру телефона.
+
+        Обогащает пустые location-поля на Person из AI-извлечения. Не трогает
+        уже заполненные поля. Возвращает (klient_id, location_rel_id), любые
+        могут быть None если phone отсутствует или AI / Twenty недоступны.
+        """
+        if not caller_phone:
+            return None, None
+
+        try:
+            person = await self._port.find_person_by_phone(caller_phone)
+            if person is None:
+                person = await self._port.create_person_with_phone(caller_phone)
+            klient_id = person.get("id") or None
+
+            # Location lookup/creation — independent of Person
+            location = await self._port.find_location_by_phone(caller_phone)
+
+            # Extract location fields from dialogue once, if we have it
+            extracted = {"prefix": None, "number": None, "address": None}
+            if dialogue_text and self._ai_port is not None:
+                extract_fn = getattr(self._ai_port, "extract_location", None)
+                if extract_fn is not None:
+                    try:
+                        extracted = await extract_fn(dialogue_text)
+                    except Exception:
+                        logger.exception("extract_location failed")
+
+            if location is None:
+                location = await self._port.create_location(
+                    caller_phone,
+                    prefix=extracted["prefix"],
+                    number=extracted["number"],
+                    address=extracted["address"],
+                )
+            else:
+                # Fill empty fields only — don't overwrite admin-edited data
+                patch = {
+                    k: v
+                    for k, v in [
+                        ("prefix", extracted["prefix"]),
+                        ("number", extracted["number"]),
+                        ("address", extracted["address"]),
+                    ]
+                    if v and not location.get(
+                        {"prefix": "prefix", "number": "number", "address": "locationAddress"}[k]
+                    )
+                }
+                if patch:
+                    await self._port.update_location(location["id"], **patch)
+
+            location_rel_id = location.get("id") or None
+
+            if klient_id and location_rel_id:
+                try:
+                    await self._port.link_person_to_location(klient_id, location_rel_id)
+                except Exception:
+                    logger.exception("link_person_to_location failed")
+
+            # Also refresh Person's cached location-* fields (empty ones only)
+            if klient_id:
+                try:
+                    to_fill: dict[str, str | None] = {}
+                    if extracted["prefix"] and not person.get("locationPrefix"):
+                        to_fill["location_prefix"] = extracted["prefix"]
+                    if extracted["number"] and not person.get("locationNumber"):
+                        to_fill["location_number"] = extracted["number"]
+                    if extracted["address"] and not person.get("locationAddress"):
+                        to_fill["location_address"] = extracted["address"]
+                    if to_fill:
+                        await self._port.update_person_location_fields(klient_id, **to_fill)
+                except Exception:
+                    logger.exception("update_person_location_fields failed")
+
+            return klient_id, location_rel_id
+        except Exception:
+            logger.exception("_resolve_person_and_location failed for phone=%s", caller_phone)
+            return None, None

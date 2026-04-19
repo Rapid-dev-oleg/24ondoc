@@ -245,3 +245,82 @@ class OpenRouterAdapter(AIClassificationPort):
 
         logger.error("select_task_fields: all models failed, returning defaults")
         return TaskFieldSelection()
+
+    EXTRACT_LOCATION_PROMPT = """\
+Ты — анализатор транскриптов звонков в техподдержку 24ondoc. \
+Определи торговую точку клиента из диалога.
+
+Верни JSON с полями:
+{
+    "prefix": "<Апполо | Аспект | другое название бренда | null>",
+    "number": "<номер/код точки, например \"32\", \"11\", \"Г.0\", или null>",
+    "address": "<адрес, если назван, например \"Ленина 29\", \"Первый Май Сосновская\", или null>"
+}
+
+Важно:
+- Whisper часто искажает названия. Нормализуй:
+  * \"Поло\", \"Пола\", \"Аполл\", \"Аполлова\", \"Апполова\", \"Алола\" → \"Апполо\"
+  * \"Аспец\", \"Аспек\" → \"Аспект\"
+- Если бренд не назван явно — верни prefix: null (не угадывай).
+- Если не уверен — null для каждого неопределённого поля.
+- Отвечай ТОЛЬКО JSON-объектом, без пояснений."""
+
+    async def extract_location(self, dialogue_text: str) -> dict[str, str | None]:
+        """Извлечь данные о точке из транскрипта звонка.
+
+        Возвращает словарь {"prefix": ..., "number": ..., "address": ...}
+        с опциональными значениями. Все или часть могут быть None.
+        """
+        for model in (self._primary_model, self._fallback_model):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        f"{self._BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self._api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": self.EXTRACT_LOCATION_PROMPT},
+                                {"role": "user", "content": dialogue_text},
+                            ],
+                            "response_format": {"type": "json_object"},
+                        },
+                    )
+                    response.raise_for_status()
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                if not content:
+                    raise ValueError(f"Empty content from model {model}")
+                text_to_parse = content.strip()
+                if text_to_parse.startswith("```"):
+                    text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                parsed = json.loads(text_to_parse)
+                result = {
+                    "prefix": _nullable_str(parsed.get("prefix")),
+                    "number": _nullable_str(parsed.get("number")),
+                    "address": _nullable_str(parsed.get("address")),
+                }
+                logger.info(
+                    "extract_location OK (model=%s): prefix=%s number=%s address=%s",
+                    model,
+                    result["prefix"],
+                    result["number"],
+                    result["address"],
+                )
+                return result
+            except Exception:
+                logger.warning("extract_location failed with model=%s", model, exc_info=True)
+        logger.error("extract_location: all models failed, returning empty")
+        return {"prefix": None, "number": None, "address": None}
+
+
+def _nullable_str(value: object) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s or s.lower() in {"null", "none", "n/a"}:
+        return None
+    return s

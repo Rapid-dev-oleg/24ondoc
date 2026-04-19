@@ -39,7 +39,57 @@ class TwentyCRMPort(ABC):
         assignee_id: str | None,
         kategoriya: str | None = None,
         vazhnost: str | None = None,
+        *,
+        klient_id: str | None = None,
+        location_rel_id: str | None = None,
+        call_record_rel_id: str | None = None,
+        povtornoe_obrashchenie: bool | None = None,
+        parent_task_id: str | None = None,
     ) -> TwentyTask: ...
+
+    @abstractmethod
+    async def find_person_by_phone(self, phone: str) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def create_person_with_phone(
+        self, phone: str, name: str | None = None, country_code: str = "RU"
+    ) -> dict[str, object]: ...
+
+    @abstractmethod
+    async def update_person_location_fields(
+        self,
+        person_id: str,
+        *,
+        location_prefix: str | None = None,
+        location_number: str | None = None,
+        location_address: str | None = None,
+    ) -> None: ...
+
+    @abstractmethod
+    async def find_location_by_phone(self, phone: str) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def create_location(
+        self,
+        phone: str,
+        *,
+        prefix: str | None = None,
+        number: str | None = None,
+        address: str | None = None,
+    ) -> dict[str, object]: ...
+
+    @abstractmethod
+    async def update_location(
+        self,
+        location_id: str,
+        *,
+        prefix: str | None = None,
+        number: str | None = None,
+        address: str | None = None,
+    ) -> None: ...
+
+    @abstractmethod
+    async def link_person_to_location(self, person_id: str, location_id: str) -> None: ...
 
     @abstractmethod
     async def link_person_to_task(self, task_id: str, person_id: str) -> None: ...
