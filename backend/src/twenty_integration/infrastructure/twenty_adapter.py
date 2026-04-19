@@ -99,6 +99,53 @@ class TwentyRestAdapter(TwentyCRMPort):
         except httpx.HTTPError as e:
             raise RuntimeError(f"Failed to create person: {e}") from e
 
+    async def list_objects_metadata(self) -> list[dict[str, Any]]:
+        """Вернуть сырые описания объектов Twenty (с вложенными fields).
+
+        Используется bootstrap-модулем для idempotent создания
+        кастомных объектов и полей.
+        """
+        response = await self._client.get("/rest/metadata/objects")
+        response.raise_for_status()
+        return list(response.json().get("data", {}).get("objects", []))
+
+    async def create_object_metadata(self, spec: dict[str, Any]) -> dict[str, Any]:
+        """Создать новый кастомный Object в Twenty.
+
+        spec keys: nameSingular, namePlural, labelSingular, labelPlural,
+        icon, description, isLabelSyncedWithName (опц.).
+        """
+        response = await self._client.post("/rest/metadata/objects", json=spec)
+        if response.status_code >= 400:
+            logger.error(
+                "Twenty create_object_metadata failed: %s %s spec=%s",
+                response.status_code,
+                response.text[:300],
+                spec,
+            )
+        response.raise_for_status()
+        payload = response.json().get("data", {})
+        return dict(payload.get("createObject", payload))
+
+    async def create_field_metadata(self, spec: dict[str, Any]) -> dict[str, Any]:
+        """Создать кастомное поле на существующем Object.
+
+        spec keys: objectMetadataId, name, label, type, description,
+        isNullable, options (для SELECT), settings (для RELATION: relationType,
+        targetObjectMetadataId, targetFieldLabelPlural, targetFieldLabelSingular).
+        """
+        response = await self._client.post("/rest/metadata/fields", json=spec)
+        if response.status_code >= 400:
+            logger.error(
+                "Twenty create_field_metadata failed: %s %s spec=%s",
+                response.status_code,
+                response.text[:300],
+                spec,
+            )
+        response.raise_for_status()
+        payload = response.json().get("data", {})
+        return dict(payload.get("createField", payload))
+
     async def fetch_task_field_options(self) -> dict[str, list[dict[str, str]]]:
         """Запросить актуальные списки kategoriya и vazhnost из метаданных Twenty."""
         result: dict[str, list[dict[str, str]]] = {"kategoriya": [], "vazhnost": []}

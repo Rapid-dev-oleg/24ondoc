@@ -1,4 +1,4 @@
-.PHONY: up down build test lint format logs ps health \
+.PHONY: up down build test lint format logs ps health twenty-bootstrap \
        staging-up staging-down staging-build staging-logs staging-ps staging-e2e staging-reset
 
 up:
@@ -27,6 +27,12 @@ ps:
 
 health:
 	docker compose ps --format "table {{.Name}}\t{{.Status}}"
+
+# Idempotently create custom Twenty objects (Location, CallRecord, TaskLog)
+# and custom fields on Task/Person. Safe to re-run. Reads TWENTY_BASE_URL
+# and TWENTY_API_KEY from .env.
+twenty-bootstrap:
+	cd backend && uv run python -m src.twenty_integration.infrastructure.bootstrap_cli
 
 # --- Staging environment ---
 
