@@ -324,3 +324,89 @@ def _nullable_str(value: object) -> str | None:
     if not s or s.lower() in {"null", "none", "n/a"}:
         return None
     return s
+
+
+CHECK_REPEAT_PROMPT = """\
+Ты — аналитик обращений в техподдержку 24ondoc. Определи, является ли новое \
+обращение СЕМАНТИЧЕСКИ тем же, о чём клиент уже обращался ранее.
+
+Правило: совпадение по смыслу = одна и та же сломанная функция/устройство/проблема. \
+Мелкие различия формулировок и лексики не важны. Перефраз — совпадение. \
+Если новое обращение о другой проблеме — не совпадение.
+
+Верни JSON:
+{"matches": ["<id_ранее_поданной_задачи>", ...], "reasoning": "<кратко, зачем>"}
+
+В список `matches` кладёшь id только тех предыдущих задач, что совпадают с новой \
+по смыслу. Отвечай ТОЛЬКО JSON-объектом."""
+
+
+class _OpenRouterRepeatMixin:
+    """Mixin exposing check_repeat_status on OpenRouterAdapter.
+
+    Keeps the big adapter file manageable while sharing the HTTP config.
+    """
+
+
+async def _check_repeat_status_impl(
+    self: "OpenRouterAdapter",
+    new_text: str,
+    recent_tasks: list[dict[str, str]],
+) -> dict[str, object]:
+    """Implementation pulled out so we can re-expose on the adapter below.
+
+    recent_tasks: list of {"id": ..., "title": ..., "description": ...}
+    """
+    if not recent_tasks:
+        return {"matches": [], "reasoning": "no recent tasks"}
+
+    recent_payload = "\n".join(
+        f"- id={t.get('id')}: {t.get('title', '')[:80]} — {t.get('description', '')[:200]}"
+        for t in recent_tasks
+    )
+    user_prompt = (
+        f"Новое обращение:\n{new_text}\n\nПредыдущие задачи этой точки:\n{recent_payload}"
+    )
+
+    for model in (self._primary_model, self._fallback_model):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self._BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": CHECK_REPEAT_PROMPT},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            if not content:
+                raise ValueError(f"Empty content from model {model}")
+            text_to_parse = content.strip()
+            if text_to_parse.startswith("```"):
+                text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(text_to_parse)
+            matches_raw = parsed.get("matches") or []
+            matches = [str(m) for m in matches_raw if m]
+            reasoning = str(parsed.get("reasoning") or "")[:500]
+            logger.info(
+                "check_repeat_status OK (model=%s): matches=%s", model, matches
+            )
+            return {"matches": matches, "reasoning": reasoning}
+        except Exception:
+            logger.warning("check_repeat_status failed with model=%s", model, exc_info=True)
+    logger.error("check_repeat_status: all models failed, returning empty")
+    return {"matches": [], "reasoning": "all models failed"}
+
+
+# Bolt the function onto the adapter class
+OpenRouterAdapter.check_repeat_status = _check_repeat_status_impl  # type: ignore[attr-defined]
