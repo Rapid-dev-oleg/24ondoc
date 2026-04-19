@@ -96,6 +96,10 @@ class CreateTwentyTaskFromSession:
             vazhnost=vazhnost,
             klient_id=klient_id,
             location_rel_id=location_rel_id,
+            # Explicit False defeats Twenty's BOOLEAN default=true on this
+            # field. Detect-repeat may patch it to True later when
+            # integrated (stage 6 hook).
+            povtornoe_obrashchenie=False,
         )
 
         # 4. Загрузить файлы в Twenty и прикрепить к задаче
