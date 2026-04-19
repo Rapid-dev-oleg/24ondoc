@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import and_, case, cast, distinct, func, literal, select, text
+from sqlalchemy import Boolean, and_, case, cast, distinct, func, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
@@ -187,7 +187,7 @@ async def repeats_by_location(
                 TaskEventORM.action == "REPEAT_CHECKED",
                 TaskEventORM.created_at >= from_ts,
                 TaskEventORM.created_at <= to_ts,
-                cast(TaskEventORM.meta["is_repeat"], None) == True,  # noqa: E712
+                cast(TaskEventORM.meta["is_repeat"], Boolean).is_(True),
             )
         )
         .group_by(TaskEventORM.location_phone)

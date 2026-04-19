@@ -91,14 +91,62 @@ async def _is_recent_echo(
     return False
 
 
+_FIELD_LABELS_RU = {
+    "status": "Статус",
+    "statusZayavki": "Статус заявки",
+    "assigneeId": "Ответственный",
+    "vazhnost": "Важность",
+    "kategoriya": "Категория",
+    "povtornoeObrashchenie": "Повторное обращение",
+    "istochnikObrashcheniya": "Источник",
+    "dueAt": "Срок",
+    "title": "Заголовок",
+    "parentTaskId": "Родительская задача",
+}
+
+
+async def _last_known_values(
+    write_event: WriteTaskEvent, twenty_task_id: str, fields: list[str],
+) -> dict[str, Any]:
+    """Lookup the most recent value stored in task_events.meta.values for
+    each field, scanning from newest backwards. Missing fields stay absent.
+    """
+    found: dict[str, Any] = {}
+    remaining = set(fields)
+    try:
+        recent = await write_event._repo.recent_by_task(twenty_task_id, limit=30)
+    except Exception:
+        return found
+    for e in recent:
+        if not remaining:
+            break
+        vals = ((e.meta or {}).get("values") or {}) if e.meta else {}
+        for fld in list(remaining):
+            if fld in vals:
+                found[fld] = vals[fld]
+                remaining.discard(fld)
+    return found
+
+
+def _format_details(updated: list[str], new_record: dict[str, Any],
+                    old_values: dict[str, Any]) -> str:
+    """Build a Russian-language summary of what changed: one line per field."""
+    lines = []
+    for fld in updated:
+        label = _FIELD_LABELS_RU.get(fld, fld)
+        new_v = new_record.get(fld)
+        old_v = old_values.get(fld, "—")
+        lines.append(f"{label}: {old_v} → {new_v}")
+    return "\n".join(lines)
+
+
 @router.post("/webhook/twenty", status_code=status.HTTP_200_OK)
 async def twenty_webhook(
     request: Request,
     payload: TwentyTaskEvent,
     x_twenty_secret: str | None = Header(default=None, alias="X-Twenty-Secret"),
 ) -> dict[str, str]:
-    # If TWENTY_WEBHOOK_SECRET is set, require it. If it's empty, skip auth
-    # — Twenty's webhook config has no mandatory secret in our setup.
+    # If TWENTY_WEBHOOK_SECRET is set, require it. If empty, skip auth.
     expected: str | None = getattr(request.state, "twenty_webhook_secret", None) or None
     if expected is not None and x_twenty_secret != expected:
         raise HTTPException(
@@ -125,13 +173,24 @@ async def twenty_webhook(
         return {"status": "ignored"}
 
     if await _is_recent_echo(write_event, twenty_task_id, action):
-        logger.info(
-            "twenty_webhook dedup: twenty_task_id=%s action=%s",
-            twenty_task_id, action.value,
-        )
+        logger.info("twenty_webhook dedup: twenty_task_id=%s action=%s",
+                    twenty_task_id, action.value)
         return {"status": "deduped"}
 
     record = payload.record or payload.properties or {}
+    updated = list(payload.updatedFields or [])
+    # Snapshot of new values for the updated fields — saved into meta so
+    # the NEXT webhook event on the same task can read them as "old".
+    new_values = {f: record.get(f) for f in updated}
+    old_values = await _last_known_values(write_event, twenty_task_id, updated)
+    details = _format_details(updated, record, old_values) if updated else None
+
+    # Actor name comes from Twenty's updatedBy when the change is MANUAL.
+    actor_name = "Twenty UI"
+    updated_by = record.get("updatedBy") or {}
+    if isinstance(updated_by, dict) and updated_by.get("name"):
+        actor_name = str(updated_by["name"])
+
     priority = record.get("vazhnost") or record.get("priority")
 
     await write_event.execute(
@@ -139,9 +198,14 @@ async def twenty_webhook(
         action=action,
         actor_type=ActorType.ADMIN,
         user_id=None,
-        actor_name="Twenty UI",
+        actor_name=actor_name,
         priority=str(priority) if priority else None,
         source=Source.WEBHOOK,
-        meta={"eventName": event_key, "updatedFields": payload.updatedFields},
+        details=details,
+        meta={
+            "eventName": event_key,
+            "updatedFields": updated,
+            "values": new_values,
+        },
     )
     return {"status": "ok"}
