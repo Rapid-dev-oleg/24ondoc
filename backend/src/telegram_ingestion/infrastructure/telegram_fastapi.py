@@ -159,7 +159,9 @@ async def telegram_webhook(
     dp.include_router(create_settings_router(update_profile, save_voice, user_port))
     dp.include_router(create_call_notification_router(call_repo))
 
-    generate_report = GenerateReport(
+    # Shared singleton from main.py lifespan; falls back to a fresh one if
+    # not initialised (test harness).
+    generate_report = getattr(request.app.state, "generate_report", None) or GenerateReport(
         twenty_base_url=settings.twenty_base_url,
         twenty_api_key=settings.twenty_api_key,
         redis=redis,

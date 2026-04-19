@@ -24,6 +24,7 @@ from ats_processing.infrastructure.ats2_client import ATS2AuthManager, ATS2RestC
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
 from ats_processing.infrastructure.webhook_handler import router as t2_router
 from config import Settings, get_settings
+from reports.infrastructure.http_handler import router as reports_router
 from telegram_ingestion.infrastructure.stt_adapter import GroqSTTAdapter
 from telegram_ingestion.infrastructure.telegram_fastapi import router as tg_router
 from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
@@ -133,6 +134,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # STT adapter: Groq Whisper API
     stt_port = GroqSTTAdapter(api_key=settings.groq_api_key)
 
+    # Reports generator (shared between Telegram /stats and /reports iframe).
+    from reports.application.generate_report import GenerateReport
+    generate_report = GenerateReport(
+        twenty_base_url=settings.twenty_base_url,
+        twenty_api_key=settings.twenty_api_key,
+        redis=redis,
+    )
+
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.redis = redis
@@ -140,6 +149,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.twenty_adapter = twenty_adapter
     app.state.stt_port = stt_port
     app.state.settings = settings
+    app.state.generate_report = generate_report
 
     # Register Telegram webhook
     webhook_url = f"{settings.telegram_webhook_base_url}/webhook/telegram"
@@ -273,3 +283,4 @@ async def metrics() -> dict[str, str]:
 # Handlers already define full paths — include WITHOUT extra prefix
 app.include_router(t2_router)      # POST /webhook/t2/call
 app.include_router(tg_router)      # POST /webhook/telegram
+app.include_router(reports_router) # GET /reports/* (iframe dashboard)
