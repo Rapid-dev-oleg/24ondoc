@@ -13,7 +13,7 @@ workspace which already restricts access to that domain.
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -98,12 +98,10 @@ def _parse_query_ts(s: str, *, end_of_day: bool = False) -> datetime:
 
 @router.get("/", response_class=HTMLResponse)
 async def report_page() -> HTMLResponse:
-    # Default range: last 7 days ending today (UTC).
-    today = datetime.now(UTC).date()
-    week_ago = today - timedelta(days=6)
+    today = datetime.now(UTC).date().isoformat()
     html = _REPORT_HTML.format(
-        default_from=week_ago.isoformat(),
-        default_to=today.isoformat(),
+        default_from=today,
+        default_to=today,
     )
     return HTMLResponse(html, headers={
         # allow embedding from anywhere (Twenty Dashboard iframe)
@@ -243,7 +241,7 @@ function renderTable(dto) {{
   const body = (dto.rows || []).map(r =>
     '<tr>' + cols.map(c => '<td>' + (c[1](r) ?? '—') + '</td>').join('') + '</tr>'
   ).join('');
-  const foot = dto.totals ? (
+  const foot = (dto.totals && dto.scope !== 'employee') ? (
     '<tr>' + cols.map(c => '<td>' + (c[1](dto.totals) ?? '—') + '</td>').join('') + '</tr>'
   ) : '';
   tableDiv.innerHTML = '<table><thead>' + thead + '</thead><tbody>' + body

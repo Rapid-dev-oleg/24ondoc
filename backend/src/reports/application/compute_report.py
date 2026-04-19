@@ -232,10 +232,19 @@ def compute_report(
         avg_response_time_seconds=_avg(all_resp),
     )
 
-    total_created = sum(
-        1 for t in data.tasks
-        if (ts := _parse_iso(t.get("createdAt"))) is not None and from_ts <= ts <= to_ts
-    )
+    # When scoped to one employee, count only their created-in-window
+    # tasks — org-wide 156 is meaningless in a per-operator view.
+    def _in_window(t: dict[str, Any]) -> bool:
+        ts = _parse_iso(t.get("createdAt"))
+        return ts is not None and from_ts <= ts <= to_ts
+
+    if scope in (ReportScope.SELF, ReportScope.EMPLOYEE) and user_id:
+        total_created = sum(
+            1 for t in data.tasks
+            if _in_window(t) and t.get("assigneeId") == user_id
+        )
+    else:
+        total_created = sum(1 for t in data.tasks if _in_window(t))
 
     return ReportDTO(
         scope=scope,
