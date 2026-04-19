@@ -283,6 +283,38 @@ def test_response_time_task_without_created_event_skipped() -> None:
     assert row.avg_response_time_seconds is None
 
 
+def test_atomic_save_falls_back_to_task_created_event() -> None:
+    """«Назначить себе + выполнено» в одном save → Twenty пишет ОДНО событие
+    с обоими diff на одном happensAt. Строгое правило assignment→completion
+    даст 0 секунд; fallback на task.created даёт реальное время жизни задачи
+    в CRM (от появления до закрытия).
+    """
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+
+    real_insert = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+    atomic_close = real_insert + timedelta(minutes=8, seconds=30)
+
+    tasks = ({
+        "id": "atom", "createdAt": _iso(real_insert),
+        "assigneeId": WM_VOVA, "status": "VYPOLNENO",
+    },)
+    # Single task.updated carrying BOTH status and assignee diffs (Twenty's
+    # behaviour when two form fields change in one save).
+    updated = (_tu_event("atom", atomic_close, {
+        "status": {"before": "TODO", "after": "VYPOLNENO"},
+        "assigneeId": {"before": None, "after": WM_VOVA},
+    }, wmid=WM_VOVA),)
+    created = (_tc_event("atom", real_insert),)
+    data = TimelineData(updated, tasks, members_by_id={WM_VOVA: "V"},
+                        created_events=created)
+
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
+    row = next(r for r in dto.rows if r.user_id == WM_VOVA)
+    assert row.completed == 1
+    assert row.total_duration_seconds == 8 * 60 + 30
+
+
 def test_deleted_task_leaves_no_ghost_metrics() -> None:
     """Task deleted in UI → timelineActivity events remain, but /rest/tasks
     stops returning it. compute_report must ignore leftover events so the

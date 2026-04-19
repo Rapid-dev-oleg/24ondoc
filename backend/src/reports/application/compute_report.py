@@ -91,15 +91,28 @@ def compute_report(
                 if tid not in first_assignment_event:
                     first_assignment_event[tid] = e
 
-    # For each completed-in-window task, find `received_at(tid)`:
-    # the happensAt of the LAST assignment event before completion
-    # where diff.assigneeId.after == owner. Returns None if no such
-    # event exists — tasks without a real timeline assignment are
-    # dropped from duration metrics. task.createdAt is NOT a valid
-    # fallback: our backend backfills that column to the call time
-    # (hours/days before the real Twenty INSERT), so falling back to
-    # it yields inflated multi-hour durations for batch-closed tasks.
-    def _received_at(tid: str, owner: str, completion_ts: datetime) -> datetime | None:
+    # For each completed-in-window task, find `received_at(tid)`.
+    #
+    # Normal path: the happensAt of the LAST task.updated event before
+    # completion where diff.assigneeId.after == owner.
+    #
+    # Atomic-save path: if the completion event ITSELF also carries the
+    # assignment-to-owner diff (operator clicked "назначить себе" and
+    # "выполнено" in one save — Twenty collapses to a single
+    # timelineActivity with both diffs at identical happensAt), the
+    # strict start/finish would be zero. Fall back to `task.created`
+    # event timestamp so duration reflects the task's lifetime in CRM.
+    #
+    # No fallback to task.createdAt COLUMN — we backfill that to the
+    # ATS call time, so it drifts from reality by hours/days.
+    def _received_at(
+        tid: str, owner: str, completion_ts: datetime, comp_event: dict[str, Any],
+    ) -> datetime | None:
+        comp_diff = (comp_event.get("properties") or {}).get("diff") or {}
+        comp_asg = (comp_diff.get("assigneeId") or {})
+        if comp_asg.get("after") == owner:
+            return task_created_ts.get(tid)
+
         last: datetime | None = None
         for e in events_per_task.get(tid, []):
             diff = (e.get("properties") or {}).get("diff") or {}
@@ -135,9 +148,9 @@ def compute_report(
             continue
         if owner is None:
             continue  # unassigned completed task — skip from per-operator metrics
-        received_ts = _received_at(tid, owner, completion_ts)
+        received_ts = _received_at(tid, owner, completion_ts, comp_event)
         if received_ts is None:
-            continue  # no assignment event AND no createdAt — can't compute start
+            continue  # no assignment event AND no task.created anchor — skip
         duration: float | None = (completion_ts - received_ts).total_seconds()
         if duration < 0:
             duration = None

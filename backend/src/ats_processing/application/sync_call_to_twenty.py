@@ -102,6 +102,8 @@ class SyncCallToTwentyUseCase:
         direction = "INCOMING"  # ATS2 doesn't tell us direction in current poller
         call_status = _STATUS_MAP.get(record.status, "ERROR")
 
+        twenty_id: str | None = None
+        was_created = False
         if existing is None:
             try:
                 created = await self._port.create_call_record(
@@ -117,31 +119,28 @@ class SyncCallToTwentyUseCase:
                     task_rel_id=task_id,
                 )
                 twenty_id = str(created.get("id") or "") or None
-                return SyncResult(
-                    twenty_id=twenty_id,
-                    created=True,
-                    linked_task=bool(task_id),
-                )
+                was_created = True
             except Exception:
                 logger.exception("Failed creating Twenty CallRecord for %s", record.call_id)
                 return SyncResult(twenty_id=None, created=False, linked_task=False)
-
-        twenty_id = str(existing.get("id") or "") or None
-        if twenty_id and (task_id or (transcript and not existing.get("transcript"))):
-            try:
-                await self._port.update_call_record(
-                    twenty_id,
-                    task_rel_id=task_id,
-                    person_rel_id=person_id if not existing.get("personRelId") else None,
-                    location_rel_id=location_id if not existing.get("locationRelId") else None,
-                    transcript=transcript if not existing.get("transcript") else None,
-                )
-            except Exception:
-                logger.exception("Failed updating Twenty CallRecord %s", twenty_id)
+        else:
+            twenty_id = str(existing.get("id") or "") or None
+            if twenty_id and (task_id or (transcript and not existing.get("transcript"))):
+                try:
+                    await self._port.update_call_record(
+                        twenty_id,
+                        task_rel_id=task_id,
+                        person_rel_id=person_id if not existing.get("personRelId") else None,
+                        location_rel_id=location_id if not existing.get("locationRelId") else None,
+                        transcript=transcript if not existing.get("transcript") else None,
+                    )
+                except Exception:
+                    logger.exception("Failed updating Twenty CallRecord %s", twenty_id)
 
         # Script check on the first answered call for this task (Stage 7).
-        # We run it at most once per task: skipped if the task already has a
-        # scriptViolations value on record.
+        # Runs on BOTH the create and update paths: a freshly-synced call
+        # (was_created=True) still needs its transcript evaluated, otherwise
+        # the first call on every new task silently skips scriptViolations.
         if (
             task_id
             and transcript
@@ -155,7 +154,7 @@ class SyncCallToTwentyUseCase:
 
         return SyncResult(
             twenty_id=twenty_id,
-            created=False,
+            created=was_created,
             linked_task=bool(task_id),
         )
 
