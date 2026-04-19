@@ -30,7 +30,10 @@ from ats_processing.application.sync_call_to_twenty import SyncCallToTwentyUseCa
 from ats_processing.domain.models import CallRecord, CallStatus, SourceType  # noqa: E402
 from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter  # noqa: E402
 
-RATE_LIMIT_RPS = 2.0  # Twenty API politeness
+# Twenty limits writes to ~100 tokens / 60s. Each record can emit up to
+# ~5 POSTs (Person, Location, CallRecord + lookups), so we stay under 15
+# records/min = one every 4 seconds.
+RATE_LIMIT_RPS = 0.25
 
 
 async def _main() -> int:

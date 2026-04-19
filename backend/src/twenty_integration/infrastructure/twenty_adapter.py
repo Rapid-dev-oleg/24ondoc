@@ -10,6 +10,10 @@ import httpx
 
 from twenty_integration.domain.models import TwentyMember, TwentyPerson, TwentyTask
 from twenty_integration.domain.ports import TwentyCRMPort
+from twenty_integration.infrastructure.phone import (
+    normalize_ru_phone,
+    to_phones_composite,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,41 +85,39 @@ class TwentyRestAdapter(TwentyCRMPort):
     async def find_person_by_phone(self, phone: str) -> dict[str, Any] | None:
         """Найти контакт по телефону.
 
-        Возвращает сырой словарь полей Person из Twenty, либо None если не найден.
-        Используется вместо доменного TwentyPerson, потому что нам нужны location-поля.
+        Нормализует номер до 10-значного national (как хранит Twenty в
+        PHONES-композите) и фильтрует по `phones.primaryPhoneNumber`.
         """
-        normalized = phone.strip()
-        if not normalized:
+        national = normalize_ru_phone(phone)
+        if not national:
             return None
         try:
             response = await self._client.get(
                 "/rest/people",
-                params={"filter": f"phones.primaryPhoneNumber[eq]:{normalized}"},
+                params={"filter": f"phones.primaryPhoneNumber[eq]:{national}"},
             )
             response.raise_for_status()
             items = response.json().get("data", {}).get("people", [])
             return items[0] if items else None
         except httpx.HTTPError:
-            logger.exception("find_person_by_phone failed phone=%s", normalized)
+            logger.exception("find_person_by_phone failed phone=%s", national)
             return None
 
     async def create_person_with_phone(
         self,
         phone: str,
         name: str | None = None,
-        country_code: str = "RU",
     ) -> dict[str, Any]:
         """Создать Person с телефоном в стандартном поле `phones`.
 
-        Возвращает сырой словарь Person из Twenty.
+        Phone обязательно приводится к 10-значному national через
+        `normalize_ru_phone`. Без этого Twenty может сохранить сырую
+        строку в `primaryPhoneNumber` и последующий find не попадёт.
         """
-        payload: dict[str, Any] = {
-            "phones": {
-                "primaryPhoneNumber": phone,
-                "primaryPhoneCountryCode": country_code,
-                "primaryPhoneCallingCode": "+7" if country_code == "RU" else "",
-            },
-        }
+        national = normalize_ru_phone(phone)
+        if not national:
+            raise ValueError(f"invalid phone: {phone!r}")
+        payload: dict[str, Any] = {"phones": to_phones_composite(national)}
         if name:
             payload["name"] = {"firstName": name, "lastName": ""}
         response = await self._client.post("/rest/people", json=payload)
@@ -162,20 +164,24 @@ class TwentyRestAdapter(TwentyCRMPort):
             response.raise_for_status()
 
     async def find_location_by_phone(self, phone: str) -> dict[str, Any] | None:
-        """Найти точку по телефону (custom object Location)."""
-        normalized = phone.strip()
-        if not normalized:
+        """Найти точку по телефону (custom object Location).
+
+        Location.phone — PHONES-композит; ищем по национальной части
+        `phone.primaryPhoneNumber` так же, как у Person.
+        """
+        national = normalize_ru_phone(phone)
+        if not national:
             return None
         try:
             response = await self._client.get(
                 "/rest/locations",
-                params={"filter": f"phone[eq]:{normalized}"},
+                params={"filter": f"phone.primaryPhoneNumber[eq]:{national}"},
             )
             response.raise_for_status()
             items = response.json().get("data", {}).get("locations", [])
             return items[0] if items else None
         except httpx.HTTPError:
-            logger.exception("find_location_by_phone failed phone=%s", normalized)
+            logger.exception("find_location_by_phone failed phone=%s", national)
             return None
 
     async def create_location(
@@ -186,8 +192,11 @@ class TwentyRestAdapter(TwentyCRMPort):
         number: str | None = None,
         address: str | None = None,
     ) -> dict[str, Any]:
-        """Создать Location. Обязательный ключ — phone."""
-        payload: dict[str, Any] = {"phone": phone}
+        """Создать Location. Обязательный ключ — phone (PHONES-композит)."""
+        national = normalize_ru_phone(phone)
+        if not national:
+            raise ValueError(f"invalid phone: {phone!r}")
+        payload: dict[str, Any] = {"phone": to_phones_composite(national)}
         if prefix:
             payload["prefix"] = prefix
         if number:
@@ -314,7 +323,11 @@ class TwentyRestAdapter(TwentyCRMPort):
             "callStatus": call_status,
         }
         if caller_phone:
-            payload["callerPhone"] = caller_phone
+            national = normalize_ru_phone(caller_phone)
+            # Leave callerPhone empty when the input can't be normalized —
+            # Twenty would reject a malformed PHONES composite.
+            if national:
+                payload["callerPhone"] = to_phones_composite(national)
         if duration is not None:
             payload["duration"] = duration
         if occurred_at is not None:

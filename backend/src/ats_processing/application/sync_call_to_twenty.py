@@ -52,11 +52,27 @@ class SyncCallToTwentyUseCase:
         *,
         task_id: str | None = None,
     ) -> SyncResult:
+        # Prefer the locally persisted twenty_task_id (set by
+        # CreateTwentyTaskFromSession) so the backfill also links calls
+        # to tasks without the caller having to pass task_id.
+        task_id = task_id or record.twenty_task_id
         existing = await self._port.find_call_record_by_ats_id(record.call_id)
 
+        # Resolve Person/Location only when needed:
+        #   - new CallRecord (existing is None) — always;
+        #   - existing CallRecord — only if its relations are still empty
+        #     (historical records from before the phone-based sync).
+        # Re-running the backfill must NOT create duplicate Person/Location
+        # rows for already-synced calls. That was the bug.
+        need_resolve = (
+            record.caller_phone
+            and (existing is None
+                 or not existing.get("personRelId")
+                 or not existing.get("locationRelId"))
+        )
         person_id: str | None = None
         location_id: str | None = None
-        if record.caller_phone:
+        if need_resolve and record.caller_phone:
             try:
                 person = await self._port.find_person_by_phone(record.caller_phone)
                 if person is None:

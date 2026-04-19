@@ -52,7 +52,7 @@ class TwentyCRMPort(ABC):
 
     @abstractmethod
     async def create_person_with_phone(
-        self, phone: str, name: str | None = None, country_code: str = "RU"
+        self, phone: str, name: str | None = None
     ) -> dict[str, object]: ...
 
     @abstractmethod

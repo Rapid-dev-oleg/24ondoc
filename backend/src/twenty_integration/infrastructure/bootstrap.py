@@ -30,6 +30,7 @@ FieldType = Literal[
     "SELECT",
     "RELATION",
     "RICH_TEXT_V2",
+    "PHONES",
 ]
 
 
@@ -72,7 +73,10 @@ LOCATION = ObjectSpec(
     description="Торговая точка клиента (Апполо 32, Аспект 10 и т.п.). Ключ — телефон.",
     icon="IconMapPin",
     fields=(
-        FieldSpec("phone", "Телефон", "TEXT", is_nullable=False),
+        # PHONES — composite type so Twenty itself normalizes numbers;
+        # any write passes through libphonenumber (primaryPhoneNumber is
+        # the national part without calling code).
+        FieldSpec("phone", "Телефон", "PHONES", is_nullable=False),
         FieldSpec("prefix", "Бренд", "TEXT", description="Апполо / Аспект / другой"),
         FieldSpec("number", "Номер точки", "TEXT"),
         # NOTE: `address` conflicts with Twenty's built-in ADDRESS composite.
@@ -89,7 +93,7 @@ CALL_RECORD = ObjectSpec(
     icon="IconPhone",
     fields=(
         FieldSpec("atsCallId", "ATS Call ID", "TEXT", is_nullable=False),
-        FieldSpec("callerPhone", "Телефон звонящего", "TEXT"),
+        FieldSpec("callerPhone", "Телефон звонящего", "PHONES"),
         FieldSpec(
             "direction",
             "Направление",
