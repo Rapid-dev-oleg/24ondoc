@@ -14,6 +14,9 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
+
+MSK = ZoneInfo("Europe/Moscow")
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -86,19 +89,24 @@ async def get_data(
 
 
 def _parse_query_ts(s: str, *, end_of_day: bool = False) -> datetime:
-    """Accept 'YYYY-MM-DD' or full ISO-8601; treat naive dates as UTC."""
+    """Accept 'YYYY-MM-DD' or full ISO-8601.
+
+    Naive YYYY-MM-DD is interpreted as a Moscow calendar day (operators
+    speak MSK, Twenty stores UTC — the converted window covers exactly
+    the chosen MSK date).
+    """
     if len(s) == 10:
         y, m, d = s.split("-")
-        dt = datetime(int(y), int(m), int(d), tzinfo=UTC)
+        dt = datetime(int(y), int(m), int(d), tzinfo=MSK)
         if end_of_day:
             dt = dt.replace(hour=23, minute=59, second=59)
-        return dt
+        return dt.astimezone(UTC)
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
 @router.get("/", response_class=HTMLResponse)
 async def report_page() -> HTMLResponse:
-    today = datetime.now(UTC).date().isoformat()
+    today = datetime.now(MSK).date().isoformat()
     html = _REPORT_HTML.format(
         default_from=today,
         default_to=today,
