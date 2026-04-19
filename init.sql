@@ -62,18 +62,6 @@ CREATE TABLE IF NOT EXISTS call_records (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Зеркало задач Chatwoot (TaskMirror)
-CREATE TABLE IF NOT EXISTS task_mirrors (
-    task_id INTEGER PRIMARY KEY,
-    source_session_id UUID REFERENCES draft_sessions(session_id) ON DELETE SET NULL,
-    assignee_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-    status VARCHAR(20) CHECK (status IN ('open', 'pending', 'resolved', 'snoozed')),
-    priority VARCHAR(20),
-    title VARCHAR(255),
-    permalink VARCHAR(500),
-    last_sync TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
 -- Голосовые сэмплы (VoiceSample)
 CREATE TABLE IF NOT EXISTS voice_samples (
     sample_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -91,7 +79,6 @@ CREATE INDEX IF NOT EXISTS idx_draft_expires ON draft_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_draft_status ON draft_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_call_agent ON call_records(detected_agent_id);
 CREATE INDEX IF NOT EXISTS idx_call_status ON call_records(status);
-CREATE INDEX IF NOT EXISTS idx_task_assignee ON task_mirrors(assignee_telegram_id);
 CREATE INDEX IF NOT EXISTS idx_voice_user ON voice_samples(user_id);
 CREATE INDEX IF NOT EXISTS idx_voice_active ON voice_samples(user_id, is_active);
 
