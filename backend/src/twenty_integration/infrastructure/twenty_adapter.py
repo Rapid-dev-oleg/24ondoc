@@ -359,6 +359,30 @@ class TwentyRestAdapter(TwentyCRMPort):
             )
             response.raise_for_status()
 
+    async def find_recent_tasks_by_location_id(
+        self, location_id: str, since: datetime, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Tasks attached to this Location (by locationRelId) since a given time.
+
+        Used by the repeat detector to look up prior tasks from the same
+        outlet within a 3-day window.
+        """
+        since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            response = await self._client.get(
+                "/rest/tasks",
+                params={
+                    "filter": f"locationRelId[eq]:{location_id},createdAt[gt]:{since_iso}",
+                    "order_by": "createdAt[DescNullsLast]",
+                    "limit": limit,
+                },
+            )
+            response.raise_for_status()
+            return list(response.json().get("data", {}).get("tasks", []))
+        except httpx.HTTPError:
+            logger.exception("find_recent_tasks_by_location_id failed loc=%s", location_id)
+            return []
+
     async def create_person(self, telegram_id: int, name: str) -> TwentyPerson:
         """Создать контакт."""
         try:
@@ -664,6 +688,34 @@ class TwentyRestAdapter(TwentyCRMPort):
         payload = {"status": status}
         response = await self._client.patch(f"/rest/tasks/{task_id}", json=payload)
         response.raise_for_status()
+
+    async def get_task(self, task_id: str) -> dict[str, Any] | None:
+        try:
+            r = await self._client.get(f"/rest/tasks/{task_id}")
+            r.raise_for_status()
+            payload = r.json().get("data", {})
+            task = payload.get("task") or payload
+            return dict(task) if task else None
+        except httpx.HTTPError:
+            logger.exception("Twenty get_task failed: %s", task_id)
+            return None
+
+    async def update_task_script_check(
+        self, task_id: str, violations: int, missing: list[str]
+    ) -> None:
+        """Store the check_script result on a Task (Stage 7 fields)."""
+        payload = {
+            "scriptViolations": violations,
+            # Twenty stores it as TEXT — comma-separate the missing phrases
+            "scriptMissing": ",".join(missing) if missing else "",
+        }
+        r = await self._client.patch(f"/rest/tasks/{task_id}", json=payload)
+        if r.status_code >= 400:
+            logger.error(
+                "Twenty update_task_script_check failed: %s %s",
+                r.status_code, r.text[:300],
+            )
+            r.raise_for_status()
 
     async def update_conversation_status(self, task_id: int, status: str) -> None:
         """Обновить статус задачи (legacy stub)."""

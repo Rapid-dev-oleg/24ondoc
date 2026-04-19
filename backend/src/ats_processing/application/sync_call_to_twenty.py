@@ -17,11 +17,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any, Protocol
 
 from ats_processing.domain.models import CallRecord, CallStatus
 from twenty_integration.domain.ports import TwentyCRMPort
 
 logger = logging.getLogger(__name__)
+
+
+class _CheckScriptPort(Protocol):
+    async def check_script(self, dialogue_text: str) -> dict[str, Any]: ...
 
 
 _STATUS_MAP: dict[CallStatus, str] = {
@@ -43,8 +48,13 @@ class SyncResult:
 class SyncCallToTwentyUseCase:
     """Mirror a local CallRecord into Twenty. Idempotent by atsCallId."""
 
-    def __init__(self, twenty_port: TwentyCRMPort) -> None:
+    def __init__(
+        self,
+        twenty_port: TwentyCRMPort,
+        script_ai: _CheckScriptPort | None = None,
+    ) -> None:
         self._port = twenty_port
+        self._script_ai = script_ai
 
     async def execute(
         self,
@@ -128,8 +138,36 @@ class SyncCallToTwentyUseCase:
             except Exception:
                 logger.exception("Failed updating Twenty CallRecord %s", twenty_id)
 
+        # Script check on the first answered call for this task (Stage 7).
+        # We run it at most once per task: skipped if the task already has a
+        # scriptViolations value on record.
+        if (
+            task_id
+            and transcript
+            and record.status in {CallStatus.CREATED, CallStatus.PREVIEW, CallStatus.PROCESSING}
+            and self._script_ai is not None
+        ):
+            try:
+                await self._run_script_check(task_id, transcript)
+            except Exception:
+                logger.exception("check_script hook failed for task %s", task_id)
+
         return SyncResult(
             twenty_id=twenty_id,
             created=False,
             linked_task=bool(task_id),
         )
+
+    async def _run_script_check(self, task_id: str, transcript: str) -> None:
+        if self._script_ai is None:
+            return
+        existing = await self._port.get_task(task_id)
+        if existing is None:
+            return
+        if existing.get("scriptViolations") is not None:
+            return  # already checked on a prior call
+        result = await self._script_ai.check_script(transcript)
+        violations = int(result.get("violations_count") or 0)
+        missing_raw = result.get("missing") or []
+        missing = [str(m) for m in missing_raw if isinstance(m, str)]
+        await self._port.update_task_script_check(task_id, violations, missing)

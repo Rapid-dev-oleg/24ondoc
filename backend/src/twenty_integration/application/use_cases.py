@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from ai_classification.domain.repository import AIClassificationPort
 from telegram_ingestion.domain.models import DraftSession
+from twenty_integration.application.detect_repeat import DetectRepeat, RepeatResult
 from twenty_integration.domain.models import TwentyTask
 from twenty_integration.domain.ports import TwentyCRMPort
 
@@ -35,6 +36,10 @@ class CreateTwentyTaskFromSession:
     def __init__(self, port: TwentyCRMPort, ai_port: AIClassificationPort | None = None) -> None:
         self._port = port
         self._ai_port = ai_port
+        # Repeat detector composed here so we don't rewire callers; relies on
+        # the same TwentyCRMPort + AI adapter. No-op when location cannot be
+        # resolved.
+        self._detect_repeat = DetectRepeat(twenty_port=port, ai_port=ai_port)
 
     async def execute(
         self,
@@ -87,6 +92,18 @@ class CreateTwentyTaskFromSession:
             caller_phone, dialogue_text
         )
 
+        # Detect repeat obrashchenie BEFORE we create the task — so the
+        # Task is born with the correct povtornoeObrashchenie and
+        # parentTaskId, without an extra PATCH round-trip.
+        repeat = RepeatResult(False, None, "none", 0)
+        try:
+            repeat = await self._detect_repeat.execute(
+                location_id=str(location_rel_id) if location_rel_id else None,
+                new_dialogue=dialogue_text or "",
+            )
+        except Exception:
+            logger.exception("DetectRepeat failed; proceeding with is_repeat=False")
+
         task = await self._port.create_task(
             title=session.ai_result.title,
             body=session.ai_result.description,
@@ -96,10 +113,8 @@ class CreateTwentyTaskFromSession:
             vazhnost=vazhnost,
             klient_id=klient_id,
             location_rel_id=location_rel_id,
-            # Explicit False defeats Twenty's BOOLEAN default=true on this
-            # field. Detect-repeat may patch it to True later when
-            # integrated (stage 6 hook).
-            povtornoe_obrashchenie=False,
+            povtornoe_obrashchenie=repeat.is_repeat,
+            parent_task_id=repeat.parent_task_id,
         )
 
         # 4. Загрузить файлы в Twenty и прикрепить к задаче

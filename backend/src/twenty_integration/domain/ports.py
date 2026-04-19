@@ -92,6 +92,11 @@ class TwentyCRMPort(ABC):
     async def link_person_to_location(self, person_id: str, location_id: str) -> None: ...
 
     @abstractmethod
+    async def find_recent_tasks_by_location_id(
+        self, location_id: str, since: datetime, limit: int = 10
+    ) -> list[dict[str, object]]: ...
+
+    @abstractmethod
     async def find_call_record_by_ats_id(self, ats_call_id: str) -> dict[str, object] | None: ...
 
     @abstractmethod
@@ -135,3 +140,11 @@ class TwentyCRMPort(ABC):
 
     @abstractmethod
     async def update_task_body(self, task_id: str, body: str) -> None: ...
+
+    @abstractmethod
+    async def get_task(self, task_id: str) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def update_task_script_check(
+        self, task_id: str, violations: int, missing: list[str]
+    ) -> None: ...
