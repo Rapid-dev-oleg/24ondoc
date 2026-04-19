@@ -142,6 +142,8 @@ def compute_report(
         if tid not in tasks_by_id:
             continue  # task was deleted — ignore its leftover events
         t = tasks_by_id[tid]
+        if t.get("status") not in TERMINAL_STATUSES:
+            continue  # closed in window but reopened afterwards — not "done"
         owner = t.get("assigneeId") or None  # may be None if unassigned when closed
         completion_ts = _parse_iso(_event_ts(comp_event))
         if completion_ts is None:

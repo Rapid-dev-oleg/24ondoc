@@ -315,6 +315,39 @@ def test_atomic_save_falls_back_to_task_created_event() -> None:
     assert row.total_duration_seconds == 8 * 60 + 30
 
 
+def test_reopened_task_drops_out_of_completed() -> None:
+    """Task went TODO→VYPOLNENO (in window) and was later reverted to TODO.
+    Current status is non-terminal, so it must NOT appear as completed.
+    """
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    base = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+
+    tasks = ({
+        "id": "r", "createdAt": _iso(base),
+        "assigneeId": WM_VOVA, "status": "TODO",  # reverted back
+    },)
+    updated = (
+        _tu_event("r", base + timedelta(minutes=2),
+                  {"assigneeId": {"before": None, "after": WM_VOVA}}),
+        _tu_event("r", base + timedelta(minutes=5),
+                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+        _tu_event("r", base + timedelta(minutes=10),
+                  {"status": {"before": "VYPOLNENO", "after": "TODO"}}),
+    )
+    created = (_tc_event("r", base),)
+    data = TimelineData(updated, tasks, members_by_id={WM_VOVA: "V"},
+                        created_events=created)
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
+    row = next((r for r in dto.rows if r.user_id == WM_VOVA), None)
+    # Vova has no completed (task reverted), pending_count=1 instead
+    assert row is not None
+    assert row.completed == 0
+    assert row.pending_count == 1
+    assert dto.totals is not None
+    assert dto.totals.completed == 0
+
+
 def test_deleted_task_leaves_no_ghost_metrics() -> None:
     """Task deleted in UI → timelineActivity events remain, but /rest/tasks
     stops returning it. compute_report must ignore leftover events so the
