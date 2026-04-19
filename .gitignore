@@ -1,5 +1,6 @@
 .env
 .env.staging
+.claude/
 *.pyc
 __pycache__/
 .pytest_cache/
