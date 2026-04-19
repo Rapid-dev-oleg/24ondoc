@@ -63,6 +63,20 @@ async def test_rejects_wrong_secret() -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_secret_disables_auth() -> None:
+    """If TWENTY_WEBHOOK_SECRET is empty (not configured), the handler
+    accepts any request — matches the case where the operator created
+    the webhook in Twenty UI without setting a secret."""
+    write = _mock_write()
+    app = _app(write, secret="")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/webhook/twenty",
+                         json={"eventName": "task.created", "recordId": "task-xyz"})
+    assert r.status_code == 200
+    write.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_task_created_becomes_created_event() -> None:
     write = _mock_write()
     app = _app(write)

@@ -29,14 +29,25 @@ _ECHO_WINDOW = timedelta(seconds=5)
 
 
 class TwentyTaskEvent(BaseModel):
-    """Permissive schema — Twenty's payload shape varies between versions."""
+    """Permissive schema — Twenty's payload shape varies between versions.
 
-    eventType: str  # e.g. "task.created" | "task.updated" | "task.deleted"
-    recordId: str | None = None  # Twenty task ID
+    Twenty v0.30+ uses `eventName` (e.g. "task.created"); older/other
+    integrations may use `eventType`. We accept either. Similarly the
+    task id can appear as `recordId` or inside `record.id`.
+    """
+
+    model_config = {"extra": "allow"}
+
+    eventName: str | None = None
+    eventType: str | None = None
+    recordId: str | None = None
     objectMetadata: dict[str, Any] | None = None
     properties: dict[str, Any] | None = None
     record: dict[str, Any] | None = None
     updatedFields: list[str] | None = None
+
+    def event_key(self) -> str:
+        return self.eventName or self.eventType or ""
 
 
 def _extract_task_id(payload: TwentyTaskEvent) -> str | None:
@@ -86,11 +97,13 @@ async def twenty_webhook(
     payload: TwentyTaskEvent,
     x_twenty_secret: str | None = Header(default=None, alias="X-Twenty-Secret"),
 ) -> dict[str, str]:
-    expected: str | None = getattr(request.state, "twenty_webhook_secret", None)
-    if expected is None or x_twenty_secret != expected:
+    # If TWENTY_WEBHOOK_SECRET is set, require it. If it's empty, skip auth
+    # — Twenty's webhook config has no mandatory secret in our setup.
+    expected: str | None = getattr(request.state, "twenty_webhook_secret", None) or None
+    if expected is not None and x_twenty_secret != expected:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing X-Twenty-Secret header",
+            detail="Invalid X-Twenty-Secret header",
         )
 
     write_event: WriteTaskEvent | None = getattr(request.state, "write_task_event", None)
@@ -100,14 +113,15 @@ async def twenty_webhook(
             detail="WriteTaskEvent not available",
         )
 
+    event_key = payload.event_key()
     twenty_task_id = _extract_task_id(payload)
     if not twenty_task_id:
-        logger.warning("twenty_webhook payload without task id: %s", payload.eventType)
+        logger.warning("twenty_webhook payload without task id: %s", event_key)
         return {"status": "ignored"}
 
-    action = _map_action(payload.eventType, payload.updatedFields)
+    action = _map_action(event_key, payload.updatedFields)
     if action is None:
-        logger.info("twenty_webhook ignoring eventType=%s", payload.eventType)
+        logger.info("twenty_webhook ignoring event=%s", event_key)
         return {"status": "ignored"}
 
     if await _is_recent_echo(write_event, twenty_task_id, action):
@@ -128,6 +142,6 @@ async def twenty_webhook(
         actor_name="Twenty UI",
         priority=str(priority) if priority else None,
         source=Source.WEBHOOK,
-        meta={"eventType": payload.eventType, "updatedFields": payload.updatedFields},
+        meta={"eventName": event_key, "updatedFields": payload.updatedFields},
     )
     return {"status": "ok"}
