@@ -132,8 +132,17 @@ def compute_report(
             bucket.completed_durations.append(duration)
             if t.get("vazhnost") in HIGH_PRIORITY:
                 bucket.complex_durations.append(duration)
-        # Note: completed count = len(completed_durations) when duration resolved;
-        # if duration is None we still count the completion below in a sep counter.
+
+    # --- walk tasks created in window (for repeats + script violations) ---
+    # M6/M7 are about the intake side of the period (what came in + quality
+    # of the first call), NOT the closure side, so we iterate created-in-
+    # window independent of completion status.
+    for t in data.tasks:
+        created_ts = _parse_iso(t.get("createdAt"))
+        if created_ts is None or not (from_ts <= created_ts <= to_ts):
+            continue
+        owner = t.get("assigneeId") or None
+        bucket = acc[owner]
         if t.get("povtornoeObrashchenie"):
             bucket.repeats += 1
         bucket.script_violations += int(t.get("scriptViolations") or 0)
