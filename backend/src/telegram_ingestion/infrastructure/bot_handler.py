@@ -1108,7 +1108,23 @@ def create_tasks_router(
     user_port: UserProfilePort,
 ) -> Router:
     """Создаёт роутер для /my_tasks flow."""
+    from ..domain.models import UserRole
+
     router = Router(name="tasks")
+
+    async def _ensure_admin(callback: CallbackQuery) -> bool:
+        if callback.from_user is None:
+            await callback.answer()
+            return False
+        profile = await user_port.get_profile(callback.from_user.id)
+        if profile is None or profile.role != UserRole.ADMIN:
+            await callback.answer(
+                "🔒 Действие доступно только администратору. "
+                "Работа с задачами ведётся в Twenty CRM.",
+                show_alert=True,
+            )
+            return False
+        return True
 
     @router.message(Command("my_tasks"))
     async def cmd_my_tasks(message: Message, state: FSMContext) -> None:
@@ -1190,8 +1206,7 @@ def create_tasks_router(
 
     @router.callback_query(F.data == "task_resolve")
     async def callback_task_resolve(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
+        if not await _ensure_admin(callback):
             return
         data = await state.get_data()
         task_id = data.get("current_task_id")
@@ -1213,8 +1228,7 @@ def create_tasks_router(
 
     @router.callback_query(F.data == "task_reopen")
     async def callback_task_reopen(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
+        if not await _ensure_admin(callback):
             return
         data = await state.get_data()
         task_id = data.get("current_task_id")
@@ -1236,8 +1250,7 @@ def create_tasks_router(
 
     @router.callback_query(F.data.startswith("task_reassign_list:"))
     async def callback_reassign_list(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
+        if not await _ensure_admin(callback):
             return
         task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
         agents = await user_port.list_active_agents()
@@ -1251,8 +1264,7 @@ def create_tasks_router(
 
     @router.callback_query(F.data.startswith("reassign_to:"))
     async def callback_reassign_to(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
+        if not await _ensure_admin(callback):
             return
         parts = callback.data.split(":")  # type: ignore[union-attr]
         task_id = int(parts[1])
@@ -1272,8 +1284,7 @@ def create_tasks_router(
 
     @router.callback_query(F.data.startswith("task_comment:"))
     async def callback_task_comment(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
+        if not await _ensure_admin(callback):
             return
         task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
         await state.set_state(TelegramFSMStates.adding_comment)
