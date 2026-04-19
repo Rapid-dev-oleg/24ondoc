@@ -150,12 +150,12 @@ async def test_relation_fields_carry_target_object_id() -> None:
     rel_calls = [c for c in adapter.create_field_calls if c["type"] == "RELATION"]
     assert rel_calls, "expected some relation fields to be created"
     for call in rel_calls:
-        settings = call.get("settings")
-        assert settings is not None, f"relation {call['name']} missing settings"
-        assert settings["targetObjectMetadataId"], (
+        rel = call.get("relationCreationPayload")
+        assert rel is not None, f"relation {call['name']} missing relationCreationPayload"
+        assert rel["targetObjectMetadataId"], (
             f"relation {call['name']} has empty target id"
         )
-        assert settings["relationType"] in ("MANY_TO_ONE", "ONE_TO_MANY")
+        assert rel["type"] in ("MANY_TO_ONE", "ONE_TO_MANY")
 
 
 @pytest.mark.asyncio
@@ -168,8 +168,10 @@ async def test_select_fields_include_options() -> None:
     assert select_calls
     for call in select_calls:
         assert call.get("options"), f"SELECT field {call['name']} missing options"
-        for opt in call["options"]:
+        for idx, opt in enumerate(call["options"]):
             assert "label" in opt and "value" in opt
+            assert "id" in opt, f"SELECT option missing id in {call['name']}"
+            assert opt["position"] == idx
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -42,6 +43,10 @@ class FieldSpec:
     options: tuple[dict[str, str], ...] = ()
     relation_target: str | None = None
     relation_type: Literal["MANY_TO_ONE", "ONE_TO_MANY"] = "MANY_TO_ONE"
+    # For RELATION fields — label/icon of the auto-generated reverse field
+    # on the target object. Must be unique among fields of the target.
+    reverse_label: str = ""
+    reverse_icon: str = "IconLink"
 
 
 @dataclass(frozen=True)
@@ -70,7 +75,8 @@ LOCATION = ObjectSpec(
         FieldSpec("phone", "Телефон", "TEXT", is_nullable=False),
         FieldSpec("prefix", "Бренд", "TEXT", description="Апполо / Аспект / другой"),
         FieldSpec("number", "Номер точки", "TEXT"),
-        FieldSpec("address", "Адрес", "TEXT"),
+        # NOTE: `address` conflicts with Twenty's built-in ADDRESS composite.
+        FieldSpec("locationAddress", "Адрес", "TEXT"),
     ),
 )
 
@@ -168,20 +174,39 @@ PERSON_EXTRA_FIELDS: tuple[FieldSpec, ...] = (
 )
 
 # Relation specs — added AFTER both target & source objects are present.
+# IMPORTANT: declare each relation from ONE side only; Twenty auto-generates
+# the reverse field on the target. `reverse_label` must be unique per target.
 TASK_RELATIONS: tuple[FieldSpec, ...] = (
-    FieldSpec("locationRel", "Точка", "RELATION", relation_target="location"),
-    FieldSpec("callRecordRel", "Звонок", "RELATION", relation_target="callRecord"),
+    FieldSpec(
+        "locationRel", "Точка", "RELATION",
+        relation_target="location", reverse_label="Задачи точки",
+    ),
 )
 PERSON_RELATIONS: tuple[FieldSpec, ...] = (
-    FieldSpec("locationRel", "Точка", "RELATION", relation_target="location"),
+    FieldSpec(
+        "locationRel", "Точка", "RELATION",
+        relation_target="location", reverse_label="Контакты точки",
+    ),
 )
 TASKLOG_RELATIONS: tuple[FieldSpec, ...] = (
-    FieldSpec("taskRel", "Задача", "RELATION", relation_target="task"),
+    FieldSpec(
+        "taskRel", "Задача", "RELATION",
+        relation_target="task", reverse_label="События задачи",
+    ),
 )
 CALLRECORD_RELATIONS: tuple[FieldSpec, ...] = (
-    FieldSpec("personRel", "Контакт", "RELATION", relation_target="person"),
-    FieldSpec("locationRel", "Точка", "RELATION", relation_target="location"),
-    FieldSpec("taskRel", "Задача", "RELATION", relation_target="task"),
+    FieldSpec(
+        "personRel", "Контакт", "RELATION",
+        relation_target="person", reverse_label="Звонки контакта",
+    ),
+    FieldSpec(
+        "locationRel", "Точка", "RELATION",
+        relation_target="location", reverse_label="Звонки точки",
+    ),
+    FieldSpec(
+        "taskRel", "Задача", "RELATION",
+        relation_target="task", reverse_label="Звонки задачи",
+    ),
 )
 
 
@@ -210,16 +235,25 @@ def _field_spec_to_payload(spec: FieldSpec, object_id: str, objects_by_name: dic
     if spec.description:
         payload["description"] = spec.description
     if spec.type == "SELECT" and spec.options:
-        payload["options"] = list(spec.options)
+        # Twenty requires each option to carry an `id` (UUID) and `position`.
+        payload["options"] = [
+            {**opt, "id": str(uuid.uuid4()), "position": idx}
+            for idx, opt in enumerate(spec.options)
+        ]
     if spec.type == "RELATION":
         if spec.relation_target is None:
             raise ValueError(f"RELATION field {spec.name!r} needs relation_target")
         target_id = objects_by_name.get(spec.relation_target)
         if target_id is None:
             raise ValueError(f"Unknown relation target object {spec.relation_target!r}")
-        payload["settings"] = {
-            "relationType": spec.relation_type,
+        payload["relationCreationPayload"] = {
+            "type": spec.relation_type,
             "targetObjectMetadataId": target_id,
+            # Twenty requires both label and icon for the reverse relation field.
+            # We require reverse_label to be explicit so it doesn't collide with
+            # other reverse relations already attached to the target object.
+            "targetFieldLabel": spec.reverse_label or f"{spec.label} ↔",
+            "targetFieldIcon": spec.reverse_icon,
         }
     return payload
 

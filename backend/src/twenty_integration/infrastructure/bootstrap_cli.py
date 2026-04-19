@@ -6,8 +6,8 @@ import logging
 import os
 import sys
 
-from src.twenty_integration.infrastructure.bootstrap import ensure_twenty_schema
-from src.twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
+from twenty_integration.infrastructure.bootstrap import ensure_twenty_schema
+from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
 
 
 async def _main() -> int:
