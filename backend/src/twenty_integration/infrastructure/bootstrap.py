@@ -169,8 +169,6 @@ TASK_EXTRA_FIELDS: tuple[FieldSpec, ...] = (
               description="Ссылка на задачу, повтором которой является эта."),
     FieldSpec("scriptViolations", "Нарушений скрипта", "NUMBER"),
     FieldSpec("scriptMissing", "Отсутствующие фразы", "TEXT"),
-    FieldSpec("assignedAt", "Время назначения", "DATE_TIME"),
-    FieldSpec("completedAt", "Время завершения", "DATE_TIME"),
 )
 
 PERSON_EXTRA_FIELDS: tuple[FieldSpec, ...] = (

@@ -68,12 +68,19 @@ def test_single_completion_with_reassignment() -> None:
     assert rows[WM_VOVA].display_name == "Вова Петров"
 
 
-def test_completion_without_reassignment_uses_creation_time() -> None:
+def test_completion_without_assignment_event_falls_back_to_created_at() -> None:
+    """No assignment event in timeline → use task.createdAt as start.
+
+    Call-sourced tasks get their assignee in the same INSERT that creates
+    the task, so createdAt == effective assignment time. No fallback for
+    completion, though — tasks without a status→VYPOLNENO event are
+    excluded entirely (that was the 1500h bug).
+    """
     from_ts = datetime(2026, 4, 1, tzinfo=UTC)
     to_ts = datetime(2026, 4, 30, tzinfo=UTC)
 
     t_created = datetime(2026, 4, 5, 9, 0, tzinfo=UTC)
-    t_completed = datetime(2026, 4, 5, 10, 30, tzinfo=UTC)  # 90m after creation
+    t_completed = datetime(2026, 4, 5, 10, 30, tzinfo=UTC)  # 90m later
 
     tasks = ({
         "id": "t2", "createdAt": _iso(t_created),
@@ -87,9 +94,36 @@ def test_completion_without_reassignment_uses_creation_time() -> None:
 
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
     row = next(r for r in dto.rows if r.user_id == WM_NADYA)
+    assert row.completed == 1
     assert row.total_duration_seconds == 90 * 60
-    assert row.complex_count == 1  # vazhnost=VYSOKAYA
+    assert row.complex_count == 1
     assert row.script_violations == 2
+
+
+def test_completion_without_status_event_excluded() -> None:
+    """Task in VYPOLNENO state but timeline has NO status→VYPOLNENO event → skip.
+
+    Covers legacy tasks where the status was written directly to DB without
+    emitting a timelineActivity. Inflated durations come from pretending we
+    closed such tasks "just now" — refuse to guess.
+    """
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+
+    t_created = datetime(2026, 4, 5, 9, 0, tzinfo=UTC)
+    tasks = ({
+        "id": "t3", "createdAt": _iso(t_created),
+        "assigneeId": WM_NADYA, "status": "VYPOLNENO",
+    },)
+    # Only an assignment event, NO status transition.
+    events = (
+        _tu_event("t3", t_created + timedelta(minutes=10),
+                  {"assigneeId": {"before": None, "after": WM_NADYA}}),
+    )
+    data = TimelineData(events, tasks, members_by_id={WM_NADYA: "Надя"})
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    assert dto.totals is not None
+    assert dto.totals.completed == 0
 
 
 def test_totals_are_weighted_not_mean_of_means() -> None:
@@ -97,9 +131,8 @@ def test_totals_are_weighted_not_mean_of_means() -> None:
     to_ts = datetime(2026, 4, 30, tzinfo=UTC)
     base = datetime(2026, 4, 10, 9, 0, tzinfo=UTC)
 
-    # Vova: 1 task × 60s
-    # Nadya: 3 tasks × 1200s each → total 3600s
-    # mean-of-row-means = (60 + 1200) / 2 = 630; weighted avg = (60 + 3*1200) / 4 = 915
+    # Each task: createdAt at `base` (used as start), completion N seconds later.
+    # Vova: 1 task × 60s; Nadya: 3 × 1200s → total 3660s; weighted avg = 915.
     tasks = (
         {"id": "v", "createdAt": _iso(base), "assigneeId": WM_VOVA, "status": "VYPOLNENO"},
         {"id": "n1", "createdAt": _iso(base), "assigneeId": WM_NADYA, "status": "VYPOLNENO"},

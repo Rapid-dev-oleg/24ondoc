@@ -81,9 +81,12 @@ def compute_report(
                     first_assignment_event[tid] = e
 
     # For each completed-in-window task, find `received_at(tid)`:
-    # the happensAt of the LAST event before completion where
-    # diff.assigneeId.after == owner. Owner = current task.assigneeId
-    # (post-closure reassignments are vanishingly rare).
+    # the happensAt of the LAST assignment event before completion
+    # where diff.assigneeId.after == owner. If no such event exists
+    # in the timeline, fall back to task.createdAt — for call-sourced
+    # tasks the assignee is set in the same INSERT as the task, so
+    # createdAt == assignment time. (Completion has no such fallback
+    # — tasks without a status→VYPOLNENO event are dropped entirely.)
     def _received_at(tid: str, owner: str, completion_ts: datetime) -> datetime | None:
         last: datetime | None = None
         for e in events_per_task.get(tid, []):
@@ -96,9 +99,7 @@ def compute_report(
                 continue
             last = ts  # events are ascending → last wins
         if last is None:
-            # No reassignment event → assume assigned at creation
-            created = _parse_iso(tasks_by_id.get(tid, {}).get("createdAt"))
-            last = created
+            last = _parse_iso(tasks_by_id.get(tid, {}).get("createdAt"))
         return last
 
     # Per-owner accumulation.
@@ -120,12 +121,14 @@ def compute_report(
         completion_ts = _parse_iso(_event_ts(comp_event))
         if completion_ts is None:
             continue
-        received_ts = _received_at(tid, owner, completion_ts) if owner else _parse_iso(t.get("createdAt"))
-        duration: float | None = None
-        if received_ts is not None:
-            duration = (completion_ts - received_ts).total_seconds()
-            if duration < 0:
-                duration = None
+        if owner is None:
+            continue  # unassigned completed task — skip from per-operator metrics
+        received_ts = _received_at(tid, owner, completion_ts)
+        if received_ts is None:
+            continue  # no assignment event AND no createdAt — can't compute start
+        duration: float | None = (completion_ts - received_ts).total_seconds()
+        if duration < 0:
+            duration = None
 
         bucket = acc[owner]
         if duration is not None:
