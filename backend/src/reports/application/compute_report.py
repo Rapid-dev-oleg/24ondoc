@@ -203,12 +203,10 @@ def compute_report(
     # Filter rows by scope
     if scope in (ReportScope.SELF, ReportScope.EMPLOYEE) and user_id:
         rows = [r for r in rows if r.user_id == user_id]
-    else:
-        # Overall view: hide the "— не назначено" bucket — it's noise that
-        # only contains unassigned intake (pending_count / script_violations
-        # from tasks never picked up). Totals footer still includes them.
-        rows = [r for r in rows if r.user_id is not None]
-    rows.sort(key=lambda r: r.completed, reverse=True)
+    # Overall view: sort by completed desc, but pin the "— не назначено"
+    # bucket to the top so its intake (pending + script violations)
+    # is immediately visible.
+    rows.sort(key=lambda r: (r.user_id is not None, -r.completed))
 
     # --- totals row (weighted, not mean-of-means) ---
     all_durs: list[float] = []
