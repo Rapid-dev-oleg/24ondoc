@@ -410,3 +410,93 @@ async def _check_repeat_status_impl(
 
 # Bolt the function onto the adapter class
 OpenRouterAdapter.check_repeat_status = _check_repeat_status_impl  # type: ignore[attr-defined]
+
+
+SCRIPT_PHRASES = (
+    ("greeting", "Приветствие: «Здравствуйте, чем я вам могу помочь»"),
+    ("ask_time", "Запрос времени: «Мне надо время на работу, я вам сообщу как всё будет готово»"),
+    ("fixed", "Подтверждение решения: «Ошибка исправлена, можете работать»"),
+    ("any_more_questions", "Вопрос клиенту: «У вас есть ещё вопросы?»"),
+    ("farewell", "Прощание: «До свидания»"),
+)
+
+CHECK_SCRIPT_PROMPT = """\
+Ты — контролёр соблюдения скрипта разговора в техподдержке 24ondoc.
+Проверь, содержит ли реплика оператора все 5 обязательных фраз:
+
+{phrases}
+
+Правила:
+- Проверяй только реплики ОПЕРАТОРА (строки, начинающиеся с "[Оператор]" или похоже). \
+Реплики клиента игнорируй.
+- Сравнение СЕМАНТИЧЕСКОЕ. Допустим перефраз («добрый день» засчитывается как приветствие).
+- Whisper может искажать слова — если по смыслу подходит, засчитываем.
+
+Верни JSON с массивом отсутствующих фраз (идентификаторы из списка) и счётчиком:
+{{"missing": ["greeting", ...], "violations_count": <int>}}
+
+Если все пять есть, missing — пустой массив. Отвечай ТОЛЬКО JSON-объектом."""
+
+
+async def _check_script_impl(
+    self: "OpenRouterAdapter",
+    dialogue: str,
+) -> dict[str, object]:
+    """Return {"missing": [id], "violations_count": int}.
+
+    `missing` uses the ids from SCRIPT_PHRASES (greeting, ask_time, fixed,
+    any_more_questions, farewell). On total failure returns {"missing": [],
+    "violations_count": 0} — we don't want script-check outages to break task
+    creation.
+    """
+    if not dialogue.strip():
+        all_ids = [k for k, _ in SCRIPT_PHRASES]
+        return {"missing": all_ids, "violations_count": len(all_ids)}
+
+    phrases_text = "\n".join(f"- {pid}: {label}" for pid, label in SCRIPT_PHRASES)
+    system = CHECK_SCRIPT_PROMPT.format(phrases=phrases_text)
+    valid_ids = {k for k, _ in SCRIPT_PHRASES}
+
+    for model in (self._primary_model, self._fallback_model):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self._BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": dialogue},
+                        ],
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            if not content:
+                raise ValueError(f"Empty content from model {model}")
+            text_to_parse = content.strip()
+            if text_to_parse.startswith("```"):
+                text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(text_to_parse)
+            raw_missing = parsed.get("missing") or []
+            missing = [m for m in (str(x) for x in raw_missing) if m in valid_ids]
+            count = parsed.get("violations_count")
+            violations = int(count) if isinstance(count, int) else len(missing)
+            logger.info(
+                "check_script OK (model=%s): missing=%s violations=%d",
+                model, missing, violations,
+            )
+            return {"missing": missing, "violations_count": violations}
+        except Exception:
+            logger.warning("check_script failed with model=%s", model, exc_info=True)
+    logger.error("check_script: all models failed, returning empty")
+    return {"missing": [], "violations_count": 0}
+
+
+OpenRouterAdapter.check_script = _check_script_impl  # type: ignore[attr-defined]
