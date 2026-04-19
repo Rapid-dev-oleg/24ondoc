@@ -315,6 +315,40 @@ def test_atomic_save_falls_back_to_task_created_event() -> None:
     assert row.total_duration_seconds == 8 * 60 + 30
 
 
+def test_duration_uses_latest_completion_not_first() -> None:
+    """Task closed → reopened → closed again (in window). Duration must use
+    the LAST VYPOLNENO event, not the first — the first one was reverted
+    and doesn't represent real completion.
+    """
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    base = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+
+    tasks = ({
+        "id": "rc", "createdAt": _iso(base),
+        "assigneeId": WM_VOVA, "status": "VYPOLNENO",
+    },)
+    updated = (
+        _tu_event("rc", base + timedelta(minutes=1),
+                  {"assigneeId": {"before": None, "after": WM_VOVA}}),
+        _tu_event("rc", base + timedelta(minutes=5),
+                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+        _tu_event("rc", base + timedelta(minutes=10),
+                  {"status": {"before": "VYPOLNENO", "after": "TODO"}}),
+        _tu_event("rc", base + timedelta(minutes=30),
+                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+    )
+    created = (_tc_event("rc", base),)
+    data = TimelineData(updated, tasks, members_by_id={WM_VOVA: "V"},
+                        created_events=created)
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
+    row = next(r for r in dto.rows if r.user_id == WM_VOVA)
+    # Duration = last VYPOLNENO (t+30m) − assignment (t+1m) = 29 min.
+    # NOT 4 min (the first VYPOLNENO that got reverted).
+    assert row.completed == 1
+    assert row.total_duration_seconds == 29 * 60
+
+
 def test_reopened_task_drops_out_of_completed() -> None:
     """Task went TODO→VYPOLNENO (in window) and was later reverted to TODO.
     Current status is non-terminal, so it must NOT appear as completed.

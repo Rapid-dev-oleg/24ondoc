@@ -85,7 +85,13 @@ def compute_report(
             ts = _parse_iso(_event_ts(e))
             if st and st.get("after") in TERMINAL_STATUSES and \
                     st.get("before") not in TERMINAL_STATUSES:
-                if ts and from_ts <= ts <= to_ts and tid not in completion_in_window:
+                # Take the LAST in-window terminal transition, not the first:
+                # tasks that were closed → reopened → closed again must count
+                # from the final closure, otherwise duration reflects a stale
+                # first attempt. Events are sorted ascending so simple overwrite
+                # wins. M8 uses first_assignment_event, not this map, so it's
+                # unaffected.
+                if ts and from_ts <= ts <= to_ts:
                     completion_in_window[tid] = e
             if asg and asg.get("after") and not asg.get("before"):
                 if tid not in first_assignment_event:
