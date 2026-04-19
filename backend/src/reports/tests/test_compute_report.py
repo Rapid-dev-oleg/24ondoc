@@ -281,3 +281,27 @@ def test_response_time_task_without_created_event_skipped() -> None:
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
     row = next(r for r in dto.rows if r.user_id == WM_VOVA)
     assert row.avg_response_time_seconds is None
+
+
+def test_deleted_task_leaves_no_ghost_metrics() -> None:
+    """Task deleted in UI → timelineActivity events remain, but /rest/tasks
+    stops returning it. compute_report must ignore leftover events so the
+    operator doesn't show "0 completed but avg_response_time = 1h32m".
+    """
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    base = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+
+    # tasks list is EMPTY (ghost task was deleted)
+    tasks: tuple[dict, ...] = ()
+    updated = (
+        _tu_event("ghost", base, {"assigneeId": {"before": None, "after": WM_VOVA}}),
+        _tu_event("ghost", base + timedelta(hours=2),
+                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+    )
+    created = (_tc_event("ghost", base - timedelta(minutes=5)),)
+    data = TimelineData(updated, tasks, members_by_id={WM_VOVA: "V"},
+                        created_events=created)
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
+    # No row for WM_VOVA at all (no pending / no completion / no response)
+    assert not any(r.user_id == WM_VOVA for r in dto.rows)

@@ -126,7 +126,9 @@ def compute_report(
 
     # --- walk completed tasks ---
     for tid, comp_event in completion_in_window.items():
-        t = tasks_by_id.get(tid) or {}
+        if tid not in tasks_by_id:
+            continue  # task was deleted — ignore its leftover events
+        t = tasks_by_id[tid]
         owner = t.get("assigneeId") or None  # may be None if unassigned when closed
         completion_ts = _parse_iso(_event_ts(comp_event))
         if completion_ts is None:
@@ -164,8 +166,12 @@ def compute_report(
     # Uses task.created timeline ts (real Twenty INSERT moment), not the
     # backfilled task.createdAt column. Tasks with no task.created event
     # in timeline are skipped entirely — we can't compute a meaningful
-    # response time without a trustworthy "task appeared" anchor.
+    # response time without a trustworthy "task appeared" anchor. Tasks
+    # that no longer exist (deleted in UI) are also skipped so the metric
+    # doesn't linger on ghost rows after cleanup.
     for tid, e in first_assignment_event.items():
+        if tid not in tasks_by_id:
+            continue
         ts = _parse_iso(_event_ts(e))
         if ts is None or not (from_ts <= ts <= to_ts):
             continue
