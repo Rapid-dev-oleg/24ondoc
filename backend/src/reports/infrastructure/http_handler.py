@@ -238,21 +238,27 @@ async function loadMembers() {{
 
 function renderTable(dto) {{
   const cols = [
-    ['Сотрудник', r => r.display_name],
-    ['Завершил',  r => fmtInt(r.completed)],
-    ['Общее время', r => fmtDuration(r.total_duration_seconds)],
-    ['Среднее',   r => fmtDuration(r.avg_duration_seconds)],
-    ['Сложных',   r => fmtInt(r.complex_count)],
-    ['Ср.сложн',  r => fmtDuration(r.avg_complex_duration_seconds)],
-    ['Повторных', r => fmtInt(r.repeats_count)],
-    ['Нарушений', r => fmtInt(r.script_violations)],
-    ['Активных',  r => fmtInt(r.pending_count)],
-    ['Ср.реаг.',  r => fmtDuration(r.avg_response_time_seconds)],
+    ['Сотрудник', r => r.display_name,                            'name'],
+    ['Завершил',  r => fmtInt(r.completed),                       'other'],
+    ['Общее время', r => fmtDuration(r.total_duration_seconds),   'other'],
+    ['Среднее',   r => fmtDuration(r.avg_duration_seconds),       'other'],
+    ['Сложных',   r => fmtInt(r.complex_count),                   'other'],
+    ['Ср.сложн',  r => fmtDuration(r.avg_complex_duration_seconds), 'other'],
+    ['Повторных', r => fmtInt(r.repeats_count),                   'other'],
+    ['Нарушений', r => fmtInt(r.script_violations),               'other'],
+    ['Активных',  r => fmtInt(r.pending_count),                   'pending'],
+    ['Ср.реаг.',  r => fmtDuration(r.avg_response_time_seconds),  'other'],
   ];
   const thead = '<tr>' + cols.map(c => '<th>' + c[0] + '</th>').join('') + '</tr>';
-  const body = (dto.rows || []).map(r =>
-    '<tr>' + cols.map(c => '<td>' + (c[1](r) ?? '—') + '</td>').join('') + '</tr>'
-  ).join('');
+  const body = (dto.rows || []).map(r => {{
+    // For the "— не назначено" bucket only the pending_count makes sense;
+    // everything else is zero by definition (never assigned → never completed).
+    const unassigned = r.user_id === null;
+    return '<tr>' + cols.map(c => {{
+      const v = unassigned && c[2] === 'other' ? '—' : (c[1](r) ?? '—');
+      return '<td>' + v + '</td>';
+    }}).join('') + '</tr>';
+  }}).join('');
   const foot = (dto.totals && dto.scope !== 'employee') ? (
     '<tr>' + cols.map(c => '<td>' + (c[1](dto.totals) ?? '—') + '</td>').join('') + '</tr>'
   ) : '';
