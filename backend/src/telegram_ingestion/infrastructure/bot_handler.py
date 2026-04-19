@@ -530,6 +530,20 @@ def create_router(
                 vazhnost=data.get("twenty_vazhnost"),
             )
 
+            # If this draft came from an ATS2 call, remember the Twenty Task
+            # id on the call record so CallRecord.taskRelId can be filled
+            # later (live sync + backfill both read this column).
+            if call_repo is not None and task.twenty_id:
+                try:
+                    await call_repo.set_twenty_task_by_session(
+                        fetched.session_id, task.twenty_id
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to link call to twenty_task_id=%s session=%s",
+                        task.twenty_id, fetched.session_id, exc_info=True,
+                    )
+
             await cancel_session.execute(callback.from_user.id)
             await state.clear()
             await callback.answer("✅ Задача создана в CRM!")
