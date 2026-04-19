@@ -22,22 +22,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # asyncpg rejects multiple statements in one prepared statement, so
+    # each DDL must be dispatched separately.
     op.execute(
-        """
-        ALTER TABLE ats_call_records
-            ADD COLUMN IF NOT EXISTS twenty_task_id TEXT;
-
-        CREATE INDEX IF NOT EXISTS idx_ats_call_records_twenty_task_id
-            ON ats_call_records(twenty_task_id)
-            WHERE twenty_task_id IS NOT NULL;
-        """
+        "ALTER TABLE ats_call_records ADD COLUMN IF NOT EXISTS twenty_task_id TEXT"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ats_call_records_twenty_task_id "
+        "ON ats_call_records(twenty_task_id) WHERE twenty_task_id IS NOT NULL"
     )
 
 
 def downgrade() -> None:
-    op.execute(
-        """
-        DROP INDEX IF EXISTS idx_ats_call_records_twenty_task_id;
-        ALTER TABLE ats_call_records DROP COLUMN IF EXISTS twenty_task_id;
-        """
-    )
+    op.execute("DROP INDEX IF EXISTS idx_ats_call_records_twenty_task_id")
+    op.execute("ALTER TABLE ats_call_records DROP COLUMN IF EXISTS twenty_task_id")
