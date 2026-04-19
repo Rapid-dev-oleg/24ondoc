@@ -515,8 +515,14 @@ class TwentyRestAdapter(TwentyCRMPort):
             if vazhnost is not None:
                 payload["vazhnost"] = vazhnost
 
-            if klient_id is not None:
-                payload["klientId"] = klient_id
+            # NOTE: `klient`/`klientId` is NOT a real field on Task in this
+            # Twenty workspace — the plan mentioned it but metadata shows it
+            # was never created. Task↔Person relation goes through Location
+            # (Task.locationRelId → Location ← Person.locationRel) and via
+            # CallRecord (CallRecord.taskRel + CallRecord.personRel).
+            # Sending klientId here produces a 400 "Object task doesn't have
+            # any \"klientId\" field" from Twenty.
+            _ = klient_id  # accepted by signature but intentionally dropped
 
             if location_rel_id is not None:
                 payload["locationRelId"] = location_rel_id
