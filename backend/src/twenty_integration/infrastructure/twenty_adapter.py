@@ -232,6 +232,46 @@ class TwentyRestAdapter(TwentyCRMPort):
             )
             response.raise_for_status()
 
+    async def create_task_log(
+        self,
+        task_id: str,
+        action: str,
+        actor_type: str,
+        *,
+        actor_id: str | None = None,
+        actor_name: str | None = None,
+        details: str | None = None,
+        meta: dict[str, Any] | None = None,
+        occurred_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Создать TaskLog запись в Twenty — зеркало задачного события."""
+        payload: dict[str, Any] = {
+            "action": action,
+            "actorType": actor_type,
+            "taskRelId": task_id,
+            "occurredAt": (occurred_at or datetime.utcnow()).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        if actor_id:
+            payload["actorId"] = actor_id
+        if actor_name:
+            payload["actorName"] = actor_name
+        if details:
+            payload["details"] = {"markdown": details}
+        if meta:
+            import json as _json
+            payload["meta"] = {"markdown": _json.dumps(meta, ensure_ascii=False)}
+
+        response = await self._client.post("/rest/taskLogs", json=payload)
+        if response.status_code >= 400:
+            logger.error(
+                "Twenty create_task_log failed: %s %s",
+                response.status_code,
+                response.text[:300],
+            )
+        response.raise_for_status()
+        data = response.json().get("data", {})
+        return dict(data.get("createTaskLog", data))
+
     async def find_call_record_by_ats_id(self, ats_call_id: str) -> dict[str, Any] | None:
         """Найти Twenty CallRecord по внешнему ATS ID (для upsert)."""
         if not ats_call_id:
