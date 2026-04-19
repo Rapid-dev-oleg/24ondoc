@@ -115,6 +115,10 @@ async def report_page() -> HTMLResponse:
         # allow embedding from anywhere (Twenty Dashboard iframe)
         "Content-Security-Policy": "frame-ancestors *",
         "X-Frame-Options": "ALLOWALL",
+        # don't cache the shell — iframes otherwise keep serving the
+        # previous build until the tab is hard-reloaded
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
     })
 
 
