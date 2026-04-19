@@ -60,7 +60,14 @@ def _scope_keyboard(agents: list[Any], page: int, total: int) -> InlineKeyboardM
     ]
     start = page * _PAGE_SIZE
     for a in agents[start:start + _PAGE_SIZE]:
-        label = (getattr(a, "full_name", None) or str(getattr(a, "telegram_id", "?")))[:40]
+        # Prefer display_name resolved from Twenty workspaceMembers,
+        # fall back to any full_name the profile might carry, then
+        # telegram_id as a last resort (so there's always _something_).
+        label = (
+            getattr(a, "display_name", None)
+            or getattr(a, "full_name", None)
+            or str(getattr(a, "telegram_id", "?"))
+        )[:40]
         buttons.append([
             InlineKeyboardButton(
                 text=f"👤 {label}", callback_data=f"rp_scope:user:{a.telegram_id}"
@@ -133,18 +140,25 @@ def create_reports_router(
         await state.clear()
         if is_admin_fn(profile):
             agents = await user_port.list_active_agents()
+            # Resolve Twenty workspaceMember names so buttons show "Надя Петрова"
+            # instead of the telegram id (UserProfile has no full_name).
+            try:
+                wmid_to_name = await generate_report.list_members()
+            except Exception:
+                wmid_to_name = {}
+            proxies: list[_AgentProxy] = []
+            for a in agents:
+                wmid = getattr(a, "twenty_member_id", None)
+                proxies.append(_AgentProxy(
+                    telegram_id=a.telegram_id,
+                    twenty_member_id=wmid,
+                    display_name=(wmid and wmid_to_name.get(wmid)) or None,
+                ))
             await state.set_state(ReportsStates.choosing_scope)
-            await state.update_data(agents=[
-                {
-                    "telegram_id": a.telegram_id,
-                    "full_name": getattr(a, "full_name", None),
-                    "twenty_member_id": getattr(a, "twenty_member_id", None),
-                }
-                for a in agents
-            ])
+            await state.update_data(agents=[p.__dict__ for p in proxies])
             await message.answer(
                 "📊 Выберите, по кому сформировать отчёт:",
-                reply_markup=_scope_keyboard(agents, page=0, total=len(agents)),
+                reply_markup=_scope_keyboard(proxies, page=0, total=len(proxies)),
             )
             return
         # AGENT — straight to period picker, scope = SELF
@@ -256,14 +270,21 @@ def create_reports_router(
 
 
 class _AgentProxy:
-    """Tiny struct to restore agent shape across FSM serialisation."""
+    """Tiny struct to restore agent shape across FSM serialisation.
+
+    `display_name` is the preferred label (resolved from Twenty workspace
+    members); `full_name` is retained only for backwards compatibility
+    with older FSM state blobs.
+    """
 
     def __init__(
         self,
         telegram_id: int,
         full_name: str | None = None,
         twenty_member_id: str | None = None,
+        display_name: str | None = None,
     ) -> None:
         self.telegram_id = telegram_id
         self.full_name = full_name
         self.twenty_member_id = twenty_member_id
+        self.display_name = display_name

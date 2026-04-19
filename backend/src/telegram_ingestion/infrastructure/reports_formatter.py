@@ -1,20 +1,18 @@
 """Telegram reports formatter — ReportDTO → monospace <pre> table.
 
-One table per report, columns matching the per-operator spec; the last
-row is the weighted "Итого". Telegram renders <pre> in a fixed-width
-font, so the column alignment comes out clean on mobile too.
-
-Wide displays show all columns; narrow ones may wrap — we keep names
-short (3-4 chars abbreviations for headers) to fit 36-char Telegram
-mobile width.
+Column widths are declared once in `_COLS` and used by both header and
+body so nothing can drift. Telegram renders <pre> in a fixed-width font
+— as long as each line has identical spacing, the table lines up cleanly
+on mobile and desktop.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 
-from reports.domain.models import EmployeeRow, ReportDTO, ReportScope
+from reports.domain.models import EmployeeRow, ReportDTO
 
-TG_MSG_LIMIT = 3900  # headroom under Telegram's 4096
+TG_MSG_LIMIT = 3900
 
 
 def format_duration(seconds: float | int | None) -> str:
@@ -27,15 +25,11 @@ def format_duration(seconds: float | int | None) -> str:
         return f"{s // 60}м"
     if s < 86400:
         return f"{s // 3600}ч{(s % 3600) // 60:02d}"
-    days = s // 86400
-    hours = (s % 86400) // 3600
-    return f"{days}д{hours:02d}ч"
+    return f"{s // 86400}д{(s % 86400) // 3600:02d}ч"
 
 
 def _fmt_int(n: int | None) -> str:
-    if n is None:
-        return "—"
-    return f"{n}"
+    return "—" if n is None else str(n)
 
 
 def _fmt_period(dt_from: datetime, dt_to: datetime) -> str:
@@ -48,48 +42,57 @@ def _short(name: str, width: int) -> str:
     return name if len(name) <= width else name[: width - 1] + "…"
 
 
+# width, header, right_aligned, accessor
+_COLS: tuple[tuple[int, str, bool, Callable[[EmployeeRow], str]], ...] = (
+    (14, "Сотрудник", False, lambda r: _short(r.display_name, 14)),
+    (4,  "Зав",      True,  lambda r: _fmt_int(r.completed)),
+    (7,  "Время",    True,  lambda r: format_duration(r.total_duration_seconds)),
+    (6,  "Ср",       True,  lambda r: format_duration(r.avg_duration_seconds)),
+    (5,  "Слож",     True,  lambda r: _fmt_int(r.complex_count)),
+    (6,  "Ср.сл",    True,  lambda r: format_duration(r.avg_complex_duration_seconds)),
+    (4,  "Пвт",      True,  lambda r: _fmt_int(r.repeats_count)),
+    (4,  "Нар",      True,  lambda r: _fmt_int(r.script_violations)),
+    (4,  "Акт",      True,  lambda r: _fmt_int(r.pending_count)),
+    (7,  "Ср.отв",   True,  lambda r: format_duration(r.avg_response_time_seconds)),
+)
+
+
+def _line(cells: list[tuple[int, str, bool]]) -> str:
+    parts = []
+    for width, text, right in cells:
+        parts.append(f"{text:>{width}}" if right else f"{text:<{width}}")
+    return " ".join(parts)
+
+
+def _render_header() -> str:
+    return _line([(w, h, r) for w, h, r, _ in _COLS])
+
+
+def _render_row(row: EmployeeRow) -> str:
+    return _line([(w, getter(row), r) for w, _, r, getter in _COLS])
+
+
+def _render_sep() -> str:
+    total = sum(w for w, _, _, _ in _COLS) + (len(_COLS) - 1)
+    return "─" * total
+
+
 def _render_table(rows: list[EmployeeRow], totals: EmployeeRow | None) -> str:
-    """Render the single unified table."""
-    # Column widths (Telegram mobile ≈ 36 chars; trim name to fit).
-    name_w = 14
-    lines = [
-        # header
-        f"{'Сотрудник':<{name_w}} Зав   Время  Ср     Слож Пвт Нар Акт Ср.отв",
-        "─" * (name_w + 43),
-    ]
+    lines = [_render_header(), _render_sep()]
     for r in rows:
-        lines.append(
-            f"{_short(r.display_name, name_w):<{name_w}}"
-            f" {r.completed:>3} "
-            f"{format_duration(r.total_duration_seconds):>6} "
-            f"{format_duration(r.avg_duration_seconds):>6} "
-            f"{r.complex_count:>4} "
-            f"{r.repeats_count:>3} "
-            f"{r.script_violations:>3} "
-            f"{r.pending_count:>3} "
-            f"{format_duration(r.avg_response_time_seconds):>6}"
-        )
+        lines.append(_render_row(r))
     if totals is not None:
-        lines.append("─" * (name_w + 43))
-        lines.append(
-            f"{'Итого':<{name_w}}"
-            f" {totals.completed:>3} "
-            f"{format_duration(totals.total_duration_seconds):>6} "
-            f"{format_duration(totals.avg_duration_seconds):>6} "
-            f"{totals.complex_count:>4} "
-            f"{totals.repeats_count:>3} "
-            f"{totals.script_violations:>3} "
-            f"{totals.pending_count:>3} "
-            f"{format_duration(totals.avg_response_time_seconds):>6}"
-        )
+        lines.append(_render_sep())
+        lines.append(_render_row(totals))
     return "\n".join(lines)
 
 
 def _render_legend() -> str:
     return (
-        "Зав — завершил, Ср — среднее, Слож — сложных, Пвт — повторных,\n"
+        "Зав — завершил, Ср — ср.время, Слож — сложных (выс./крит.),\n"
+        "Ср.сл — ср.время на сложную, Пвт — повторных,\n"
         "Нар — нарушений скрипта, Акт — активных (не завершено),\n"
-        "Ср.отв — среднее время реагирования."
+        "Ср.отв — ср. время реагирования."
     )
 
 
@@ -99,11 +102,8 @@ def format_report(dto: ReportDTO) -> str:
         f"Создано задач: {dto.total_created_in_period}\n"
     )
     if not dto.rows:
-        body = header + "\n(нет данных за период)"
-        return f"<pre>{body}</pre>"
-    table = _render_table(list(dto.rows), dto.totals)
-    legend = _render_legend()
-    return f"<pre>{header}\n{table}\n\n{legend}</pre>"
+        return f"<pre>{header}\n(нет данных за период)</pre>"
+    return f"<pre>{header}\n{_render_table(list(dto.rows), dto.totals)}\n\n{_render_legend()}</pre>"
 
 
 def split_for_telegram(html: str, limit: int = TG_MSG_LIMIT) -> list[str]:

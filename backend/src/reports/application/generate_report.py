@@ -38,6 +38,14 @@ class GenerateReport:
         self._redis = redis
         self._cache_ttl = cache_ttl_seconds
 
+    async def list_members(self) -> dict[str, str]:
+        """Return workspaceMemberId → display name from Twenty."""
+        async with TwentyTimelineReader(
+            self._twenty_base_url, self._twenty_api_key,
+        ) as reader:
+            data = await reader.load()
+        return dict(data.members_by_id)
+
     async def execute(
         self,
         *,
