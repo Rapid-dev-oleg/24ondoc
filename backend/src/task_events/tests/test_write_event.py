@@ -1,9 +1,5 @@
-"""Stage 5 — WriteTaskEvent dual-write invariants."""
+"""WriteTaskEvent — local append-only log."""
 from __future__ import annotations
-
-from datetime import UTC, datetime
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -32,11 +28,9 @@ class _FakeRepo(TaskEventRepository):
 
 
 @pytest.mark.asyncio
-async def test_writes_local_first_then_mirrors_to_twenty() -> None:
+async def test_writes_to_local_repo() -> None:
     repo = _FakeRepo()
-    mirror = MagicMock()
-    mirror.create_task_log = AsyncMock(return_value={"id": "log-1"})
-    uc = WriteTaskEvent(repo=repo, twenty_mirror=mirror)
+    uc = WriteTaskEvent(repo=repo)
 
     event = await uc.execute(
         twenty_task_id="t-1",
@@ -50,42 +44,16 @@ async def test_writes_local_first_then_mirrors_to_twenty() -> None:
     assert len(repo.events) == 1
     assert repo.events[0].action == Action.CREATED
     assert repo.events[0].twenty_task_id == "t-1"
-    mirror.create_task_log.assert_awaited_once()
-    kwargs = mirror.create_task_log.call_args.kwargs
-    assert kwargs["action"] == "CREATED"
-    assert kwargs["actor_type"] == "OPERATOR"
     assert event.twenty_task_id == "t-1"
 
 
 @pytest.mark.asyncio
-async def test_twenty_mirror_failure_does_not_fail_write() -> None:
-    repo = _FakeRepo()
-    mirror = MagicMock()
-    mirror.create_task_log = AsyncMock(side_effect=RuntimeError("twenty down"))
-    uc = WriteTaskEvent(repo=repo, twenty_mirror=mirror)
-
-    # Should NOT raise even though mirror failed
-    await uc.execute(
-        twenty_task_id="t-2",
-        action=Action.COMPLETED,
-        actor_type=ActorType.OPERATOR,
-    )
-
-    assert len(repo.events) == 1
-    assert repo.events[0].action == Action.COMPLETED
-
-
-@pytest.mark.asyncio
-async def test_local_repo_failure_propagates_and_skips_mirror() -> None:
+async def test_local_repo_failure_propagates() -> None:
     class ExplodingRepo(_FakeRepo):
         async def add(self, event: TaskEvent) -> None:
             raise RuntimeError("db down")
 
-    repo = ExplodingRepo()
-    mirror = MagicMock()
-    mirror.create_task_log = AsyncMock()
-    uc = WriteTaskEvent(repo=repo, twenty_mirror=mirror)
-
+    uc = WriteTaskEvent(repo=ExplodingRepo())
     with pytest.raises(RuntimeError):
         await uc.execute(
             twenty_task_id="t-3",
@@ -93,13 +61,11 @@ async def test_local_repo_failure_propagates_and_skips_mirror() -> None:
             actor_type=ActorType.ADMIN,
         )
 
-    mirror.create_task_log.assert_not_called()
-
 
 @pytest.mark.asyncio
-async def test_works_without_mirror() -> None:
+async def test_script_violations_fields_preserved() -> None:
     repo = _FakeRepo()
-    uc = WriteTaskEvent(repo=repo, twenty_mirror=None)
+    uc = WriteTaskEvent(repo=repo)
 
     await uc.execute(
         twenty_task_id="t-4",
@@ -109,7 +75,6 @@ async def test_works_without_mirror() -> None:
         script_missing=["greeting", "farewell"],
     )
 
-    assert len(repo.events) == 1
     e = repo.events[0]
     assert e.script_violations == 2
     assert e.script_missing == ["greeting", "farewell"]

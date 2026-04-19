@@ -24,12 +24,9 @@ from ats_processing.infrastructure.ats2_client import ATS2AuthManager, ATS2RestC
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
 from ats_processing.infrastructure.webhook_handler import router as t2_router
 from config import Settings, get_settings
-from task_events.application.write_event import WriteTaskEvent
-from task_events.infrastructure.repository import SQLTaskEventRepository
 from telegram_ingestion.infrastructure.stt_adapter import GroqSTTAdapter
 from telegram_ingestion.infrastructure.telegram_fastapi import router as tg_router
 from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
-from twenty_integration.infrastructure.webhook_handler import router as twenty_router
 
 logger = structlog.get_logger(__name__)
 
@@ -240,16 +237,9 @@ async def db_session_middleware(request: Request, call_next: object) -> Response
     async with session_factory() as session:
         async with session.begin():
             settings = request.app.state.settings
-            twenty_adapter = getattr(request.app.state, "twenty_adapter", None)
-            task_event_repo = SQLTaskEventRepository(session)
             request.state.db_session = session
             request.state.call_repo = CallRecordRepositoryImpl(session)
             request.state.t2_webhook_secret = settings.t2_webhook_secret
-            request.state.twenty_webhook_secret = settings.twenty_webhook_secret
-            request.state.write_task_event = WriteTaskEvent(
-                repo=task_event_repo,
-                twenty_mirror=twenty_adapter,
-            )
             response: Response = await _call_next(request)
     return response
 
@@ -283,4 +273,3 @@ async def metrics() -> dict[str, str]:
 # Handlers already define full paths — include WITHOUT extra prefix
 app.include_router(t2_router)      # POST /webhook/t2/call
 app.include_router(tg_router)      # POST /webhook/telegram
-app.include_router(twenty_router)  # POST /webhook/twenty

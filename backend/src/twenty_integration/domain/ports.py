@@ -112,20 +112,6 @@ class TwentyCRMPort(ABC):
     ) -> dict[str, object]: ...
 
     @abstractmethod
-    async def create_task_log(
-        self,
-        task_id: str,
-        action: str,
-        actor_type: str,
-        *,
-        actor_id: str | None = None,
-        actor_name: str | None = None,
-        details: str | None = None,
-        meta: dict[str, object] | None = None,
-        occurred_at: datetime | None = None,
-    ) -> dict[str, object]: ...
-
-    @abstractmethod
     async def update_call_record(
         self,
         call_record_id: str,

@@ -1,52 +1,34 @@
-"""WriteTaskEvent — dual write to local task_events and Twenty TaskLog.
+"""WriteTaskEvent — local append-only audit log.
 
-Invariant: local write MUST succeed (raises if it doesn't); the Twenty
-write is best-effort and never blocks the caller.
+Historically this also mirrored into a custom Twenty `taskLog` object,
+but Twenty already records every CRUD change in its built-in
+`timelineActivity` (with a structured diff). The mirror was redundant
+and has been removed — reports now read from timelineActivity directly.
+
+What's left: a single local repo.add() so internal flows (DetectRepeat,
+future checkpoints) have a queryable history without round-tripping
+through Twenty REST.
 """
 from __future__ import annotations
 
-import logging
-from typing import Any, Protocol
+from typing import Any
 
 from ..domain.models import Action, ActorType, Source, TaskEvent
 from ..domain.ports import TaskEventRepository
 
-logger = logging.getLogger(__name__)
-
-
-class TaskLogMirror(Protocol):
-    """Minimal interface we need from the Twenty adapter for TaskLog writes."""
-
-    async def create_task_log(
-        self,
-        task_id: str,
-        action: str,
-        actor_type: str,
-        *,
-        actor_id: str | None = None,
-        actor_name: str | None = None,
-        details: str | None = None,
-        meta: dict[str, Any] | None = None,
-    ) -> dict[str, Any]: ...
-
 
 class WriteTaskEvent:
-    def __init__(
-        self,
-        repo: TaskEventRepository,
-        twenty_mirror: TaskLogMirror | None = None,
-    ) -> None:
+    def __init__(self, repo: TaskEventRepository) -> None:
         self._repo = repo
-        self._mirror = twenty_mirror
 
     async def execute(
         self,
         *,
         twenty_task_id: str,
         action: Action,
-        actor_type: ActorType,
+        actor_type: ActorType,  # noqa: ARG002 — kept for callers that may log actor
         user_id: int | None = None,
-        actor_name: str | None = None,
+        actor_name: str | None = None,  # noqa: ARG002
         location_phone: str | None = None,
         priority: str | None = None,
         problem_signature: str | None = None,
@@ -55,7 +37,7 @@ class WriteTaskEvent:
         script_missing: list[str] | None = None,
         source: Source | None = None,
         meta: dict[str, Any] | None = None,
-        details: str | None = None,
+        details: str | None = None,  # noqa: ARG002
     ) -> TaskEvent:
         event = TaskEvent(
             twenty_task_id=twenty_task_id,
@@ -70,29 +52,5 @@ class WriteTaskEvent:
             source=source,
             meta=meta,
         )
-
-        # Primary: local append-only log. If this fails, caller sees the error.
         await self._repo.add(event)
-
-        # Best-effort Twenty mirror. Never blocks the caller on failure.
-        if self._mirror is not None:
-            try:
-                await self._mirror.create_task_log(
-                    task_id=twenty_task_id,
-                    action=action.value,
-                    actor_type=actor_type.value,
-                    actor_id=str(user_id) if user_id is not None else None,
-                    actor_name=actor_name,
-                    details=details,
-                    meta=meta,
-                )
-            except Exception:
-                logger.warning(
-                    "Twenty TaskLog mirror failed for task_id=%s action=%s; "
-                    "local record still written",
-                    twenty_task_id,
-                    action.value,
-                    exc_info=True,
-                )
-
         return event
