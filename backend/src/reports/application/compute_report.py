@@ -82,11 +82,12 @@ def compute_report(
 
     # For each completed-in-window task, find `received_at(tid)`:
     # the happensAt of the LAST assignment event before completion
-    # where diff.assigneeId.after == owner. If no such event exists
-    # in the timeline, fall back to task.createdAt — for call-sourced
-    # tasks the assignee is set in the same INSERT as the task, so
-    # createdAt == assignment time. (Completion has no such fallback
-    # — tasks without a status→VYPOLNENO event are dropped entirely.)
+    # where diff.assigneeId.after == owner. Returns None if no such
+    # event exists — tasks without a real timeline assignment are
+    # dropped from duration metrics. task.createdAt is NOT a valid
+    # fallback: our backend backfills that column to the call time
+    # (hours/days before the real Twenty INSERT), so falling back to
+    # it yields inflated multi-hour durations for batch-closed tasks.
     def _received_at(tid: str, owner: str, completion_ts: datetime) -> datetime | None:
         last: datetime | None = None
         for e in events_per_task.get(tid, []):
@@ -98,8 +99,6 @@ def compute_report(
             if ts is None or ts > completion_ts:
                 continue
             last = ts  # events are ascending → last wins
-        if last is None:
-            last = _parse_iso(tasks_by_id.get(tid, {}).get("createdAt"))
         return last
 
     # Per-owner accumulation.
