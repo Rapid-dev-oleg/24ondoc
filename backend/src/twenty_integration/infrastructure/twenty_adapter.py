@@ -232,6 +232,107 @@ class TwentyRestAdapter(TwentyCRMPort):
             )
             response.raise_for_status()
 
+    async def find_call_record_by_ats_id(self, ats_call_id: str) -> dict[str, Any] | None:
+        """Найти Twenty CallRecord по внешнему ATS ID (для upsert)."""
+        if not ats_call_id:
+            return None
+        try:
+            response = await self._client.get(
+                "/rest/callRecords",
+                params={"filter": f"atsCallId[eq]:{ats_call_id}"},
+            )
+            response.raise_for_status()
+            items = response.json().get("data", {}).get("callRecords", [])
+            return items[0] if items else None
+        except httpx.HTTPError:
+            logger.exception("find_call_record_by_ats_id failed id=%s", ats_call_id)
+            return None
+
+    async def create_call_record(
+        self,
+        ats_call_id: str,
+        *,
+        caller_phone: str | None = None,
+        direction: str = "INCOMING",
+        duration: int | None = None,
+        call_status: str = "ANSWERED",
+        occurred_at: datetime | None = None,
+        transcript: str | None = None,
+        audio_url: str | None = None,
+        person_rel_id: str | None = None,
+        location_rel_id: str | None = None,
+        task_rel_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Создать CallRecord в Twenty. Для upsert см. sync_call_record.
+
+        direction: INCOMING | OUTGOING (см. bootstrap.CALL_RECORD.direction).
+        call_status: ANSWERED | MISSED | ERROR.
+        """
+        payload: dict[str, Any] = {
+            "atsCallId": ats_call_id,
+            "direction": direction,
+            "callStatus": call_status,
+        }
+        if caller_phone:
+            payload["callerPhone"] = caller_phone
+        if duration is not None:
+            payload["duration"] = duration
+        if occurred_at is not None:
+            payload["occurredAt"] = occurred_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if transcript:
+            payload["transcript"] = {"markdown": transcript}
+        if audio_url:
+            payload["audioUrl"] = audio_url
+        if person_rel_id:
+            payload["personRelId"] = person_rel_id
+        if location_rel_id:
+            payload["locationRelId"] = location_rel_id
+        if task_rel_id:
+            payload["taskRelId"] = task_rel_id
+
+        response = await self._client.post("/rest/callRecords", json=payload)
+        if response.status_code >= 400:
+            logger.error(
+                "Twenty create_call_record failed: %s %s",
+                response.status_code,
+                response.text[:300],
+            )
+        response.raise_for_status()
+        data = response.json().get("data", {})
+        return dict(data.get("createCallRecord", data))
+
+    async def update_call_record(
+        self,
+        call_record_id: str,
+        *,
+        task_rel_id: str | None = None,
+        person_rel_id: str | None = None,
+        location_rel_id: str | None = None,
+        transcript: str | None = None,
+    ) -> None:
+        """Патч существующей Twenty CallRecord (обычно — прикрепить task после факта)."""
+        patch: dict[str, Any] = {}
+        if task_rel_id is not None:
+            patch["taskRelId"] = task_rel_id
+        if person_rel_id is not None:
+            patch["personRelId"] = person_rel_id
+        if location_rel_id is not None:
+            patch["locationRelId"] = location_rel_id
+        if transcript is not None:
+            patch["transcript"] = {"markdown": transcript}
+        if not patch:
+            return
+        response = await self._client.patch(
+            f"/rest/callRecords/{call_record_id}", json=patch
+        )
+        if response.status_code >= 400:
+            logger.error(
+                "Twenty update_call_record failed: %s %s",
+                response.status_code,
+                response.text[:300],
+            )
+            response.raise_for_status()
+
     async def link_person_to_location(self, person_id: str, location_id: str) -> None:
         """Прикрепить Person к Location через relation locationRelId."""
         response = await self._client.patch(

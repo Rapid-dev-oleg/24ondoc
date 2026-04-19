@@ -1,4 +1,4 @@
-.PHONY: up down build test lint format logs ps health twenty-bootstrap \
+.PHONY: up down build test lint format logs ps health twenty-bootstrap backfill-calls \
        staging-up staging-down staging-build staging-logs staging-ps staging-e2e staging-reset
 
 up:
@@ -33,6 +33,12 @@ health:
 # and TWENTY_API_KEY from .env.
 twenty-bootstrap:
 	cd backend && uv run python -m src.twenty_integration.infrastructure.bootstrap_cli
+
+# One-off historical sync of ats_call_records into Twenty CallRecord.
+# Rate-limited to ~2 rps. Safe to re-run — idempotent by atsCallId.
+# Requires TWENTY_BASE_URL, TWENTY_API_KEY, DATABASE_URL in env.
+backfill-calls:
+	cd backend && uv run python ../scripts/backfill_call_records.py
 
 # --- Staging environment ---
 

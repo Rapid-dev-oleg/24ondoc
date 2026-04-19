@@ -92,6 +92,37 @@ class TwentyCRMPort(ABC):
     async def link_person_to_location(self, person_id: str, location_id: str) -> None: ...
 
     @abstractmethod
+    async def find_call_record_by_ats_id(self, ats_call_id: str) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def create_call_record(
+        self,
+        ats_call_id: str,
+        *,
+        caller_phone: str | None = None,
+        direction: str = "INCOMING",
+        duration: int | None = None,
+        call_status: str = "ANSWERED",
+        occurred_at: datetime | None = None,
+        transcript: str | None = None,
+        audio_url: str | None = None,
+        person_rel_id: str | None = None,
+        location_rel_id: str | None = None,
+        task_rel_id: str | None = None,
+    ) -> dict[str, object]: ...
+
+    @abstractmethod
+    async def update_call_record(
+        self,
+        call_record_id: str,
+        *,
+        task_rel_id: str | None = None,
+        person_rel_id: str | None = None,
+        location_rel_id: str | None = None,
+        transcript: str | None = None,
+    ) -> None: ...
+
+    @abstractmethod
     async def link_person_to_task(self, task_id: str, person_id: str) -> None: ...
 
     @abstractmethod
