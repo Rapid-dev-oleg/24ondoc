@@ -26,6 +26,18 @@ def _tu_event(tid: str, happens_at: datetime, diff: dict, wmid: str | None = Non
     }
 
 
+def _tc_event(tid: str, happens_at: datetime) -> dict:
+    """task.created timeline event — carries the real Twenty INSERT timestamp."""
+    return {
+        "targetTaskId": tid,
+        "name": "task.created",
+        "happensAt": _iso(happens_at),
+        "createdAt": _iso(happens_at),
+        "workspaceMemberId": None,
+        "properties": {},
+    }
+
+
 WM_NADYA = "wm-nadya"
 WM_VOVA = "wm-vova"
 
@@ -220,3 +232,52 @@ def test_scope_self_filters_rows() -> None:
     # totals still reflect the whole org, not the filtered row
     assert dto.totals is not None
     assert dto.totals.completed == 2
+
+
+def test_response_time_uses_task_created_event_not_column() -> None:
+    """M8 measures first-assignment − task.created event, NOT − task.createdAt.
+
+    Our backend backfills task.createdAt to the ATS call time (days before
+    the real Twenty INSERT), so using the column would conflate CRM-entry
+    delay with operator reaction. Task.created timeline event is the
+    trustworthy anchor.
+    """
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+
+    # Column says 04-05 (call date), but Twenty actually inserted 04-10;
+    # assignee picked it up 5 minutes after the real insert.
+    backfilled_created = datetime(2026, 4, 5, 9, 0, tzinfo=UTC)
+    real_insert = datetime(2026, 4, 10, 14, 0, tzinfo=UTC)
+    first_assign = real_insert + timedelta(minutes=5)
+
+    tasks = ({
+        "id": "t", "createdAt": _iso(backfilled_created),
+        "assigneeId": WM_VOVA, "status": "TODO",
+    },)
+    updated = (_tu_event("t", first_assign,
+                         {"assigneeId": {"before": None, "after": WM_VOVA}}),)
+    created = (_tc_event("t", real_insert),)
+    data = TimelineData(updated, tasks, members_by_id={WM_VOVA: "V"},
+                        created_events=created)
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
+    row = next(r for r in dto.rows if r.user_id == WM_VOVA)
+    # 5 minutes, NOT 5 days + 5 minutes
+    assert row.avg_response_time_seconds == 5 * 60
+
+
+def test_response_time_task_without_created_event_skipped() -> None:
+    """No task.created in timeline → response time can't be trusted → skip."""
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+
+    tasks = ({
+        "id": "t", "createdAt": _iso(from_ts),
+        "assigneeId": WM_VOVA, "status": "TODO",
+    },)
+    updated = (_tu_event("t", from_ts + timedelta(minutes=10),
+                         {"assigneeId": {"before": None, "after": WM_VOVA}}),)
+    data = TimelineData(updated, tasks, members_by_id={WM_VOVA: "V"})
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
+    row = next(r for r in dto.rows if r.user_id == WM_VOVA)
+    assert row.avg_response_time_seconds is None

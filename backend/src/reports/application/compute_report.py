@@ -53,6 +53,17 @@ def compute_report(
     """Build the per-operator report + totals footer for [from_ts, to_ts]."""
     tasks_by_id = {t["id"]: t for t in data.tasks}
 
+    # Real Twenty INSERT timestamp per task, from task.created events.
+    # We prefer this over task.createdAt column because our backend
+    # overwrites the column with the ATS call time during task creation,
+    # so the column drifts from the actual CRM-appearance moment.
+    task_created_ts: dict[str, datetime] = {}
+    for e in data.created_events:
+        tid = e.get("targetTaskId")
+        ts = _parse_iso(_event_ts(e))
+        if tid and ts and tid not in task_created_ts:
+            task_created_ts[tid] = ts
+
     # Index events by task: sorted ascending by happensAt.
     events_per_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for e in data.updated_events:
@@ -150,12 +161,15 @@ def compute_report(
         bucket.script_violations += int(t.get("scriptViolations") or 0)
 
     # --- walk first-assignment events in window for response time ---
+    # Uses task.created timeline ts (real Twenty INSERT moment), not the
+    # backfilled task.createdAt column. Tasks with no task.created event
+    # in timeline are skipped entirely — we can't compute a meaningful
+    # response time without a trustworthy "task appeared" anchor.
     for tid, e in first_assignment_event.items():
         ts = _parse_iso(_event_ts(e))
         if ts is None or not (from_ts <= ts <= to_ts):
             continue
-        t = tasks_by_id.get(tid) or {}
-        created_ts = _parse_iso(t.get("createdAt"))
+        created_ts = task_created_ts.get(tid)
         if created_ts is None:
             continue
         diff = (e.get("properties") or {}).get("diff") or {}

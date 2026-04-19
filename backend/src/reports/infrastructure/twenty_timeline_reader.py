@@ -28,6 +28,9 @@ class TimelineData:
     updated_events: tuple[dict[str, Any], ...]
     tasks: tuple[dict[str, Any], ...]
     members_by_id: dict[str, str]  # wmid -> display name
+    # task.created — real Twenty INSERT ts. Optional for test ergonomics;
+    # production loader always populates.
+    created_events: tuple[dict[str, Any], ...] = ()
 
 
 class TwentyTimelineReader:
@@ -82,6 +85,10 @@ class TwentyTimelineReader:
             "/rest/timelineActivities", "timelineActivities",
             "name[eq]:task.updated",
         )
+        created = await self._page_all(
+            "/rest/timelineActivities", "timelineActivities",
+            "name[eq]:task.created",
+        )
         tasks = await self._page_all("/rest/tasks", "tasks")
         members_raw = await self._page_all(
             "/rest/workspaceMembers", "workspaceMembers",
@@ -97,6 +104,7 @@ class TwentyTimelineReader:
             members_by_id[wmid] = (f"{fn} {ln}".strip()) or wmid[:8]
         return TimelineData(
             updated_events=tuple(updated),
+            created_events=tuple(created),
             tasks=tuple(tasks),
             members_by_id=members_by_id,
         )
