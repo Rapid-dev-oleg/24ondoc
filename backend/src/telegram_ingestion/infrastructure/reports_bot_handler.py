@@ -135,7 +135,11 @@ def create_reports_router(
             agents = await user_port.list_active_agents()
             await state.set_state(ReportsStates.choosing_scope)
             await state.update_data(agents=[
-                {"telegram_id": a.telegram_id, "full_name": getattr(a, "full_name", None)}
+                {
+                    "telegram_id": a.telegram_id,
+                    "full_name": getattr(a, "full_name", None),
+                    "twenty_member_id": getattr(a, "twenty_member_id", None),
+                }
                 for a in agents
             ])
             await message.answer(
@@ -145,7 +149,9 @@ def create_reports_router(
             return
         # AGENT — straight to period picker, scope = SELF
         await state.set_state(ReportsStates.choosing_period)
-        await state.update_data(scope="self", target_user_id=message.from_user.id)
+        await state.update_data(
+            scope="self", target_user_id=profile.twenty_member_id,
+        )
         await message.answer("📊 За какой период?", reply_markup=_period_keyboard())
 
     @router.callback_query(F.data.startswith("rp_page:"))
@@ -165,7 +171,15 @@ def create_reports_router(
         if len(parts) == 2 and parts[1] == "overall":
             await state.update_data(scope="overall", target_user_id=None)
         elif len(parts) == 3 and parts[1] == "user":
-            await state.update_data(scope="employee", target_user_id=int(parts[2]))
+            # map telegram_id from the button back to the agent's twenty_member_id
+            data = await state.get_data()
+            tg_id = int(parts[2])
+            wmid: str | None = None
+            for a in data.get("agents", []):
+                if a.get("telegram_id") == tg_id:
+                    wmid = a.get("twenty_member_id")
+                    break
+            await state.update_data(scope="employee", target_user_id=wmid)
         else:
             await callback.answer("❌")
             return
@@ -244,6 +258,12 @@ def create_reports_router(
 class _AgentProxy:
     """Tiny struct to restore agent shape across FSM serialisation."""
 
-    def __init__(self, telegram_id: int, full_name: str | None = None) -> None:
+    def __init__(
+        self,
+        telegram_id: int,
+        full_name: str | None = None,
+        twenty_member_id: str | None = None,
+    ) -> None:
         self.telegram_id = telegram_id
         self.full_name = full_name
+        self.twenty_member_id = twenty_member_id

@@ -1,4 +1,10 @@
-"""Reports — DTOs for the 12 metrics."""
+"""Reports — DTOs for the per-operator report.
+
+A report for a period is a table of rows (one per workspace member)
+plus a totals row. Individual cells mirror the 12 metrics from the
+plan but grouped in a way the admin can act on: who closed how many
+tasks, how fast on average, how many complex ones, etc.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,58 +13,39 @@ from enum import StrEnum
 
 
 class ReportScope(StrEnum):
-    SELF = "self"      # operator looking at their own numbers
-    OVERALL = "overall"  # admin dashboard, all operators
+    SELF = "self"          # operator looking at their own row
+    OVERALL = "overall"    # admin dashboard — all operators
     EMPLOYEE = "employee"  # admin looking at a specific operator
 
 
 @dataclass(frozen=True)
-class EmployeeShare:
-    user_id: int
-    display_name: str
-    completed: int
-    share_pct: float  # 0..100
+class EmployeeRow:
+    """One row in the report table — also used for the totals footer."""
 
+    user_id: str | None  # workspaceMemberId; None = totals / unassigned
+    display_name: str    # "Надя Петрова" or "Итого"
 
-@dataclass(frozen=True)
-class LocationRepeatRow:
-    location_phone: str
-    repeats: int
+    completed: int                            # closed in period with owner=this wm
+    total_duration_seconds: int               # Σ (completion − received_at)
+    avg_duration_seconds: float | None
+
+    complex_count: int                         # subset: vazhnost ∈ {high, critical}
+    avg_complex_duration_seconds: float | None
+
+    repeats_count: int                         # closed in period + povtornoeObrashchenie
+    script_violations: int                     # Σ task.scriptViolations over closed
+    pending_count: int                         # snapshot: assignee=wm AND status not terminal
+    avg_response_time_seconds: float | None    # avg (first_assign − created) for tasks first-assigned to wm in period
 
 
 @dataclass(frozen=True)
 class ReportDTO:
-    """Flat container for all 12 metrics over a (from, to) period.
-
-    Some fields are only populated for certain scopes (e.g.
-    `share_per_user` only makes sense for OVERALL). Missing fields stay
-    as empty list / 0 / None — the bot formatter shows only populated
-    sections.
-    """
-
     scope: ReportScope
     period_from: datetime
     period_to: datetime
-    user_id: int | None = None
+    user_id: str | None = None  # filter — wm id the report is focused on
 
-    # M1..M5 — completion timing
-    completed_tasks: int = 0
-    total_duration_seconds: int = 0
-    avg_duration_seconds: float | None = None
-    complex_tasks: int = 0
-    avg_complex_duration_seconds: float | None = None
+    rows: tuple[EmployeeRow, ...] = ()   # per-employee rows, descending by `completed`
+    totals: EmployeeRow | None = None    # footer — weighted aggregate, not avg of row averages
 
-    # M6 — repeats by location
-    repeats_count: int = 0
-    repeats_by_location: tuple[LocationRepeatRow, ...] = ()
-
-    # M7 — script violations at the first call per task
-    script_violations_first_call: int = 0
-
-    # M8 — response time: created → first_assigned
-    avg_response_time_seconds: float | None = None
-
-    # M9..M11 — totals
-    total_tasks: int = 0
-    share_per_user: tuple[EmployeeShare, ...] = ()
-    pending_tasks: int = 0
+    total_created_in_period: int = 0     # tasks created in [from, to] — shown in header

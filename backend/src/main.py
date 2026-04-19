@@ -159,6 +159,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             BotCommand(command="start", description="Начать работу"),
             BotCommand(command="new_task", description="Создать задачу"),
             BotCommand(command="my_tasks", description="Мои задачи"),
+            BotCommand(command="stats", description="Отчёт за период"),
             BotCommand(command="add_member", description="Добавить участника"),
             BotCommand(command="add_admin", description="Добавить администратора"),
             BotCommand(command="health", description="Здоровье системы"),

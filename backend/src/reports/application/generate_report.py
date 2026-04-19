@@ -1,22 +1,42 @@
-"""Reports orchestrator — build a ReportDTO from the 12 metric queries.
+"""Reports orchestrator — TimelineReader + compute_report + Redis cache.
 
-Minimal composition layer so the Telegram bot and any future callers
-don't need to know SQL. Queries all run against the same AsyncSession.
+The SQL-based version has been dropped along with the local `task_events`
+table; we now read directly from Twenty's built-in timelineActivity feed
+(which the CRM itself populates on every CRUD, including a structured
+diff in `properties.diff`).
+
+Cache: redis key reports:{scope}:{user_id?}:{from}:{to}, TTL 5 min. We
+only cache a window if `to_ts` is today — closed past periods could be
+cached longer but we keep it simple.
 """
 from __future__ import annotations
 
-from datetime import datetime
-from statistics import mean
+import json
+import logging
+from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from redis.asyncio import Redis
 
-from ..domain.models import ReportDTO, ReportScope
-from . import queries
+from ..domain.models import EmployeeRow, ReportDTO, ReportScope
+from ..infrastructure.twenty_timeline_reader import TwentyTimelineReader
+from .compute_report import compute_report
+
+logger = logging.getLogger(__name__)
 
 
 class GenerateReport:
-    def __init__(self, session_factory) -> None:
-        self._session_factory = session_factory
+    def __init__(
+        self,
+        twenty_base_url: str,
+        twenty_api_key: str,
+        redis: Redis | None = None,
+        cache_ttl_seconds: int = 300,
+    ) -> None:
+        self._twenty_base_url = twenty_base_url
+        self._twenty_api_key = twenty_api_key
+        self._redis = redis
+        self._cache_ttl = cache_ttl_seconds
 
     async def execute(
         self,
@@ -24,84 +44,86 @@ class GenerateReport:
         scope: ReportScope,
         from_ts: datetime,
         to_ts: datetime,
-        user_id: int | None = None,
+        user_id: str | None = None,
     ) -> ReportDTO:
-        async with self._session_factory() as session:
-            return await self._execute(session, scope, from_ts, to_ts, user_id)
+        cache_key = self._cache_key(scope, user_id, from_ts, to_ts)
+        if self._redis and self._cacheable(to_ts):
+            try:
+                raw = await self._redis.get(cache_key)
+                if raw:
+                    return _dto_from_json(raw.decode() if isinstance(raw, bytes) else raw)
+            except Exception:
+                logger.warning("reports cache read failed", exc_info=True)
 
-    async def _execute(
-        self,
-        session: AsyncSession,
-        scope: ReportScope,
-        from_ts: datetime,
-        to_ts: datetime,
-        user_id: int | None,
-    ) -> ReportDTO:
-        # Per-user metrics
-        scoped_uid = user_id if scope != ReportScope.OVERALL else None
+        async with TwentyTimelineReader(
+            self._twenty_base_url, self._twenty_api_key,
+        ) as reader:
+            data = await reader.load()
 
-        durations = await queries.task_durations(
-            session, from_ts=from_ts, to_ts=to_ts, user_id=scoped_uid
-        )
-        complex_durations = await queries.task_durations(
-            session, from_ts=from_ts, to_ts=to_ts, user_id=scoped_uid,
-            only_high_priority=True,
-        )
-        completed = await queries.completed_tasks_count(
-            session, from_ts=from_ts, to_ts=to_ts, user_id=scoped_uid,
-        )
-        script_violations = await queries.script_violations_sum(
-            session, from_ts=from_ts, to_ts=to_ts, user_id=scoped_uid,
-        )
-        response_times = await queries.response_times(
-            session, from_ts=from_ts, to_ts=to_ts, user_id=scoped_uid,
-        )
-        pending = await queries.pending_tasks_count(
-            session, from_ts=from_ts, to_ts=to_ts, user_id=scoped_uid,
-        )
-        repeats_total = await queries.repeats_total(
-            session, from_ts=from_ts, to_ts=to_ts, user_id=scoped_uid,
+        dto = compute_report(
+            data, from_ts=from_ts, to_ts=to_ts, scope=scope, user_id=user_id,
         )
 
-        # Overall-only metrics
-        total_tasks = 0
-        shares: tuple = ()
-        repeats_detail: tuple = ()
-        if scope == ReportScope.OVERALL:
-            total_tasks = await queries.total_tasks_count(
-                session, from_ts=from_ts, to_ts=to_ts,
-            )
-            shares = tuple(
-                await queries.share_per_user(session, from_ts=from_ts, to_ts=to_ts)
-            )
-            repeats_detail = tuple(
-                await queries.repeats_by_location(session, from_ts=from_ts, to_ts=to_ts)
-            )
-        else:
-            # Personal summary also wants total org-wide count
-            total_tasks = await queries.total_tasks_count(
-                session, from_ts=from_ts, to_ts=to_ts,
-            )
+        if self._redis and self._cacheable(to_ts):
+            try:
+                await self._redis.set(
+                    cache_key, _dto_to_json(dto).encode(), ex=self._cache_ttl,
+                )
+            except Exception:
+                logger.warning("reports cache write failed", exc_info=True)
+        return dto
 
-        return ReportDTO(
-            scope=scope,
-            period_from=from_ts,
-            period_to=to_ts,
-            user_id=user_id,
-            completed_tasks=completed,
-            total_duration_seconds=int(sum(durations)),
-            avg_duration_seconds=float(mean(durations)) if durations else None,
-            complex_tasks=len(complex_durations),
-            avg_complex_duration_seconds=(
-                float(mean(complex_durations)) if complex_durations else None
-            ),
-            repeats_count=repeats_total,
-            repeats_by_location=repeats_detail,
-            script_violations_first_call=script_violations,
-            avg_response_time_seconds=(
-                float(mean(response_times)) if response_times else None
-            ),
-            total_tasks=total_tasks,
-            share_per_user=shares,
-            pending_tasks=pending,
+    @staticmethod
+    def _cache_key(
+        scope: ReportScope, user_id: str | None,
+        from_ts: datetime, to_ts: datetime,
+    ) -> str:
+        return (
+            f"reports:{scope.value}:{user_id or '-'}"
+            f":{from_ts.isoformat()}:{to_ts.isoformat()}"
         )
+
+    @staticmethod
+    def _cacheable(to_ts: datetime) -> bool:
+        # Only cache when window includes today — past closed windows could
+        # be cached indefinitely but we keep the policy uniform.
+        return to_ts.date() >= datetime.now(UTC).date()
+
+
+# ---------- JSON codec for cache ----------
+
+def _dto_to_json(dto: ReportDTO) -> str:
+    def row_to_dict(r: EmployeeRow | None) -> dict[str, Any] | None:
+        if r is None:
+            return None
+        return r.__dict__.copy()
+
+    payload = {
+        "scope": dto.scope.value,
+        "period_from": dto.period_from.isoformat(),
+        "period_to": dto.period_to.isoformat(),
+        "user_id": dto.user_id,
+        "rows": [row_to_dict(r) for r in dto.rows],
+        "totals": row_to_dict(dto.totals),
+        "total_created_in_period": dto.total_created_in_period,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _dto_from_json(s: str) -> ReportDTO:
+    d = json.loads(s)
+
+    def row_from_dict(raw: dict[str, Any] | None) -> EmployeeRow | None:
+        if raw is None:
+            return None
+        return EmployeeRow(**raw)
+
+    return ReportDTO(
+        scope=ReportScope(d["scope"]),
+        period_from=datetime.fromisoformat(d["period_from"]),
+        period_to=datetime.fromisoformat(d["period_to"]),
+        user_id=d.get("user_id"),
+        rows=tuple(row_from_dict(r) for r in d.get("rows", []) if r is not None),
+        totals=row_from_dict(d.get("totals")),
+        total_created_in_period=int(d.get("total_created_in_period", 0)),
+    )

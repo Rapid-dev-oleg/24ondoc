@@ -31,12 +31,15 @@ from telegram_ingestion.application.use_cases import (
     StartSessionUseCase,
     TriggerAnalysisUseCase,
 )
+from reports.application.generate_report import GenerateReport
+from telegram_ingestion.domain.models import UserRole
 from telegram_ingestion.infrastructure.bot_handler import (
     create_call_notification_router,
     create_router,
     create_settings_router,
     create_tasks_router,
 )
+from telegram_ingestion.infrastructure.reports_bot_handler import create_reports_router
 from telegram_ingestion.infrastructure.draft_session_repository import (
     SQLAlchemyRedisDraftSessionRepository,
 )
@@ -155,6 +158,17 @@ async def telegram_webhook(
     )
     dp.include_router(create_settings_router(update_profile, save_voice, user_port))
     dp.include_router(create_call_notification_router(call_repo))
+
+    generate_report = GenerateReport(
+        twenty_base_url=settings.twenty_base_url,
+        twenty_api_key=settings.twenty_api_key,
+        redis=redis,
+    )
+    dp.include_router(create_reports_router(
+        generate_report=generate_report,
+        user_port=user_port,
+        is_admin_fn=lambda p: p.role in (UserRole.ADMIN, UserRole.SUPERVISOR),
+    ))
 
     update = Update.model_validate(update_data)
     await dp.feed_update(bot, update)

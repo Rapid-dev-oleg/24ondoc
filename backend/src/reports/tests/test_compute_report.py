@@ -1,0 +1,180 @@
+"""Unit tests for reports.compute_report.
+
+Synthetic TimelineData → ReportDTO. Verifies per-operator aggregation,
+duration from `received_at`, the totals footer, and edge cases.
+"""
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+from reports.application.compute_report import compute_report
+from reports.domain.models import ReportScope
+from reports.infrastructure.twenty_timeline_reader import TimelineData
+
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _tu_event(tid: str, happens_at: datetime, diff: dict, wmid: str | None = None) -> dict:
+    return {
+        "targetTaskId": tid,
+        "happensAt": _iso(happens_at),
+        "createdAt": _iso(happens_at),
+        "workspaceMemberId": wmid,
+        "properties": {"diff": diff},
+    }
+
+
+WM_NADYA = "wm-nadya"
+WM_VOVA = "wm-vova"
+
+
+def test_single_completion_with_reassignment() -> None:
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+
+    t_created = datetime(2026, 4, 10, 10, 0, tzinfo=UTC)
+    t_received = datetime(2026, 4, 11, 12, 0, tzinfo=UTC)   # Vova picks it up
+    t_completed = datetime(2026, 4, 11, 13, 0, tzinfo=UTC)  # 1h later
+
+    tasks = ({
+        "id": "t1",
+        "createdAt": _iso(t_created),
+        "assigneeId": WM_VOVA,
+        "status": "VYPOLNENO",
+        "vazhnost": "SREDNYAYA",
+        "povtornoeObrashchenie": False,
+        "scriptViolations": None,
+    },)
+    events = (
+        _tu_event("t1", t_received, {"assigneeId": {"before": None, "after": WM_VOVA}}),
+        _tu_event("t1", t_completed, {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}, wmid=WM_VOVA),
+    )
+    data = TimelineData(
+        updated_events=events, tasks=tasks,
+        members_by_id={WM_VOVA: "Вова Петров"},
+    )
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+
+    assert dto.totals is not None
+    assert dto.totals.completed == 1
+    assert dto.totals.total_duration_seconds == 3600
+    # Should attribute to Vova, with 1h duration from received (NOT creation)
+    rows = {r.user_id: r for r in dto.rows}
+    assert WM_VOVA in rows
+    assert rows[WM_VOVA].completed == 1
+    assert rows[WM_VOVA].total_duration_seconds == 3600
+    assert rows[WM_VOVA].display_name == "Вова Петров"
+
+
+def test_completion_without_reassignment_uses_creation_time() -> None:
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+
+    t_created = datetime(2026, 4, 5, 9, 0, tzinfo=UTC)
+    t_completed = datetime(2026, 4, 5, 10, 30, tzinfo=UTC)  # 90m after creation
+
+    tasks = ({
+        "id": "t2", "createdAt": _iso(t_created),
+        "assigneeId": WM_NADYA, "status": "VYPOLNENO",
+        "vazhnost": "VYSOKAYA", "scriptViolations": 2,
+    },)
+    events = (
+        _tu_event("t2", t_completed, {"status": {"before": "TODO", "after": "VYPOLNENO"}}, wmid=WM_NADYA),
+    )
+    data = TimelineData(events, tasks, members_by_id={WM_NADYA: "Надя"})
+
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    row = next(r for r in dto.rows if r.user_id == WM_NADYA)
+    assert row.total_duration_seconds == 90 * 60
+    assert row.complex_count == 1  # vazhnost=VYSOKAYA
+    assert row.script_violations == 2
+
+
+def test_totals_are_weighted_not_mean_of_means() -> None:
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    base = datetime(2026, 4, 10, 9, 0, tzinfo=UTC)
+
+    # Vova: 1 task × 60s
+    # Nadya: 3 tasks × 1200s each → total 3600s
+    # mean-of-row-means = (60 + 1200) / 2 = 630; weighted avg = (60 + 3*1200) / 4 = 915
+    tasks = (
+        {"id": "v", "createdAt": _iso(base), "assigneeId": WM_VOVA, "status": "VYPOLNENO"},
+        {"id": "n1", "createdAt": _iso(base), "assigneeId": WM_NADYA, "status": "VYPOLNENO"},
+        {"id": "n2", "createdAt": _iso(base), "assigneeId": WM_NADYA, "status": "VYPOLNENO"},
+        {"id": "n3", "createdAt": _iso(base), "assigneeId": WM_NADYA, "status": "VYPOLNENO"},
+    )
+    events = (
+        _tu_event("v",  base + timedelta(seconds=60),   {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+        _tu_event("n1", base + timedelta(seconds=1200), {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+        _tu_event("n2", base + timedelta(seconds=1200), {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+        _tu_event("n3", base + timedelta(seconds=1200), {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+    )
+    data = TimelineData(events, tasks, members_by_id={WM_VOVA: "Vova", WM_NADYA: "Nadya"})
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    assert dto.totals is not None
+    assert dto.totals.completed == 4
+    assert dto.totals.total_duration_seconds == 3660
+    assert dto.totals.avg_duration_seconds == 915.0  # weighted, not (60+1200)/2
+
+
+def test_completion_outside_window_excluded() -> None:
+    from_ts = datetime(2026, 4, 10, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 20, tzinfo=UTC)
+
+    t_before = datetime(2026, 4, 5, tzinfo=UTC)  # before window
+    tasks = ({"id": "t", "createdAt": _iso(t_before), "assigneeId": WM_VOVA,
+              "status": "VYPOLNENO"},)
+    events = (
+        _tu_event("t", t_before + timedelta(hours=1),
+                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+    )
+    data = TimelineData(events, tasks, members_by_id={})
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    assert dto.totals is not None
+    assert dto.totals.completed == 0
+
+
+def test_pending_snapshot_counts_current_assignees() -> None:
+    # Pending is not window-scoped: we just count tasks whose status is not terminal.
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    tasks = (
+        {"id": "a", "createdAt": _iso(from_ts), "assigneeId": WM_VOVA, "status": "V_RABOTE"},
+        {"id": "b", "createdAt": _iso(from_ts), "assigneeId": WM_NADYA, "status": "TODO"},
+        {"id": "c", "createdAt": _iso(from_ts), "assigneeId": WM_NADYA, "status": "VYPOLNENO"},
+    )
+    data = TimelineData((), tasks, members_by_id={WM_VOVA: "V", WM_NADYA: "N"})
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    by_user = {r.user_id: r.pending_count for r in dto.rows}
+    assert by_user[WM_VOVA] == 1
+    assert by_user[WM_NADYA] == 1  # only the non-terminal one
+    assert dto.totals is not None
+    assert dto.totals.pending_count == 2
+
+
+def test_scope_self_filters_rows() -> None:
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    tasks = (
+        {"id": "a", "createdAt": _iso(from_ts), "assigneeId": WM_VOVA, "status": "VYPOLNENO"},
+        {"id": "b", "createdAt": _iso(from_ts), "assigneeId": WM_NADYA, "status": "VYPOLNENO"},
+    )
+    events = (
+        _tu_event("a", from_ts + timedelta(hours=1),
+                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+        _tu_event("b", from_ts + timedelta(hours=2),
+                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+    )
+    data = TimelineData(events, tasks, members_by_id={WM_VOVA: "V", WM_NADYA: "N"})
+    dto = compute_report(
+        data, from_ts=from_ts, to_ts=to_ts,
+        scope=ReportScope.SELF, user_id=WM_VOVA,
+    )
+    assert len(dto.rows) == 1
+    assert dto.rows[0].user_id == WM_VOVA
+    # totals still reflect the whole org, not the filtered row
+    assert dto.totals is not None
+    assert dto.totals.completed == 2
