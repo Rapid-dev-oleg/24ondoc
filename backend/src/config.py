@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     # Twenty CRM
     twenty_base_url: str = "https://24ondoc.ru"
     twenty_api_key: str = ""
+    twenty_webhook_secret: str = ""  # required to accept /webhook/twenty posts
 
     # Misc
     env_file_path: str = ".env"
