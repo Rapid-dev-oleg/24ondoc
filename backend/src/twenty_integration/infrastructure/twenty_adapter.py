@@ -712,8 +712,7 @@ class TwentyRestAdapter(TwentyCRMPort):
         """Store the check_script result on a Task (Stage 7 fields)."""
         payload = {
             "scriptViolations": violations,
-            # Twenty stores it as TEXT — comma-separate the missing phrases
-            "scriptMissing": ",".join(missing) if missing else "",
+            "scriptMissing": "; ".join(missing) if missing else "",
         }
         r = await self._client.patch(f"/rest/tasks/{task_id}", json=payload)
         if r.status_code >= 400:

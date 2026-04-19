@@ -19,6 +19,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ai_classification.infrastructure.openrouter_adapter import SCRIPT_PHRASES_RU
 from ats_processing.domain.models import CallRecord, CallStatus
 from twenty_integration.domain.ports import TwentyCRMPort
 
@@ -169,5 +170,6 @@ class SyncCallToTwentyUseCase:
         result = await self._script_ai.check_script(transcript)
         violations = int(result.get("violations_count") or 0)
         missing_raw = result.get("missing") or []
-        missing = [str(m) for m in missing_raw if isinstance(m, str)]
-        await self._port.update_task_script_check(task_id, violations, missing)
+        missing_ids = [str(m) for m in missing_raw if isinstance(m, str)]
+        missing_phrases = [SCRIPT_PHRASES_RU.get(m, m) for m in missing_ids]
+        await self._port.update_task_script_check(task_id, violations, missing_phrases)

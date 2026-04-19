@@ -140,3 +140,52 @@ async def test_person_lookup_failure_does_not_abort_sync() -> None:
     assert kwargs.get("person_rel_id") is None
     assert kwargs.get("location_rel_id") is None
     assert result.created is True
+
+
+def _existing_call_record() -> dict[str, Any]:
+    return {"id": "call-twenty-1", "personRelId": "p", "locationRelId": "l",
+            "transcript": {"markdown": "..."}}
+
+
+@pytest.mark.asyncio
+async def test_script_check_writes_russian_phrases_not_ids() -> None:
+    port = _port()
+    port.find_call_record_by_ats_id.return_value = _existing_call_record()
+    port.get_task = AsyncMock(return_value={"scriptViolations": None})
+    port.update_task_script_check = AsyncMock()
+    script_ai = MagicMock()
+    script_ai.check_script = AsyncMock(return_value={
+        "missing": ["greeting", "farewell"],
+        "violations_count": 2,
+    })
+    uc = SyncCallToTwentyUseCase(twenty_port=port, script_ai=script_ai)
+
+    await uc.execute(_call(transcript="[Оператор]: алло"), task_id="t-1")
+
+    port.update_task_script_check.assert_awaited_once()
+    args = port.update_task_script_check.call_args.args
+    assert args[0] == "t-1"
+    assert args[1] == 2
+    assert args[2] == [
+        "Здравствуйте, чем я вам могу помочь",
+        "До свидания",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_script_check_unknown_id_passes_through_verbatim() -> None:
+    port = _port()
+    port.find_call_record_by_ats_id.return_value = _existing_call_record()
+    port.get_task = AsyncMock(return_value={"scriptViolations": None})
+    port.update_task_script_check = AsyncMock()
+    script_ai = MagicMock()
+    script_ai.check_script = AsyncMock(return_value={
+        "missing": ["mystery_phrase"],
+        "violations_count": 1,
+    })
+    uc = SyncCallToTwentyUseCase(twenty_port=port, script_ai=script_ai)
+
+    await uc.execute(_call(transcript="..."), task_id="t-2")
+
+    args = port.update_task_script_check.call_args.args
+    assert args[2] == ["mystery_phrase"]
