@@ -46,6 +46,7 @@ def _make_orm(
     row.voice_match_score = None
     row.status = status
     row.session_id = None
+    row.twenty_task_id = None
     row.created_at = datetime(2026, 3, 27, 12, 0, 0, tzinfo=UTC)
     return row
 

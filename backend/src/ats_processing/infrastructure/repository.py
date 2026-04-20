@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+import uuid
+
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain.models import CallRecord, CallStatus, SourceType
@@ -53,6 +55,17 @@ class CallRecordRepositoryImpl(CallRecordRepository):
         )
         return [self._to_domain(row) for row in result.scalars()]
 
+    async def set_twenty_task_by_session(
+        self, session_id: uuid.UUID, twenty_task_id: str
+    ) -> bool:
+        result = await self._session.execute(
+            update(CallRecordORM)
+            .where(CallRecordORM.session_id == session_id)
+            .values(twenty_task_id=twenty_task_id)
+        )
+        # execute(update(...)) returns CursorResult; Result stub hides rowcount.
+        return int(getattr(result, "rowcount", 0) or 0) > 0
+
     @staticmethod
     def _to_domain(row: CallRecordORM) -> CallRecord:
         return CallRecord(
@@ -68,6 +81,7 @@ class CallRecordRepositoryImpl(CallRecordRepository):
             voice_match_score=row.voice_match_score,
             status=CallStatus(row.status),
             session_id=row.session_id,
+            twenty_task_id=row.twenty_task_id,
             created_at=row.created_at,
         )
 
@@ -86,6 +100,7 @@ class CallRecordRepositoryImpl(CallRecordRepository):
             voice_match_score=record.voice_match_score,
             status=record.status.value,
             session_id=record.session_id,
+            twenty_task_id=record.twenty_task_id,
             created_at=record.created_at,
         )
 
@@ -102,3 +117,4 @@ class CallRecordRepositoryImpl(CallRecordRepository):
         row.voice_match_score = record.voice_match_score
         row.status = record.status.value
         row.session_id = record.session_id
+        row.twenty_task_id = record.twenty_task_id

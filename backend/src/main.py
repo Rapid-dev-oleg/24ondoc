@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import cast
 
 import structlog
+
+# Route stdlib loggers (e.g. ats2_poller uses logging.getLogger) to stdout
+# so `docker logs` actually captures them. Without this the poller's
+# per-cycle and per-call diagnostics silently vanish and debugging
+# ingestion gaps is impossible.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand
@@ -20,10 +32,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from ai_classification.infrastructure.openrouter_adapter import OpenRouterAdapter
 from ats_processing.application.ats2_poller import ATS2PollerService
 from ats_processing.application.ats2_transcription_mapper import ATS2TranscriptionMapper
+from ats_processing.application.sync_call_to_twenty import SyncCallToTwentyUseCase
 from ats_processing.infrastructure.ats2_client import ATS2AuthManager, ATS2RestClient
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
 from ats_processing.infrastructure.webhook_handler import router as t2_router
 from config import Settings, get_settings
+from reports.infrastructure.http_handler import router as reports_router
 from telegram_ingestion.infrastructure.stt_adapter import GroqSTTAdapter
 from telegram_ingestion.infrastructure.telegram_fastapi import router as tg_router
 from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
@@ -92,6 +106,17 @@ def _create_ats2_poller(
 
     stt_port = GroqSTTAdapter(api_key=settings.groq_api_key)
 
+    # Wire SyncCallToTwentyUseCase so the poller mirrors each processed
+    # call into Twenty CallRecord (with taskRelId) and runs check_script.
+    # Before this wiring, the poller created only the Task — CallRecord
+    # rows came only from the Telegram confirm path.
+    sync_call_uc: SyncCallToTwentyUseCase | None = None
+    if twenty_adapter is not None and settings.twenty_api_key:
+        sync_call_uc = SyncCallToTwentyUseCase(
+            twenty_port=twenty_adapter,
+            script_ai=ai_port,
+        )
+
     poller = ATS2PollerService(
         ats2_client=ats2_client,
         call_repo=call_repo,  # type: ignore[arg-type]
@@ -101,6 +126,7 @@ def _create_ats2_poller(
         stt_port=stt_port,
         redis=redis,
         poll_interval_sec=float(settings.ats2_poll_interval_sec),
+        sync_call_uc=sync_call_uc,
     )
     return poller, auth_manager, ats2_client
 
@@ -133,6 +159,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # STT adapter: Groq Whisper API
     stt_port = GroqSTTAdapter(api_key=settings.groq_api_key)
 
+    # Reports generator (shared between Telegram /stats and /reports iframe).
+    from reports.application.generate_report import GenerateReport
+    generate_report = GenerateReport(
+        twenty_base_url=settings.twenty_base_url,
+        twenty_api_key=settings.twenty_api_key,
+        redis=redis,
+    )
+
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.redis = redis
@@ -140,6 +174,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.twenty_adapter = twenty_adapter
     app.state.stt_port = stt_port
     app.state.settings = settings
+    app.state.generate_report = generate_report
 
     # Register Telegram webhook
     webhook_url = f"{settings.telegram_webhook_base_url}/webhook/telegram"
@@ -156,6 +191,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             BotCommand(command="start", description="Начать работу"),
             BotCommand(command="new_task", description="Создать задачу"),
             BotCommand(command="my_tasks", description="Мои задачи"),
+            BotCommand(command="stats", description="Отчёт за период"),
             BotCommand(command="add_member", description="Добавить участника"),
             BotCommand(command="add_admin", description="Добавить администратора"),
             BotCommand(command="health", description="Здоровье системы"),
@@ -235,9 +271,10 @@ async def db_session_middleware(request: Request, call_next: object) -> Response
 
     async with session_factory() as session:
         async with session.begin():
+            settings = request.app.state.settings
             request.state.db_session = session
             request.state.call_repo = CallRecordRepositoryImpl(session)
-            request.state.t2_webhook_secret = request.app.state.settings.t2_webhook_secret
+            request.state.t2_webhook_secret = settings.t2_webhook_secret
             response: Response = await _call_next(request)
     return response
 
@@ -269,5 +306,6 @@ async def metrics() -> dict[str, str]:
 
 
 # Handlers already define full paths — include WITHOUT extra prefix
-app.include_router(t2_router)  # POST /webhook/t2/call
-app.include_router(tg_router)  # POST /webhook/telegram
+app.include_router(t2_router)      # POST /webhook/t2/call
+app.include_router(tg_router)      # POST /webhook/telegram
+app.include_router(reports_router) # GET /reports/* (iframe dashboard)

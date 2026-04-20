@@ -245,3 +245,266 @@ class OpenRouterAdapter(AIClassificationPort):
 
         logger.error("select_task_fields: all models failed, returning defaults")
         return TaskFieldSelection()
+
+    EXTRACT_LOCATION_PROMPT = """\
+Ты — анализатор транскриптов звонков в техподдержку 24ondoc. \
+Определи торговую точку клиента из диалога.
+
+Верни JSON с полями:
+{
+    "prefix": "<Апполо | Аспект | другое название бренда | null>",
+    "number": "<номер/код точки, например \"32\", \"11\", \"Г.0\", или null>",
+    "address": "<адрес, если назван, например \"Ленина 29\", \"Первый Май Сосновская\", или null>"
+}
+
+Важно:
+- Whisper часто искажает названия. Нормализуй:
+  * \"Поло\", \"Пола\", \"Аполл\", \"Аполлова\", \"Апполова\", \"Алола\" → \"Апполо\"
+  * \"Аспец\", \"Аспек\" → \"Аспект\"
+- Если бренд не назван явно — верни prefix: null (не угадывай).
+- Если не уверен — null для каждого неопределённого поля.
+- Отвечай ТОЛЬКО JSON-объектом, без пояснений."""
+
+    async def extract_location(self, dialogue_text: str) -> dict[str, str | None]:
+        """Извлечь данные о точке из транскрипта звонка.
+
+        Возвращает словарь {"prefix": ..., "number": ..., "address": ...}
+        с опциональными значениями. Все или часть могут быть None.
+        """
+        for model in (self._primary_model, self._fallback_model):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        f"{self._BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self._api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": self.EXTRACT_LOCATION_PROMPT},
+                                {"role": "user", "content": dialogue_text},
+                            ],
+                            "response_format": {"type": "json_object"},
+                        },
+                    )
+                    response.raise_for_status()
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                if not content:
+                    raise ValueError(f"Empty content from model {model}")
+                text_to_parse = content.strip()
+                if text_to_parse.startswith("```"):
+                    text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                parsed = json.loads(text_to_parse)
+                result = {
+                    "prefix": _nullable_str(parsed.get("prefix")),
+                    "number": _nullable_str(parsed.get("number")),
+                    "address": _nullable_str(parsed.get("address")),
+                }
+                logger.info(
+                    "extract_location OK (model=%s): prefix=%s number=%s address=%s",
+                    model,
+                    result["prefix"],
+                    result["number"],
+                    result["address"],
+                )
+                return result
+            except Exception:
+                logger.warning("extract_location failed with model=%s", model, exc_info=True)
+        logger.error("extract_location: all models failed, returning empty")
+        return {"prefix": None, "number": None, "address": None}
+
+
+def _nullable_str(value: object) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s or s.lower() in {"null", "none", "n/a"}:
+        return None
+    return s
+
+
+CHECK_REPEAT_PROMPT = """\
+Ты — аналитик обращений в техподдержку 24ondoc. Определи, является ли новое \
+обращение СЕМАНТИЧЕСКИ тем же, о чём клиент уже обращался ранее.
+
+Правило: совпадение по смыслу = одна и та же сломанная функция/устройство/проблема. \
+Мелкие различия формулировок и лексики не важны. Перефраз — совпадение. \
+Если новое обращение о другой проблеме — не совпадение.
+
+Верни JSON:
+{"matches": ["<id_ранее_поданной_задачи>", ...], "reasoning": "<кратко, зачем>"}
+
+В список `matches` кладёшь id только тех предыдущих задач, что совпадают с новой \
+по смыслу. Отвечай ТОЛЬКО JSON-объектом."""
+
+
+class _OpenRouterRepeatMixin:
+    """Mixin exposing check_repeat_status on OpenRouterAdapter.
+
+    Keeps the big adapter file manageable while sharing the HTTP config.
+    """
+
+
+async def _check_repeat_status_impl(
+    self: "OpenRouterAdapter",
+    new_text: str,
+    recent_tasks: list[dict[str, str]],
+) -> dict[str, object]:
+    """Implementation pulled out so we can re-expose on the adapter below.
+
+    recent_tasks: list of {"id": ..., "title": ..., "description": ...}
+    """
+    if not recent_tasks:
+        return {"matches": [], "reasoning": "no recent tasks"}
+
+    recent_payload = "\n".join(
+        f"- id={t.get('id')}: {t.get('title', '')[:80]} — {t.get('description', '')[:200]}"
+        for t in recent_tasks
+    )
+    user_prompt = (
+        f"Новое обращение:\n{new_text}\n\nПредыдущие задачи этой точки:\n{recent_payload}"
+    )
+
+    for model in (self._primary_model, self._fallback_model):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self._BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": CHECK_REPEAT_PROMPT},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            if not content:
+                raise ValueError(f"Empty content from model {model}")
+            text_to_parse = content.strip()
+            if text_to_parse.startswith("```"):
+                text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(text_to_parse)
+            matches_raw = parsed.get("matches") or []
+            matches = [str(m) for m in matches_raw if m]
+            reasoning = str(parsed.get("reasoning") or "")[:500]
+            logger.info(
+                "check_repeat_status OK (model=%s): matches=%s", model, matches
+            )
+            return {"matches": matches, "reasoning": reasoning}
+        except Exception:
+            logger.warning("check_repeat_status failed with model=%s", model, exc_info=True)
+    logger.error("check_repeat_status: all models failed, returning empty")
+    return {"matches": [], "reasoning": "all models failed"}
+
+
+# Bolt the function onto the adapter class
+OpenRouterAdapter.check_repeat_status = _check_repeat_status_impl  # type: ignore[attr-defined]
+
+
+SCRIPT_PHRASES = (
+    ("greeting", "Приветствие: «Здравствуйте, чем я вам могу помочь»"),
+    ("ask_time", "Запрос времени: «Мне надо время на работу, я вам сообщу как всё будет готово»"),
+    ("fixed", "Подтверждение решения: «Ошибка исправлена, можете работать»"),
+    ("any_more_questions", "Вопрос клиенту: «У вас есть ещё вопросы?»"),
+    ("farewell", "Прощание: «До свидания»"),
+)
+
+SCRIPT_PHRASES_RU: dict[str, str] = {
+    "greeting": "Здравствуйте, чем я вам могу помочь",
+    "ask_time": "Мне надо время на работу, я вам сообщу как всё будет готово",
+    "fixed": "Ошибка исправлена, можете работать",
+    "any_more_questions": "У вас есть ещё вопросы?",
+    "farewell": "До свидания",
+}
+
+CHECK_SCRIPT_PROMPT = """\
+Ты — контролёр соблюдения скрипта разговора в техподдержке 24ondoc.
+Проверь, содержит ли реплика оператора все 5 обязательных фраз:
+
+{phrases}
+
+Правила:
+- Проверяй только реплики ОПЕРАТОРА (строки, начинающиеся с "[Оператор]" или похоже). \
+Реплики клиента игнорируй.
+- Сравнение СЕМАНТИЧЕСКОЕ. Допустим перефраз («добрый день» засчитывается как приветствие).
+- Whisper может искажать слова — если по смыслу подходит, засчитываем.
+
+Верни JSON с массивом отсутствующих фраз (идентификаторы из списка) и счётчиком:
+{{"missing": ["greeting", ...], "violations_count": <int>}}
+
+Если все пять есть, missing — пустой массив. Отвечай ТОЛЬКО JSON-объектом."""
+
+
+async def _check_script_impl(
+    self: "OpenRouterAdapter",
+    dialogue: str,
+) -> dict[str, object]:
+    """Return {"missing": [id], "violations_count": int}.
+
+    `missing` uses the ids from SCRIPT_PHRASES (greeting, ask_time, fixed,
+    any_more_questions, farewell). On total failure returns {"missing": [],
+    "violations_count": 0} — we don't want script-check outages to break task
+    creation.
+    """
+    if not dialogue.strip():
+        all_ids = [k for k, _ in SCRIPT_PHRASES]
+        return {"missing": all_ids, "violations_count": len(all_ids)}
+
+    phrases_text = "\n".join(f"- {pid}: {label}" for pid, label in SCRIPT_PHRASES)
+    system = CHECK_SCRIPT_PROMPT.format(phrases=phrases_text)
+    valid_ids = {k for k, _ in SCRIPT_PHRASES}
+
+    for model in (self._primary_model, self._fallback_model):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self._BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": dialogue},
+                        ],
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            if not content:
+                raise ValueError(f"Empty content from model {model}")
+            text_to_parse = content.strip()
+            if text_to_parse.startswith("```"):
+                text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(text_to_parse)
+            raw_missing = parsed.get("missing") or []
+            missing = [m for m in (str(x) for x in raw_missing) if m in valid_ids]
+            count = parsed.get("violations_count")
+            violations = int(count) if isinstance(count, int) else len(missing)
+            logger.info(
+                "check_script OK (model=%s): missing=%s violations=%d",
+                model, missing, violations,
+            )
+            return {"missing": missing, "violations_count": violations}
+        except Exception:
+            logger.warning("check_script failed with model=%s", model, exc_info=True)
+    logger.error("check_script: all models failed, returning empty")
+    return {"missing": [], "violations_count": 0}
+
+
+OpenRouterAdapter.check_script = _check_script_impl  # type: ignore[attr-defined]

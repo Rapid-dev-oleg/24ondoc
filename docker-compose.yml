@@ -214,6 +214,35 @@ services:
       - frontend
       - backend
 
+  # --- Twenty CRM Worker (BullMQ queue consumer) ---
+  # Required: outgoing webhooks, workflow runs and other async jobs live
+  # in a Redis queue. Without this process they are enqueued but never
+  # fired (user observed: "меняю статус — ничего не приходит").
+  twenty-worker:
+    image: twentycrm/twenty:latest
+    command: ["yarn", "worker:prod"]
+    environment:
+      - SERVER_URL=${TWENTY_SERVER_URL:-https://24ondoc.ru}
+      - FRONT_BASE_URL=${TWENTY_FRONT_BASE_URL:-https://24ondoc.ru}
+      - PG_DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/twenty_db
+      - APP_SECRET=${TWENTY_APP_SECRET}
+      - STORAGE_TYPE=local
+      - STORAGE_LOCAL_PATH=.local-storage
+      - REDIS_URL=redis://redis:6379/2
+      - CACHE_STORAGE_TYPE=redis
+    volumes:
+      - twenty_data:/app/.local-storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      twenty:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - backend
+
   # --- PostgreSQL Backup (daily) ---
   pg-backup:
     image: prodrigestivill/postgres-backup-local:15
