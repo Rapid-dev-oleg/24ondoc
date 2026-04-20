@@ -17,8 +17,16 @@ from ..domain.models import CallRecord, SourceType
 from ..domain.repository import CallRecordRepository
 from .ats2_transcription_mapper import ATS2TranscriptionMapper, ATS2Word
 from .ports import ATS2CallSourcePort
+from .sync_call_to_twenty import SyncCallToTwentyUseCase
 
 _REDIS_LAST_POLL_KEY = "ats2_poller:last_poll_timestamp"
+
+# ATS publishes a call only AFTER the conversation ends (plus some delay).
+# Without an overlap, calls that started in cycle N-1 but became visible
+# only in cycle N fall out of every window (date filter uses call start).
+# 15 min covers the longest calls we observe; duplicates are filtered by
+# `existing is not None: continue` in poll_once.
+_POLL_OVERLAP_MIN = 15
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,7 @@ class ATS2PollerService:
         stt_port: STTPort | None = None,
         redis: AsyncRedis | None = None,
         poll_interval_sec: float = _DEFAULT_POLL_INTERVAL_SEC,
+        sync_call_uc: SyncCallToTwentyUseCase | None = None,
     ) -> None:
         self._ats2_client = ats2_client
         self._call_repo = call_repo
@@ -50,6 +59,7 @@ class ATS2PollerService:
         self._stt_port = stt_port
         self._redis = redis
         self._poll_interval_sec = poll_interval_sec
+        self._sync_call_uc = sync_call_uc
         self._last_poll_timestamp: datetime | None = None
         self._running: bool = False
         self._stop_event: asyncio.Event = asyncio.Event()
@@ -99,9 +109,15 @@ class ATS2PollerService:
     async def poll_once(self) -> None:
         """Один цикл опроса."""
         now = datetime.now(UTC)
+        # Widen `date_from` by _POLL_OVERLAP_MIN so late-published calls
+        # (ATS publishes only after conversation ends; for long calls
+        # the publish moment lands 1-2 cycles after the start time,
+        # and the start-time filter drops them permanently).
+        cursor = self._last_poll_timestamp  # type: ignore[assignment]
+        date_from = cursor - timedelta(minutes=_POLL_OVERLAP_MIN) if cursor else now
         try:
             raw_calls = await self._ats2_client.get_call_records(
-                date_from=self._last_poll_timestamp,  # type: ignore[arg-type]
+                date_from=date_from,
                 date_to=now,
             )
         except Exception:
@@ -192,7 +208,7 @@ class ATS2PollerService:
 
         # AI-анализ + создание задачи в Twenty
         if transcription_text and self._ai_port and self._twenty_port:
-            success = await self._create_task_from_call(
+            task_id = await self._create_task_from_call(
                 call_id=call_id,
                 transcription=transcription_text,
                 caller_phone=caller_phone,
@@ -205,11 +221,25 @@ class ATS2PollerService:
                 call_status=call_status,
                 destination=destination,
             )
-            if success:
+            if task_id:
+                record.twenty_task_id = task_id
                 record.mark_created()
             else:
                 record.mark_error()
             await self._call_repo.save(record)
+
+            # Mirror the call into Twenty CallRecord and link back to the
+            # task — creates the Звонки row the operator sees in CRM,
+            # populates task.callRecordRelId, and (inside sync_call_uc)
+            # runs check_script on the transcript.
+            if task_id and self._sync_call_uc is not None:
+                try:
+                    await self._sync_call_uc.execute(record, task_id=task_id)
+                except Exception:
+                    logger.exception(
+                        "ATS2 Poller: sync_call_uc failed for call %s task %s",
+                        call_id, task_id,
+                    )
 
     async def _create_task_from_call(
         self,
@@ -224,8 +254,8 @@ class ATS2PollerService:
         call_type: str | None = None,
         call_status: str | None = None,
         destination: str | None = None,
-    ) -> bool:
-        """AI-анализ транскрипции → создание задачи в Twenty."""
+    ) -> str | None:
+        """AI-анализ транскрипции → создание задачи в Twenty. Returns task id."""
         assert self._ai_port is not None
         assert self._twenty_port is not None
 
@@ -321,7 +351,7 @@ class ATS2PollerService:
                 vazhnost=vazhnost_value,
             )
             logger.info("ATS2 call %s → Twenty task created: %s", call_id, task.twenty_id)
-            return True
+            return task.twenty_id
         except Exception:
             logger.exception("ATS2 Poller: ошибка создания задачи для %s", call_id)
-            return False
+            return None

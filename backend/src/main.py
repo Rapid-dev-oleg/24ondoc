@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import cast
 
 import structlog
+
+# Route stdlib loggers (e.g. ats2_poller uses logging.getLogger) to stdout
+# so `docker logs` actually captures them. Without this the poller's
+# per-cycle and per-call diagnostics silently vanish and debugging
+# ingestion gaps is impossible.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand
@@ -20,6 +32,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from ai_classification.infrastructure.openrouter_adapter import OpenRouterAdapter
 from ats_processing.application.ats2_poller import ATS2PollerService
 from ats_processing.application.ats2_transcription_mapper import ATS2TranscriptionMapper
+from ats_processing.application.sync_call_to_twenty import SyncCallToTwentyUseCase
 from ats_processing.infrastructure.ats2_client import ATS2AuthManager, ATS2RestClient
 from ats_processing.infrastructure.repository import CallRecordRepositoryImpl
 from ats_processing.infrastructure.webhook_handler import router as t2_router
@@ -93,6 +106,17 @@ def _create_ats2_poller(
 
     stt_port = GroqSTTAdapter(api_key=settings.groq_api_key)
 
+    # Wire SyncCallToTwentyUseCase so the poller mirrors each processed
+    # call into Twenty CallRecord (with taskRelId) and runs check_script.
+    # Before this wiring, the poller created only the Task — CallRecord
+    # rows came only from the Telegram confirm path.
+    sync_call_uc: SyncCallToTwentyUseCase | None = None
+    if twenty_adapter is not None and settings.twenty_api_key:
+        sync_call_uc = SyncCallToTwentyUseCase(
+            twenty_port=twenty_adapter,
+            script_ai=ai_port,
+        )
+
     poller = ATS2PollerService(
         ats2_client=ats2_client,
         call_repo=call_repo,  # type: ignore[arg-type]
@@ -102,6 +126,7 @@ def _create_ats2_poller(
         stt_port=stt_port,
         redis=redis,
         poll_interval_sec=float(settings.ats2_poll_interval_sec),
+        sync_call_uc=sync_call_uc,
     )
     return poller, auth_manager, ats2_client
 
