@@ -131,115 +131,102 @@ class TwentyRestAdapter(TwentyCRMPort):
         data = response.json().get("data", {})
         return dict(data.get("createPerson", data))
 
-    async def update_person_location_fields(
-        self,
-        person_id: str,
-        *,
-        location_prefix: str | None = None,
-        location_number: str | None = None,
-        location_address: str | None = None,
-    ) -> None:
-        """Заполнить пустые location-поля на Person (не перетирает уже заполненные).
+    async def find_locations_by_phone(self, phone: str) -> list[dict[str, Any]]:
+        """Все Location, у которых данный телефон совпадает с primary либо
+        есть в additionalPhones jsonb.
 
-        Вызывающий код должен предварительно получить текущего Person через
-        find_person_by_phone, чтобы решить, какие поля действительно пусты.
-        Здесь мы просто отправляем патч — если поле пустое, Twenty его заполнит.
-        """
-        patch: dict[str, Any] = {}
-        if location_prefix is not None:
-            patch["locationPrefix"] = location_prefix
-        if location_number is not None:
-            patch["locationNumber"] = location_number
-        if location_address is not None:
-            patch["locationAddress"] = location_address
-        if not patch:
-            return
-        response = await self._client.patch(f"/rest/people/{person_id}", json=patch)
-        if response.status_code >= 400:
-            logger.error(
-                "Twenty update_person_location_fields failed: %s %s",
-                response.status_code,
-                response.text[:300],
-            )
-            response.raise_for_status()
-
-    async def find_location_by_phone(self, phone: str) -> dict[str, Any] | None:
-        """Найти точку по телефону (custom object Location).
-
-        Location.phone — PHONES-композит; ищем по национальной части
-        `phone.primaryPhoneNumber` так же, как у Person.
+        Twenty REST `filter` не умеет искать внутри jsonb, поэтому делаем
+        два прохода: точный поиск по primary + локальная фильтрация
+        дополнительных номеров (читаем не более 100 за раз).
         """
         national = normalize_ru_phone(phone)
         if not national:
-            return None
+            return []
+        results: list[dict[str, Any]] = []
         try:
+            # Pass 1: primary phone — fast path, indexed.
             response = await self._client.get(
                 "/rest/locations",
                 params={"filter": f"phone.primaryPhoneNumber[eq]:{national}"},
             )
             response.raise_for_status()
-            items = response.json().get("data", {}).get("locations", [])
-            return items[0] if items else None
+            primary = response.json().get("data", {}).get("locations", []) or []
+            results.extend(primary)
         except httpx.HTTPError:
-            logger.exception("find_location_by_phone failed phone=%s", national)
-            return None
+            logger.exception("find_locations_by_phone primary failed phone=%s", national)
 
-    async def create_location(
-        self,
-        phone: str,
-        *,
-        prefix: str | None = None,
-        number: str | None = None,
-        address: str | None = None,
-    ) -> dict[str, Any]:
-        """Создать Location. Обязательный ключ — phone (PHONES-композит)."""
-        national = normalize_ru_phone(phone)
-        if not national:
-            raise ValueError(f"invalid phone: {phone!r}")
-        payload: dict[str, Any] = {"phone": to_phones_composite(national)}
-        if prefix:
-            payload["prefix"] = prefix
-        if number:
-            payload["number"] = number
-        if address:
-            payload["locationAddress"] = address
-        response = await self._client.post("/rest/locations", json=payload)
-        if response.status_code >= 400:
-            logger.error(
-                "Twenty create_location failed: %s %s",
-                response.status_code,
-                response.text[:300],
-            )
-        response.raise_for_status()
-        data = response.json().get("data", {})
-        return dict(data.get("createLocation", data))
-
-    async def update_location(
-        self,
-        location_id: str,
-        *,
-        prefix: str | None = None,
-        number: str | None = None,
-        address: str | None = None,
-    ) -> None:
-        """Обновить отдельные поля Location (только переданные параметры)."""
-        patch: dict[str, Any] = {}
-        if prefix is not None:
-            patch["prefix"] = prefix
-        if number is not None:
-            patch["number"] = number
-        if address is not None:
-            patch["locationAddress"] = address
-        if not patch:
-            return
-        response = await self._client.patch(f"/rest/locations/{location_id}", json=patch)
-        if response.status_code >= 400:
-            logger.error(
-                "Twenty update_location failed: %s %s",
-                response.status_code,
-                response.text[:300],
+        # Pass 2: scan recent locations and check additionalPhones locally.
+        # Cheap because there are O(hundreds) of locations, not millions.
+        try:
+            seen_ids = {loc.get("id") for loc in results}
+            response = await self._client.get(
+                "/rest/locations",
+                params={"limit": 100},
             )
             response.raise_for_status()
+            for loc in response.json().get("data", {}).get("locations", []) or []:
+                if loc.get("id") in seen_ids:
+                    continue
+                additional = ((loc.get("phone") or {}).get("additionalPhones")) or []
+                for ap in additional:
+                    raw = ap.get("number") if isinstance(ap, dict) else ap
+                    if normalize_ru_phone(str(raw)) == national:
+                        results.append(loc)
+                        break
+        except httpx.HTTPError:
+            logger.exception("find_locations_by_phone additional failed phone=%s", national)
+        return results
+
+    async def find_location_by_display_name(
+        self, display_name: str
+    ) -> dict[str, Any] | None:
+        """Найти Location по уникальному displayName (используется AI-резолвом)."""
+        if not display_name:
+            return None
+        try:
+            response = await self._client.get(
+                "/rest/locations",
+                params={"filter": f"displayName[eq]:{display_name}"},
+            )
+            response.raise_for_status()
+            items = response.json().get("data", {}).get("locations", []) or []
+            return items[0] if items else None
+        except httpx.HTTPError:
+            logger.exception("find_location_by_display_name failed name=%s", display_name)
+            return None
+
+    async def list_location_display_names(self) -> list[str]:
+        """Все displayName из Twenty Location. Используется AI-промптом как enum.
+
+        Возвращаем сразу до 200 (текущая база — 402 точки, REST по умолчанию
+        отдаёт страницу 60; берём страницы пока есть данные).
+        """
+        names: list[str] = []
+        cursor: str | None = None
+        # Hard guard: we don't expect > 5 pages of 100 in a workspace.
+        for _ in range(10):
+            params: dict[str, Any] = {"limit": 100}
+            if cursor:
+                params["starting_after"] = cursor
+            try:
+                response = await self._client.get("/rest/locations", params=params)
+                response.raise_for_status()
+                page = response.json().get("data", {}).get("locations", []) or []
+            except httpx.HTTPError:
+                logger.exception("list_location_display_names failed")
+                break
+            if not page:
+                break
+            for loc in page:
+                dn = (loc.get("displayName") or "").strip()
+                if dn:
+                    names.append(dn)
+            if len(page) < 100:
+                break
+            cursor = page[-1].get("id")
+            if not cursor:
+                break
+        return names
 
     async def find_call_record_by_ats_id(self, ats_call_id: str) -> dict[str, Any] | None:
         """Найти Twenty CallRecord по внешнему ATS ID (для upsert)."""
@@ -346,19 +333,6 @@ class TwentyRestAdapter(TwentyCRMPort):
             )
             response.raise_for_status()
 
-    async def link_person_to_location(self, person_id: str, location_id: str) -> None:
-        """Прикрепить Person к Location через relation locationRelId."""
-        response = await self._client.patch(
-            f"/rest/people/{person_id}", json={"locationRelId": location_id}
-        )
-        if response.status_code >= 400:
-            logger.error(
-                "Twenty link_person_to_location failed: %s %s",
-                response.status_code,
-                response.text[:300],
-            )
-            response.raise_for_status()
-
     async def find_recent_tasks_by_location_id(
         self, location_id: str, since: datetime, limit: int = 10
     ) -> list[dict[str, Any]]:
@@ -404,52 +378,177 @@ class TwentyRestAdapter(TwentyCRMPort):
         except httpx.HTTPError as e:
             raise RuntimeError(f"Failed to create person: {e}") from e
 
+    # --- Metadata API ---
+    # The REST `/rest/metadata/*` surface is deliberately limited: ObjectForUpdate
+    # only exposes `isActive`, FieldForUpdate hides `isUnique` and
+    # `isLabelSyncedWithName`. Everything below talks to GraphQL `/metadata`,
+    # which exposes the full surface (skipNameField on create, isUnique on
+    # fields, labelIdentifierFieldMetadataId on objects).
+
+    async def _gql_metadata(
+        self, query: str, variables: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = await self._client.post(
+            "/metadata",
+            json={"query": query, "variables": variables},
+        )
+        response.raise_for_status()
+        body = response.json()
+        if body.get("errors"):
+            logger.error("Twenty GraphQL metadata error: %s", body["errors"])
+            raise RuntimeError(f"Twenty metadata error: {body['errors']}")
+        return dict(body.get("data") or {})
+
+    _OBJECT_FIELDS_FRAGMENT = """
+        id
+        nameSingular
+        namePlural
+        labelSingular
+        labelPlural
+        icon
+        isCustom
+        isActive
+        isSystem
+        isLabelSyncedWithName
+        labelIdentifierFieldMetadataId
+        fieldsList {
+            id
+            name
+            label
+            type
+            isCustom
+            isSystem
+            isActive
+            isNullable
+            isUnique
+            isLabelSyncedWithName
+            options
+            settings
+        }
+    """
+
     async def list_objects_metadata(self) -> list[dict[str, Any]]:
-        """Вернуть сырые описания объектов Twenty (с вложенными fields).
+        """Все объекты + их поля. Через GraphQL `/metadata`.
 
-        Используется bootstrap-модулем для idempotent создания
-        кастомных объектов и полей.
+        В отличие от REST `/rest/metadata/objects`, здесь возвращаются
+        labelIdentifierFieldMetadataId, isLabelSyncedWithName, isUnique —
+        что нужно bootstrap-у.
         """
-        response = await self._client.get("/rest/metadata/objects")
-        response.raise_for_status()
-        return list(response.json().get("data", {}).get("objects", []))
+        query = (
+            "query Objects($paging: CursorPaging!, $filter: ObjectFilter!) {"
+            "  objects(paging: $paging, filter: $filter) {"
+            "    edges { node {"
+            + self._OBJECT_FIELDS_FRAGMENT
+            + "    } } } }"
+        )
+        data = await self._gql_metadata(
+            query, {"paging": {"first": 200}, "filter": {}}
+        )
+        edges = ((data.get("objects") or {}).get("edges")) or []
+        objects: list[dict[str, Any]] = []
+        for edge in edges:
+            node = dict(edge.get("node") or {})
+            # Normalize: legacy callers expect `fields` (flat list)
+            node["fields"] = list(node.pop("fieldsList", None) or [])
+            objects.append(node)
+        return objects
 
-    async def create_object_metadata(self, spec: dict[str, Any]) -> dict[str, Any]:
-        """Создать новый кастомный Object в Twenty.
+    async def gql_create_object(
+        self,
+        *,
+        name_singular: str,
+        name_plural: str,
+        label_singular: str,
+        label_plural: str,
+        description: str = "",
+        icon: str = "IconBuilding",
+        skip_name_field: bool = False,
+        is_label_synced_with_name: bool = False,
+    ) -> dict[str, Any]:
+        """Создать кастомный объект через `createOneObject`.
 
-        spec keys: nameSingular, namePlural, labelSingular, labelPlural,
-        icon, description, isLabelSyncedWithName (опц.).
+        skip_name_field=True предотвращает автогенерацию дефолтного TEXT-поля
+        `name`. Тогда первое создаваемое нами поле станет
+        labelIdentifierFieldMetadataId объекта.
         """
-        response = await self._client.post("/rest/metadata/objects", json=spec)
-        if response.status_code >= 400:
-            logger.error(
-                "Twenty create_object_metadata failed: %s %s spec=%s",
-                response.status_code,
-                response.text[:300],
-                spec,
-            )
-        response.raise_for_status()
-        payload = response.json().get("data", {})
-        return dict(payload.get("createObject", payload))
-
-    async def create_field_metadata(self, spec: dict[str, Any]) -> dict[str, Any]:
-        """Создать кастомное поле на существующем Object.
-
-        spec keys: objectMetadataId, name, label, type, description,
-        isNullable, options (для SELECT), settings (для RELATION: relationType,
-        targetObjectMetadataId, targetFieldLabelPlural, targetFieldLabelSingular).
+        mutation = """
+        mutation CreateObject($input: CreateOneObjectInput!) {
+          createOneObject(input: $input) { id nameSingular labelIdentifierFieldMetadataId }
+        }
         """
-        response = await self._client.post("/rest/metadata/fields", json=spec)
-        if response.status_code >= 400:
-            logger.error(
-                "Twenty create_field_metadata failed: %s %s spec=%s",
-                response.status_code,
-                response.text[:300],
-                spec,
-            )
-        response.raise_for_status()
-        payload = response.json().get("data", {})
-        return dict(payload.get("createField", payload))
+        variables = {
+            "input": {
+                "object": {
+                    "nameSingular": name_singular,
+                    "namePlural": name_plural,
+                    "labelSingular": label_singular,
+                    "labelPlural": label_plural,
+                    "description": description,
+                    "icon": icon,
+                    "skipNameField": skip_name_field,
+                    "isLabelSyncedWithName": is_label_synced_with_name,
+                }
+            }
+        }
+        data = await self._gql_metadata(mutation, variables)
+        return dict(data.get("createOneObject") or {})
+
+    async def gql_update_object(
+        self, object_id: str, update: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Обновить objectMetadata. Поддерживает labelIdentifierFieldMetadataId,
+        labelSingular/Plural, isLabelSyncedWithName и т.п.
+        """
+        mutation = """
+        mutation UpdateObject($input: UpdateOneObjectInput!) {
+          updateOneObject(input: $input) {
+            id nameSingular labelIdentifierFieldMetadataId isLabelSyncedWithName
+          }
+        }
+        """
+        data = await self._gql_metadata(
+            mutation, {"input": {"id": object_id, "update": update}}
+        )
+        return dict(data.get("updateOneObject") or {})
+
+    async def gql_create_field(self, spec: dict[str, Any]) -> dict[str, Any]:
+        """Создать поле через `createOneField`. Принимает полный CreateFieldInput:
+        type, name, label, objectMetadataId, isNullable, isUnique,
+        isLabelSyncedWithName, options, settings, relationCreationPayload.
+        """
+        mutation = """
+        mutation CreateField($input: CreateOneFieldMetadataInput!) {
+          createOneField(input: $input) {
+            id name label type isUnique isNullable isLabelSyncedWithName
+          }
+        }
+        """
+        data = await self._gql_metadata(mutation, {"input": {"field": spec}})
+        return dict(data.get("createOneField") or {})
+
+    async def gql_update_field(
+        self, field_id: str, update: dict[str, Any]
+    ) -> dict[str, Any]:
+        mutation = """
+        mutation UpdateField($input: UpdateOneFieldMetadataInput!) {
+          updateOneField(input: $input) {
+            id name label isUnique isNullable isLabelSyncedWithName isActive
+          }
+        }
+        """
+        data = await self._gql_metadata(
+            mutation, {"input": {"id": field_id, "update": update}}
+        )
+        return dict(data.get("updateOneField") or {})
+
+    async def gql_delete_field(self, field_id: str) -> bool:
+        mutation = """
+        mutation DeleteField($input: DeleteOneFieldInput!) {
+          deleteOneField(input: $input) { id }
+        }
+        """
+        data = await self._gql_metadata(mutation, {"input": {"id": field_id}})
+        return bool((data.get("deleteOneField") or {}).get("id"))
 
     async def fetch_task_field_options(self) -> dict[str, list[dict[str, str]]]:
         """Запросить актуальные списки kategoriya и vazhnost из метаданных Twenty."""

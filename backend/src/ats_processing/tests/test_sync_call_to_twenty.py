@@ -35,8 +35,8 @@ def _port() -> Any:
     p.find_call_record_by_ats_id = AsyncMock(return_value=None)
     p.find_person_by_phone = AsyncMock(return_value=None)
     p.create_person_with_phone = AsyncMock(return_value={"id": "person-7"})
-    p.find_location_by_phone = AsyncMock(return_value=None)
-    p.create_location = AsyncMock(return_value={"id": "loc-7"})
+    # Каталог точек read-only: новые Location не создаём, только подбираем по телефону.
+    p.find_locations_by_phone = AsyncMock(return_value=[{"id": "loc-7"}])
     p.create_call_record = AsyncMock(return_value={"id": "call-twenty-7"})
     p.update_call_record = AsyncMock()
     return p
@@ -69,7 +69,7 @@ async def test_new_call_without_phone_still_syncs_without_relations() -> None:
     result = await uc.execute(_call(phone=None))
 
     port.find_person_by_phone.assert_not_called()
-    port.find_location_by_phone.assert_not_called()
+    port.find_locations_by_phone.assert_not_called()
     assert result.created is True
     kwargs = port.create_call_record.call_args.kwargs
     assert kwargs.get("person_rel_id") is None

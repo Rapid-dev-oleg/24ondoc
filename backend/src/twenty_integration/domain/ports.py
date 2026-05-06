@@ -56,40 +56,24 @@ class TwentyCRMPort(ABC):
     ) -> dict[str, object]: ...
 
     @abstractmethod
-    async def update_person_location_fields(
-        self,
-        person_id: str,
-        *,
-        location_prefix: str | None = None,
-        location_number: str | None = None,
-        location_address: str | None = None,
-    ) -> None: ...
+    async def find_locations_by_phone(self, phone: str) -> list[dict[str, object]]:
+        """Все Точки, у которых данный номер совпадает с primary или additional.
+
+        Возвращает список (может быть пуст или содержать несколько точек —
+        один номер легально привязан к нескольким точкам, например выездной
+        менеджер). Никогда не создаёт.
+        """
+        ...
 
     @abstractmethod
-    async def find_location_by_phone(self, phone: str) -> dict[str, object] | None: ...
+    async def find_location_by_display_name(
+        self, display_name: str
+    ) -> dict[str, object] | None: ...
 
     @abstractmethod
-    async def create_location(
-        self,
-        phone: str,
-        *,
-        prefix: str | None = None,
-        number: str | None = None,
-        address: str | None = None,
-    ) -> dict[str, object]: ...
-
-    @abstractmethod
-    async def update_location(
-        self,
-        location_id: str,
-        *,
-        prefix: str | None = None,
-        number: str | None = None,
-        address: str | None = None,
-    ) -> None: ...
-
-    @abstractmethod
-    async def link_person_to_location(self, person_id: str, location_id: str) -> None: ...
+    async def list_location_display_names(self) -> list[str]:
+        """Каталог имён точек для AI-extract. Возвращает все displayName."""
+        ...
 
     @abstractmethod
     async def find_recent_tasks_by_location_id(

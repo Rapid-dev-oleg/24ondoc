@@ -1,9 +1,13 @@
 """Twenty schema bootstrap — idempotent creation of custom objects and fields.
 
 Declarative description of objects/fields the app depends on (Location,
-CallRecord, TaskLog + location/script/escalation fields on Task & Person).
-`ensure_twenty_schema` lists existing metadata and creates only what's
-missing. Safe to re-run.
+CallRecord, TaskLog + script/escalation fields on Task). `ensure_twenty_schema`
+lists existing metadata and creates only what's missing, then patches anything
+whose flags drifted from the spec (isNullable, isUnique). Safe to re-run.
+
+Talks to Twenty GraphQL `/metadata` (not REST `/rest/metadata/*`) — the latter
+is read-mostly and hides isUnique / isLabelSyncedWithName /
+labelIdentifierFieldMetadataId / skipNameField.
 
 Usage:
     from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
@@ -41,6 +45,10 @@ class FieldSpec:
     type: FieldType
     description: str = ""
     is_nullable: bool = True
+    is_unique: bool = False
+    # When true, the object's labelIdentifierFieldMetadataId is repointed at
+    # this field after creation — its value becomes the record's display name.
+    is_label_identifier: bool = False
     options: tuple[dict[str, str], ...] = ()
     relation_target: str | None = None
     relation_type: Literal["MANY_TO_ONE", "ONE_TO_MANY"] = "MANY_TO_ONE"
@@ -58,6 +66,9 @@ class ObjectSpec:
     label_plural: str
     description: str = ""
     icon: str = "IconBuilding"
+    # When true, Twenty will NOT auto-create the default `name` TEXT field.
+    # Use this when you provide your own label-identifier field (e.g. Location.displayName).
+    skip_name_field: bool = False
     fields: tuple[FieldSpec, ...] = field(default_factory=tuple)
 
 
@@ -70,17 +81,37 @@ LOCATION = ObjectSpec(
     name_plural="locations",
     label_singular="Точка",
     label_plural="Точки",
-    description="Торговая точка клиента (Апполо 32, Аспект 10 и т.п.). Ключ — телефон.",
+    description="Торговая точка клиента (Аполо 02, Аспект 25 и т.п.). Заводится из xlsx-каталога; имя точки уникально.",
     icon="IconMapPin",
+    # Twenty's default `name` field is the label-identifier and its label is
+    # not editable in UI. We want our own field "Имя точки" with controlled
+    # uniqueness and a Russian label.
+    skip_name_field=True,
     fields=(
-        # PHONES — composite type so Twenty itself normalizes numbers;
-        # any write passes through libphonenumber (primaryPhoneNumber is
-        # the national part without calling code).
-        FieldSpec("phone", "Телефон", "PHONES", is_nullable=False),
-        FieldSpec("prefix", "Бренд", "TEXT", description="Апполо / Аспект / другой"),
+        # Уникальное человекочитаемое имя точки — «Аполо 02», «Аспект 25».
+        # Используется как label-identifier (после создания UPDATE на объекте).
+        FieldSpec(
+            "displayName",
+            "Имя точки",
+            "TEXT",
+            description="Уникальное имя точки в формате «{Бренд} {номер}».",
+            is_nullable=False,
+            is_unique=True,
+            is_label_identifier=True,
+        ),
+        FieldSpec("prefix", "Бренд", "TEXT", description="Аполо / Аспект / другой"),
         FieldSpec("number", "Номер точки", "TEXT"),
-        # NOTE: `address` conflicts with Twenty's built-in ADDRESS composite.
+        # `address` conflicts with Twenty's built-in ADDRESS composite name.
         FieldSpec("locationAddress", "Адрес", "TEXT"),
+        # PHONES — composite type so Twenty itself normalizes numbers.
+        # Nullable: 346 точек из xlsx идут без телефона.
+        FieldSpec("phone", "Телефон", "PHONES", is_nullable=True),
+        FieldSpec(
+            "anydeskId",
+            "AnyDesk ID",
+            "TEXT",
+            description="Идентификатор удалённого доступа AnyDesk.",
+        ),
     ),
 )
 
@@ -162,19 +193,14 @@ TASK_LOG = ObjectSpec(
     ),
 )
 
-# Custom fields to add to EXISTING objects (task, person).
-# Relations are defined after the target object exists.
+# Custom fields to add to EXISTING objects (task only).
+# Person.location* кэш-поля и Person.locationRel были удалены при переходе
+# на N:M phone↔location (см. plan + миграцию scripts/migrate_drop_legacy_fields.py).
 TASK_EXTRA_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("parentTaskId", "ID родительской задачи", "TEXT",
               description="Ссылка на задачу, повтором которой является эта."),
     FieldSpec("scriptViolations", "Нарушений скрипта", "NUMBER"),
     FieldSpec("scriptMissing", "Отсутствующие фразы", "TEXT"),
-)
-
-PERSON_EXTRA_FIELDS: tuple[FieldSpec, ...] = (
-    FieldSpec("locationPrefix", "Бренд (кэш)", "TEXT"),
-    FieldSpec("locationNumber", "Номер точки (кэш)", "TEXT"),
-    FieldSpec("locationAddress", "Адрес (кэш)", "TEXT"),
 )
 
 # Relation specs — added AFTER both target & source objects are present.
@@ -184,12 +210,6 @@ TASK_RELATIONS: tuple[FieldSpec, ...] = (
     FieldSpec(
         "locationRel", "Точка", "RELATION",
         relation_target="location", reverse_label="Задачи точки",
-    ),
-)
-PERSON_RELATIONS: tuple[FieldSpec, ...] = (
-    FieldSpec(
-        "locationRel", "Точка", "RELATION",
-        relation_target="location", reverse_label="Контакты точки",
     ),
 )
 TASKLOG_RELATIONS: tuple[FieldSpec, ...] = (
@@ -225,17 +245,29 @@ class BootstrapReport:
     objects_existing: list[str] = field(default_factory=list)
     fields_created: list[str] = field(default_factory=list)  # "object.field"
     fields_existing: list[str] = field(default_factory=list)
+    fields_patched: list[str] = field(default_factory=list)
+    label_identifiers_set: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
-def _field_spec_to_payload(spec: FieldSpec, object_id: str, objects_by_name: dict[str, str]) -> dict[str, Any]:
+def _create_field_input(
+    spec: FieldSpec,
+    object_id: str,
+    objects_by_name: dict[str, str],
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "objectMetadataId": object_id,
         "name": spec.name,
         "label": spec.label,
         "type": spec.type,
         "isNullable": spec.is_nullable,
+        # We control labels explicitly (Russian), so they should NEVER be
+        # auto-derived from `name`. Without this, Twenty UI hides the label
+        # editor for the field and reverts label to the camelCased name.
+        "isLabelSyncedWithName": False,
     }
+    if spec.is_unique:
+        payload["isUnique"] = True
     if spec.description:
         payload["description"] = spec.description
     if spec.type == "SELECT" and spec.options:
@@ -253,101 +285,144 @@ def _field_spec_to_payload(spec: FieldSpec, object_id: str, objects_by_name: dic
         payload["relationCreationPayload"] = {
             "type": spec.relation_type,
             "targetObjectMetadataId": target_id,
-            # Twenty requires both label and icon for the reverse relation field.
-            # We require reverse_label to be explicit so it doesn't collide with
-            # other reverse relations already attached to the target object.
             "targetFieldLabel": spec.reverse_label or f"{spec.label} ↔",
             "targetFieldIcon": spec.reverse_icon,
         }
     return payload
 
 
-async def ensure_twenty_schema(adapter: Any) -> BootstrapReport:
-    """Идемпотентно создаёт в Twenty отсутствующие объекты и поля.
+def _field_needs_patch(existing: dict[str, Any], spec: FieldSpec) -> dict[str, Any]:
+    """Detect drift between existing field and spec for properties we own."""
+    patch: dict[str, Any] = {}
+    if existing.get("isNullable") != spec.is_nullable:
+        patch["isNullable"] = spec.is_nullable
+    # Only flip uniqueness false → true automatically; flipping true → false
+    # could mask data corruption, so leave it for manual correction.
+    if spec.is_unique and not existing.get("isUnique"):
+        patch["isUnique"] = True
+    if existing.get("isLabelSyncedWithName"):
+        # We always want the label decoupled from `name` so it can be edited.
+        patch["isLabelSyncedWithName"] = False
+    if existing.get("label") != spec.label:
+        patch["label"] = spec.label
+    return patch
 
-    Порядок:
-      1. Забираем текущие objects+fields.
-      2. Создаём отсутствующие кастомные объекты (Location, CallRecord, TaskLog).
-      3. Добавляем недостающие НЕ-relation поля на всех нужных объектах.
-      4. Повторно забираем metadata (появились новые ID).
-      5. Добавляем relation-поля.
+
+async def ensure_twenty_schema(adapter: Any) -> BootstrapReport:
+    """Idempotent metadata sync: create missing objects/fields, patch drift.
+
+    Steps:
+      1. Pull current objects+fields via GraphQL `/metadata`.
+      2. Create missing custom objects (Location, CallRecord, TaskLog).
+      3. Create missing non-relation fields on every target object.
+      4. Set Object.labelIdentifierFieldMetadataId for objects whose spec has
+         a field marked `is_label_identifier=True`.
+      5. Patch drift on existing fields (isNullable, isUnique, label).
+      6. Re-fetch metadata so relation targets have IDs.
+      7. Create missing relation fields.
     """
     report = BootstrapReport()
 
     objects = await adapter.list_objects_metadata()
     objects_by_name: dict[str, dict[str, Any]] = {o["nameSingular"]: o for o in objects}
 
-    # ---- Шаг 2: создать отсутствующие кастомные объекты ----
+    # ---- Step 2: create missing custom objects ----
     for spec in (LOCATION, CALL_RECORD, TASK_LOG):
         if spec.name_singular in objects_by_name:
             report.objects_existing.append(spec.name_singular)
             continue
         try:
-            created = await adapter.create_object_metadata(
-                {
-                    "nameSingular": spec.name_singular,
-                    "namePlural": spec.name_plural,
-                    "labelSingular": spec.label_singular,
-                    "labelPlural": spec.label_plural,
-                    "description": spec.description,
-                    "icon": spec.icon,
-                    "isLabelSyncedWithName": False,
-                }
+            created = await adapter.gql_create_object(
+                name_singular=spec.name_singular,
+                name_plural=spec.name_plural,
+                label_singular=spec.label_singular,
+                label_plural=spec.label_plural,
+                description=spec.description,
+                icon=spec.icon,
+                skip_name_field=spec.skip_name_field,
+                is_label_synced_with_name=False,
             )
             report.objects_created.append(spec.name_singular)
-            # The created payload usually contains id; stash it so following
-            # field creations don't need another GET round-trip.
             objects_by_name[spec.name_singular] = {
                 "id": created.get("id", ""),
                 "nameSingular": spec.name_singular,
+                "labelIdentifierFieldMetadataId": created.get(
+                    "labelIdentifierFieldMetadataId"
+                ),
                 "fields": [],
             }
         except Exception as exc:  # pragma: no cover — surfaced in report
             report.errors.append(f"create_object({spec.name_singular}): {exc}")
 
-    # ---- Шаг 3: добавить не-relation поля ----
-    # Map: object_nameSingular -> (ObjectSpec or None if reusing existing) -> list of extra non-relation fields
-    extras_plan: list[tuple[str, tuple[FieldSpec, ...]]] = [
-        (LOCATION.name_singular, LOCATION.fields),
-        (CALL_RECORD.name_singular, CALL_RECORD.fields),
-        (TASK_LOG.name_singular, TASK_LOG.fields),
-        ("task", TASK_EXTRA_FIELDS),
-        ("person", PERSON_EXTRA_FIELDS),
+    # ---- Step 3: create missing non-relation fields ----
+    extras_plan: list[tuple[ObjectSpec | None, str, tuple[FieldSpec, ...]]] = [
+        (LOCATION, LOCATION.name_singular, LOCATION.fields),
+        (CALL_RECORD, CALL_RECORD.name_singular, CALL_RECORD.fields),
+        (TASK_LOG, TASK_LOG.name_singular, TASK_LOG.fields),
+        (None, "task", TASK_EXTRA_FIELDS),
     ]
 
     object_id_lookup = {name: obj.get("id", "") for name, obj in objects_by_name.items()}
+    # Track the id of label-identifier fields we (re)create — used in step 4.
+    new_label_identifiers: dict[str, str] = {}
 
-    for obj_name, specs in extras_plan:
+    for owning_spec, obj_name, specs in extras_plan:
         obj = objects_by_name.get(obj_name)
         if obj is None:
             report.errors.append(f"target object {obj_name!r} not found")
             continue
         obj_id = obj.get("id", "")
-        existing_field_names = {f.get("name") for f in obj.get("fields", [])}
+        existing_fields = {f.get("name"): f for f in (obj.get("fields") or [])}
         for f_spec in specs:
             if f_spec.type == "RELATION":
-                continue  # handled in step 5
+                continue  # handled in step 7
             key = f"{obj_name}.{f_spec.name}"
-            if f_spec.name in existing_field_names:
+            existing = existing_fields.get(f_spec.name)
+            if existing:
                 report.fields_existing.append(key)
+                # Drift patch
+                patch = _field_needs_patch(existing, f_spec)
+                if patch:
+                    try:
+                        await adapter.gql_update_field(existing["id"], patch)
+                        report.fields_patched.append(f"{key}({','.join(patch)})")
+                    except Exception as exc:
+                        report.errors.append(f"update_field({key}): {exc}")
+                if f_spec.is_label_identifier:
+                    new_label_identifiers[obj_name] = existing["id"]
                 continue
             try:
-                await adapter.create_field_metadata(
-                    _field_spec_to_payload(f_spec, obj_id, object_id_lookup)
+                created = await adapter.gql_create_field(
+                    _create_field_input(f_spec, obj_id, object_id_lookup)
                 )
                 report.fields_created.append(key)
+                if f_spec.is_label_identifier and created.get("id"):
+                    new_label_identifiers[obj_name] = created["id"]
             except Exception as exc:
                 report.errors.append(f"create_field({key}): {exc}")
 
-    # ---- Шаг 4: refresh metadata so relation targets have IDs ----
+    # ---- Step 4: repoint labelIdentifierFieldMetadataId where needed ----
+    for obj_name, lid_id in new_label_identifiers.items():
+        obj = objects_by_name.get(obj_name) or {}
+        current = obj.get("labelIdentifierFieldMetadataId")
+        if current == lid_id:
+            continue
+        try:
+            await adapter.gql_update_object(
+                obj["id"], {"labelIdentifierFieldMetadataId": lid_id}
+            )
+            report.label_identifiers_set.append(f"{obj_name} -> {lid_id}")
+        except Exception as exc:
+            report.errors.append(f"set_label_identifier({obj_name}): {exc}")
+
+    # ---- Step 5: refresh metadata so relation targets have IDs ----
     objects = await adapter.list_objects_metadata()
     objects_by_name = {o["nameSingular"]: o for o in objects}
     object_id_lookup = {name: obj.get("id", "") for name, obj in objects_by_name.items()}
 
-    # ---- Шаг 5: relation fields ----
+    # ---- Step 6: relation fields ----
     relations_plan: list[tuple[str, tuple[FieldSpec, ...]]] = [
         ("task", TASK_RELATIONS),
-        ("person", PERSON_RELATIONS),
         (TASK_LOG.name_singular, TASKLOG_RELATIONS),
         (CALL_RECORD.name_singular, CALLRECORD_RELATIONS),
     ]
@@ -364,17 +439,19 @@ async def ensure_twenty_schema(adapter: Any) -> BootstrapReport:
                 report.fields_existing.append(key)
                 continue
             try:
-                await adapter.create_field_metadata(
-                    _field_spec_to_payload(f_spec, obj_id, object_id_lookup)
+                await adapter.gql_create_field(
+                    _create_field_input(f_spec, obj_id, object_id_lookup)
                 )
                 report.fields_created.append(key)
             except Exception as exc:
                 report.errors.append(f"create_field({key}): {exc}")
 
     logger.info(
-        "bootstrap done: objects_created=%d fields_created=%d errors=%d",
+        "bootstrap done: objects_created=%d fields_created=%d fields_patched=%d labels_set=%d errors=%d",
         len(report.objects_created),
         len(report.fields_created),
+        len(report.fields_patched),
+        len(report.label_identifiers_set),
         len(report.errors),
     )
     return report

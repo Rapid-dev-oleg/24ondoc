@@ -1,12 +1,11 @@
-"""Stage 3 — Person/Location resolution in CreateTwentyTaskFromSession.
+"""Person/Location resolution in CreateTwentyTaskFromSession.
 
-Focuses on the _resolve_person_and_location orchestration: without a phone
-it's a no-op; with a phone it finds or creates Person and Location,
-runs extract_location when fields are missing, and only fills empties.
+Каталог точек теперь read-only (импортируется из xlsx). Use-case
+никогда не создаёт Location и не пишет в Person кэш-поля. Резолв точки:
+AI-extract имени → fallback по телефону. Ambiguous (>1) → None.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -33,7 +32,7 @@ def _draft() -> DraftSession:
     session.ai_result = ClassificationResult(
         source_text="test",
         title="Не работает касса",
-        description="Аполло 32, Ленина 29. Касса не пробивает чек.",
+        description="Аполо 32, Ленина 29. Касса не пробивает чек.",
         category=Category.BUG,
         priority=Priority.HIGH,
         deadline=None,
@@ -47,11 +46,9 @@ def _mock_port() -> Any:
     port = MagicMock(spec=TwentyCRMPort)
     port.find_person_by_phone = AsyncMock(return_value=None)
     port.create_person_with_phone = AsyncMock(return_value={"id": "person-1"})
-    port.find_location_by_phone = AsyncMock(return_value=None)
-    port.create_location = AsyncMock(return_value={"id": "loc-1"})
-    port.update_location = AsyncMock()
-    port.update_person_location_fields = AsyncMock()
-    port.link_person_to_location = AsyncMock()
+    port.find_locations_by_phone = AsyncMock(return_value=[])
+    port.find_location_by_display_name = AsyncMock(return_value=None)
+    port.list_location_display_names = AsyncMock(return_value=["Аполо 32", "Аспет 25"])
     port.create_task = AsyncMock(
         return_value=TwentyTask(
             twenty_id="task-1",
@@ -69,41 +66,32 @@ def _mock_port() -> Any:
     return port
 
 
-def _mock_ai_port(prefix: str | None = "Апполо", number: str | None = "32",
-                  address: str | None = "Ленина 29") -> Any:
+def _mock_ai(name: str | None = "Аполо 32") -> Any:
     ai = MagicMock()
-    ai.extract_location = AsyncMock(
-        return_value={"prefix": prefix, "number": number, "address": address}
-    )
+    ai.extract_location_name = AsyncMock(return_value=name)
     return ai
 
 
 @pytest.mark.asyncio
-async def test_no_phone_skips_person_and_location_resolution() -> None:
+async def test_no_phone_skips_resolution() -> None:
     port = _mock_port()
     uc = CreateTwentyTaskFromSession(port=port, ai_port=None)
 
-    await uc.execute(
-        session=_draft(),
-        telegram_id=42,
-        user_name="Иван",
-    )
+    await uc.execute(session=_draft(), telegram_id=42, user_name="Иван")
 
     port.find_person_by_phone.assert_not_called()
-    port.find_location_by_phone.assert_not_called()
-    port.create_person_with_phone.assert_not_called()
-    port.create_location.assert_not_called()
-    # Task still created, without klient/location
-    assert port.create_task.called
+    port.find_locations_by_phone.assert_not_called()
+    port.list_location_display_names.assert_not_called()
     kwargs = port.create_task.call_args.kwargs
     assert kwargs.get("klient_id") is None
     assert kwargs.get("location_rel_id") is None
 
 
 @pytest.mark.asyncio
-async def test_unknown_phone_creates_person_and_location_from_ai() -> None:
+async def test_ai_resolves_location_from_dialogue() -> None:
     port = _mock_port()
-    ai = _mock_ai_port()
+    port.find_location_by_display_name.return_value = {"id": "loc-32", "displayName": "Аполо 32"}
+    ai = _mock_ai("Аполо 32")
     uc = CreateTwentyTaskFromSession(port=port, ai_port=ai)
 
     await uc.execute(
@@ -111,35 +99,27 @@ async def test_unknown_phone_creates_person_and_location_from_ai() -> None:
         telegram_id=42,
         user_name="Иван",
         caller_phone="79063567906",
-        dialogue_text="[Оператор]: Алло. [Клиент]: Аполло 32...",
+        dialogue_text="[Клиент]: Я из аполо 32...",
     )
 
-    port.find_person_by_phone.assert_awaited_once_with("79063567906")
-    port.create_person_with_phone.assert_awaited_once_with("79063567906")
-    port.find_location_by_phone.assert_awaited_once()
-    ai.extract_location.assert_awaited_once()
-    port.create_location.assert_awaited_once_with(
-        "79063567906", prefix="Апполо", number="32", address="Ленина 29"
-    )
-    port.link_person_to_location.assert_awaited_once_with("person-1", "loc-1")
+    port.list_location_display_names.assert_awaited_once()
+    ai.extract_location_name.assert_awaited_once()
+    port.find_location_by_display_name.assert_awaited_once_with("Аполо 32")
+    # Phone fallback не нужен — AI уже определил.
+    port.find_locations_by_phone.assert_not_called()
 
     kwargs = port.create_task.call_args.kwargs
     assert kwargs["klient_id"] == "person-1"
-    assert kwargs["location_rel_id"] == "loc-1"
+    assert kwargs["location_rel_id"] == "loc-32"
 
 
 @pytest.mark.asyncio
-async def test_known_location_with_all_fields_skips_update() -> None:
+async def test_ai_returns_none_falls_back_to_phone_unambiguous() -> None:
     port = _mock_port()
-    port.find_person_by_phone.return_value = {"id": "p", "locationPrefix": "Апполо",
-                                              "locationNumber": "32", "locationAddress": "Ленина 29"}
-    port.find_location_by_phone.return_value = {
-        "id": "loc-existing",
-        "prefix": "Апполо",
-        "number": "32",
-        "locationAddress": "Ленина 29",
-    }
-    ai = _mock_ai_port()
+    port.find_locations_by_phone.return_value = [
+        {"id": "loc-66", "displayName": "Аполо 66"}
+    ]
+    ai = _mock_ai(None)
     uc = CreateTwentyTaskFromSession(port=port, ai_port=ai)
 
     await uc.execute(
@@ -147,28 +127,22 @@ async def test_known_location_with_all_fields_skips_update() -> None:
         telegram_id=42,
         user_name="Иван",
         caller_phone="79063567906",
-        dialogue_text="...",
+        dialogue_text="…",
     )
 
-    port.create_location.assert_not_called()
-    port.update_location.assert_not_called()
-    port.update_person_location_fields.assert_not_called()
+    port.find_locations_by_phone.assert_awaited_once_with("79063567906")
     kwargs = port.create_task.call_args.kwargs
-    assert kwargs["klient_id"] == "p"
-    assert kwargs["location_rel_id"] == "loc-existing"
+    assert kwargs["location_rel_id"] == "loc-66"
 
 
 @pytest.mark.asyncio
-async def test_known_location_with_empty_fields_fills_missing_only() -> None:
+async def test_phone_ambiguous_yields_no_location() -> None:
     port = _mock_port()
-    port.find_person_by_phone.return_value = {"id": "p"}
-    port.find_location_by_phone.return_value = {
-        "id": "loc-existing",
-        "prefix": "Апполо",   # already set
-        "number": None,       # empty
-        "locationAddress": None,  # empty
-    }
-    ai = _mock_ai_port(prefix="Апполо", number="32", address="Ленина 29")
+    port.find_locations_by_phone.return_value = [
+        {"id": "a", "displayName": "Аполо 1"},
+        {"id": "b", "displayName": "Аспет 2"},
+    ]
+    ai = _mock_ai(None)
     uc = CreateTwentyTaskFromSession(port=port, ai_port=ai)
 
     await uc.execute(
@@ -176,37 +150,30 @@ async def test_known_location_with_empty_fields_fills_missing_only() -> None:
         telegram_id=42,
         user_name="Иван",
         caller_phone="79063567906",
-        dialogue_text="...",
+        dialogue_text="…",
     )
 
-    # Only the empty fields should be patched; prefix preserved
-    port.update_location.assert_awaited_once()
-    patch_kwargs = port.update_location.call_args.kwargs
-    assert "prefix" not in patch_kwargs
-    assert patch_kwargs.get("number") == "32"
-    assert patch_kwargs.get("address") == "Ленина 29"
+    # Person still created/found, but task без точки.
+    kwargs = port.create_task.call_args.kwargs
+    assert kwargs["location_rel_id"] is None
+    assert kwargs["klient_id"] == "person-1"
 
 
 @pytest.mark.asyncio
-async def test_ai_returns_all_none_no_writes() -> None:
+async def test_use_case_never_creates_location() -> None:
+    """Никаких create_location/update_location/link_person_to_location больше нет."""
     port = _mock_port()
-    port.find_person_by_phone.return_value = {"id": "p"}
-    port.find_location_by_phone.return_value = {
-        "id": "loc-existing",
-        "prefix": None,
-        "number": None,
-        "locationAddress": None,
-    }
-    ai = _mock_ai_port(prefix=None, number=None, address=None)
+    ai = _mock_ai("Аполо 32")
     uc = CreateTwentyTaskFromSession(port=port, ai_port=ai)
-
     await uc.execute(
         session=_draft(),
         telegram_id=42,
         user_name="Иван",
         caller_phone="79063567906",
-        dialogue_text="пустой диалог",
+        dialogue_text="…",
     )
-
-    port.update_location.assert_not_called()
-    port.update_person_location_fields.assert_not_called()
+    for missing in ("create_location", "update_location", "link_person_to_location",
+                    "update_person_location_fields"):
+        assert not hasattr(port, missing) or not getattr(port, missing).called, (
+            f"{missing} must not be called by use-case"
+        )

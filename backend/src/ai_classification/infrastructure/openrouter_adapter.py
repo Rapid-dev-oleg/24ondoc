@@ -246,31 +246,33 @@ class OpenRouterAdapter(AIClassificationPort):
         logger.error("select_task_fields: all models failed, returning defaults")
         return TaskFieldSelection()
 
-    EXTRACT_LOCATION_PROMPT = """\
+    EXTRACT_LOCATION_NAME_PROMPT = """\
 Ты — анализатор транскриптов звонков в техподдержку 24ondoc. \
-Определи торговую точку клиента из диалога.
+Определи, упоминается ли в диалоге одна из торговых точек клиента.
 
-Верни JSON с полями:
-{
-    "prefix": "<Апполо | Аспект | другое название бренда | null>",
-    "number": "<номер/код точки, например \"32\", \"11\", \"Г.0\", или null>",
-    "address": "<адрес, если назван, например \"Ленина 29\", \"Первый Май Сосновская\", или null>"
-}
+Список существующих точек:
+{names_list}
 
-Важно:
-- Whisper часто искажает названия. Нормализуй:
-  * \"Поло\", \"Пола\", \"Аполл\", \"Аполлова\", \"Апполова\", \"Алола\" → \"Апполо\"
-  * \"Аспец\", \"Аспек\" → \"Аспект\"
-- Если бренд не назван явно — верни prefix: null (не угадывай).
-- Если не уверен — null для каждого неопределённого поля.
+Правила:
+- Верни JSON: {{"location_name": "<имя из списка ИЛИ null>"}}
+- Имя должно быть выбрано БУКВАЛЬНО из списка (точное соответствие).
+- Whisper часто искажает названия. Нормализуй перед match-ом:
+  * «Поло», «Пола», «Аполл», «Апполова», «Алола» → «Аполо»
+  * «Аспец», «Аспек», «Аспект» → «Аспет»
+- Если в диалоге нет однозначной точки из списка — верни location_name: null. \
+Не угадывай.
 - Отвечай ТОЛЬКО JSON-объектом, без пояснений."""
 
-    async def extract_location(self, dialogue_text: str) -> dict[str, str | None]:
-        """Извлечь данные о точке из транскрипта звонка.
-
-        Возвращает словарь {"prefix": ..., "number": ..., "address": ...}
-        с опциональными значениями. Все или часть могут быть None.
-        """
+    async def extract_location_name(
+        self, dialogue_text: str, known_names: list[str]
+    ) -> str | None:
+        """Resolve a Location.displayName from the dialogue against the catalog."""
+        if not known_names or not dialogue_text:
+            return None
+        valid = {n for n in known_names if n}
+        # Render the catalog as a compact bullet list — ~50KB for 400 names.
+        names_list = "\n".join(f"- {n}" for n in sorted(valid))
+        prompt = self.EXTRACT_LOCATION_NAME_PROMPT.format(names_list=names_list)
         for model in (self._primary_model, self._fallback_model):
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
@@ -283,7 +285,7 @@ class OpenRouterAdapter(AIClassificationPort):
                         json={
                             "model": model,
                             "messages": [
-                                {"role": "system", "content": self.EXTRACT_LOCATION_PROMPT},
+                                {"role": "system", "content": prompt},
                                 {"role": "user", "content": dialogue_text},
                             ],
                             "response_format": {"type": "json_object"},
@@ -298,23 +300,21 @@ class OpenRouterAdapter(AIClassificationPort):
                 if text_to_parse.startswith("```"):
                     text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
                 parsed = json.loads(text_to_parse)
-                result = {
-                    "prefix": _nullable_str(parsed.get("prefix")),
-                    "number": _nullable_str(parsed.get("number")),
-                    "address": _nullable_str(parsed.get("address")),
-                }
+                raw = _nullable_str(parsed.get("location_name"))
+                # AI must pick from the catalog. If it hallucinates a name —
+                # drop it rather than create a phantom location later.
+                resolved = raw if raw in valid else None
                 logger.info(
-                    "extract_location OK (model=%s): prefix=%s number=%s address=%s",
-                    model,
-                    result["prefix"],
-                    result["number"],
-                    result["address"],
+                    "extract_location_name OK (model=%s): name=%s (raw=%s)",
+                    model, resolved, raw,
                 )
-                return result
+                return resolved
             except Exception:
-                logger.warning("extract_location failed with model=%s", model, exc_info=True)
-        logger.error("extract_location: all models failed, returning empty")
-        return {"prefix": None, "number": None, "address": None}
+                logger.warning(
+                    "extract_location_name failed with model=%s", model, exc_info=True
+                )
+        logger.error("extract_location_name: all models failed, returning None")
+        return None
 
 
 def _nullable_str(value: object) -> str | None:

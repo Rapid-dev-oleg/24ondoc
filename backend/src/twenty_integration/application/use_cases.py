@@ -143,81 +143,75 @@ class CreateTwentyTaskFromSession:
         caller_phone: str | None,
         dialogue_text: str | None,
     ) -> tuple[str | None, str | None]:
-        """Найти или создать Person + Location по номеру телефона.
+        """Resolve Person and Location for an incoming call.
 
-        Обогащает пустые location-поля на Person из AI-извлечения. Не трогает
-        уже заполненные поля. Возвращает (klient_id, location_rel_id), любые
-        могут быть None если phone отсутствует или AI / Twenty недоступны.
+        Точки заводятся каталогом из xlsx и НИКОГДА не создаются автоматически —
+        только привязываются. Резолв точки:
+            1. AI-extract имени точки из транскрипта (matches displayName)
+            2. fallback: поиск по телефону. 0 или >1 результатов → None+WARN.
+
+        Person по-прежнему создаётся автоматически (контактов не блокируем).
         """
         if not caller_phone:
             return None, None
 
+        klient_id: str | None = None
         try:
             person = await self._port.find_person_by_phone(caller_phone)
             if person is None:
                 person = await self._port.create_person_with_phone(caller_phone)
             klient_id = person.get("id") or None
+        except Exception:
+            logger.exception(
+                "_resolve_person_and_location: person resolution failed phone=%s",
+                caller_phone,
+            )
 
-            # Location lookup/creation — independent of Person
-            location = await self._port.find_location_by_phone(caller_phone)
+        location_rel_id = await self._resolve_location(caller_phone, dialogue_text)
+        return klient_id, location_rel_id
 
-            # Extract location fields from dialogue once, if we have it
-            extracted = {"prefix": None, "number": None, "address": None}
-            if dialogue_text and self._ai_port is not None:
-                extract_fn = getattr(self._ai_port, "extract_location", None)
-                if extract_fn is not None:
-                    try:
-                        extracted = await extract_fn(dialogue_text)
-                    except Exception:
-                        logger.exception("extract_location failed")
+    async def _resolve_location(
+        self,
+        caller_phone: str | None,
+        dialogue_text: str | None,
+    ) -> str | None:
+        # Step 1: AI extract location name from transcript.
+        if dialogue_text and self._ai_port is not None:
+            extract_fn = getattr(self._ai_port, "extract_location_name", None)
+            if extract_fn is not None:
+                try:
+                    known = await self._port.list_location_display_names()
+                    name = await extract_fn(dialogue_text, known)
+                    if name:
+                        loc = await self._port.find_location_by_display_name(name)
+                        if loc and loc.get("id"):
+                            return str(loc["id"])
+                        logger.warning(
+                            "AI extracted location name %r not found in catalog", name
+                        )
+                except Exception:
+                    logger.exception("extract_location_name failed")
 
-            if location is None:
-                location = await self._port.create_location(
+        # Step 2: phone fallback. Ambiguous (>1) means a roving manager — leave
+        # the task without a location and let an operator pick.
+        if caller_phone:
+            try:
+                candidates = await self._port.find_locations_by_phone(caller_phone)
+            except Exception:
+                logger.exception(
+                    "find_locations_by_phone failed phone=%s", caller_phone
+                )
+                candidates = []
+            if len(candidates) == 1:
+                return str(candidates[0].get("id") or "") or None
+            if len(candidates) > 1:
+                names = [str(c.get("displayName") or c.get("id")) for c in candidates]
+                logger.warning(
+                    "ambiguous location for phone=%s: %d candidates %s",
                     caller_phone,
-                    prefix=extracted["prefix"],
-                    number=extracted["number"],
-                    address=extracted["address"],
+                    len(candidates),
+                    names,
                 )
             else:
-                # Fill empty fields only — don't overwrite admin-edited data
-                patch = {
-                    k: v
-                    for k, v in [
-                        ("prefix", extracted["prefix"]),
-                        ("number", extracted["number"]),
-                        ("address", extracted["address"]),
-                    ]
-                    if v and not location.get(
-                        {"prefix": "prefix", "number": "number", "address": "locationAddress"}[k]
-                    )
-                }
-                if patch:
-                    await self._port.update_location(location["id"], **patch)
-
-            location_rel_id = location.get("id") or None
-
-            if klient_id and location_rel_id:
-                try:
-                    await self._port.link_person_to_location(klient_id, location_rel_id)
-                except Exception:
-                    logger.exception("link_person_to_location failed")
-
-            # Also refresh Person's cached location-* fields (empty ones only)
-            if klient_id:
-                try:
-                    to_fill: dict[str, str | None] = {}
-                    if extracted["prefix"] and not person.get("locationPrefix"):
-                        to_fill["location_prefix"] = extracted["prefix"]
-                    if extracted["number"] and not person.get("locationNumber"):
-                        to_fill["location_number"] = extracted["number"]
-                    if extracted["address"] and not person.get("locationAddress"):
-                        to_fill["location_address"] = extracted["address"]
-                    if to_fill:
-                        await self._port.update_person_location_fields(klient_id, **to_fill)
-                except Exception:
-                    logger.exception("update_person_location_fields failed")
-
-            return klient_id, location_rel_id
-        except Exception:
-            logger.exception("_resolve_person_and_location failed for phone=%s", caller_phone)
-            return None, None
+                logger.info("no location matched phone=%s", caller_phone)
+        return None

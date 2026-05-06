@@ -89,10 +89,19 @@ class SyncCallToTwentyUseCase:
                 if person is None:
                     person = await self._port.create_person_with_phone(record.caller_phone)
                 person_id = str(person.get("id") or "") or None
-                location = await self._port.find_location_by_phone(record.caller_phone)
-                if location is None:
-                    location = await self._port.create_location(record.caller_phone)
-                location_id = str(location.get("id") or "") or None
+                # Locations не создаются автоматически — каталог точек ведётся
+                # импортом из xlsx (см. scripts/import_locations_xlsx.py).
+                # Привязываем CallRecord к точке только если по телефону
+                # однозначно определилась одна. >1 (выездной менеджер) или 0
+                # → CallRecord идёт без locationRelId, оператор вяжет в UI.
+                candidates = await self._port.find_locations_by_phone(record.caller_phone)
+                if len(candidates) == 1:
+                    location_id = str(candidates[0].get("id") or "") or None
+                elif len(candidates) > 1:
+                    logger.warning(
+                        "ambiguous location for call %s phone=%s: %d candidates",
+                        record.call_id, record.caller_phone, len(candidates),
+                    )
             except Exception:
                 logger.exception(
                     "Failed resolving person/location for call %s", record.call_id
