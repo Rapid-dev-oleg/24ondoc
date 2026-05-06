@@ -150,13 +150,22 @@ def parse_xlsx(path: str) -> list[LocationRow]:
 
 
 async def _list_existing(client: httpx.AsyncClient) -> dict[str, dict[str, Any]]:
-    """Map displayName -> Twenty Location dict for the existing catalog."""
+    """Map displayName -> Twenty Location dict.
+
+    Twenty REST не понимает `starting_after`, поэтому пагинируем по
+    `filter=id[gt]:<last>` + order_by=id[AscNullsFirst]. Лимит 200 — пик
+    каталога 402, влезает за 2-3 страницы.
+    """
     by_name: dict[str, dict[str, Any]] = {}
-    cursor: str | None = None
-    for _ in range(20):  # hard cap: 20 pages of 100 = 2000 records
-        params: dict[str, Any] = {"limit": 100}
-        if cursor:
-            params["starting_after"] = cursor
+    last_id: str | None = None
+    page_size = 200
+    for _ in range(20):  # hard cap: 20 * 200 = 4000 records
+        params: dict[str, Any] = {
+            "limit": page_size,
+            "order_by": "id[AscNullsFirst]",
+        }
+        if last_id:
+            params["filter"] = f"id[gt]:{last_id}"
         r = await client.get("/rest/locations", params=params)
         r.raise_for_status()
         page = r.json().get("data", {}).get("locations", []) or []
@@ -166,10 +175,10 @@ async def _list_existing(client: httpx.AsyncClient) -> dict[str, dict[str, Any]]
             dn = (loc.get("displayName") or "").strip()
             if dn:
                 by_name[dn] = loc
-        if len(page) < 100:
+        if len(page) < page_size:
             break
-        cursor = page[-1].get("id")
-        if not cursor:
+        last_id = page[-1].get("id")
+        if not last_id:
             break
     return by_name
 

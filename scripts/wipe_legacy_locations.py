@@ -42,22 +42,29 @@ async def _throttle() -> None:
 
 
 async def _list_all(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    """Page by id-cursor: REST не понимает `starting_after`, но ок с
+    `filter=id[gt]:<last>` + order_by=id[AscNullsFirst].
+    """
     items: list[dict[str, Any]] = []
-    cursor: str | None = None
+    last_id: str | None = None
+    page_size = 200
     for _ in range(20):
-        params: dict[str, Any] = {"limit": 100}
-        if cursor:
-            params["starting_after"] = cursor
+        params: dict[str, Any] = {
+            "limit": page_size,
+            "order_by": "id[AscNullsFirst]",
+        }
+        if last_id:
+            params["filter"] = f"id[gt]:{last_id}"
         r = await client.get("/rest/locations", params=params)
         r.raise_for_status()
         page = r.json().get("data", {}).get("locations", []) or []
         if not page:
             break
         items.extend(page)
-        if len(page) < 100:
+        if len(page) < page_size:
             break
-        cursor = page[-1].get("id")
-        if not cursor:
+        last_id = page[-1].get("id")
+        if not last_id:
             break
     return items
 
