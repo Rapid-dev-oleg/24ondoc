@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from ai_classification.domain.repository import AIClassificationPort
 from telegram_ingestion.domain.models import DraftSession
 from twenty_integration.application.detect_repeat import DetectRepeat, RepeatResult
+from twenty_integration.application.resolve_location import ResolveLocation
 from twenty_integration.domain.models import TwentyTask
 from twenty_integration.domain.ports import TwentyCRMPort
 
@@ -40,6 +41,9 @@ class CreateTwentyTaskFromSession:
         # the same TwentyCRMPort + AI adapter. No-op when location cannot be
         # resolved.
         self._detect_repeat = DetectRepeat(twenty_port=port, ai_port=ai_port)
+        # Three-stage Location resolver, shared with the ATS poller (see
+        # `application/resolve_location.py`).
+        self._location_resolver = ResolveLocation(port, ai_port)
 
     async def execute(
         self,
@@ -86,10 +90,12 @@ class CreateTwentyTaskFromSession:
             except Exception:
                 logger.exception("Failed to select task fields, creating without them")
 
-        # If a caller phone is known, resolve Person and Location in Twenty
-        # so the task is anchored to the right client and outlet.
-        klient_id, location_rel_id = await self._resolve_person_and_location(
-            caller_phone, dialogue_text
+        # Resolve the outlet (Location) the task belongs to. Caller's phone
+        # itself is stored on Task.callerPhone — we no longer maintain a
+        # phantom Person per number; контакты остались только для operators
+        # (Person.telegramid).
+        location_rel_id = await self._location_resolver.execute(
+            caller_phone, dialogue_text,
         )
 
         # Detect repeat obrashchenie BEFORE we create the task — so the
@@ -111,8 +117,8 @@ class CreateTwentyTaskFromSession:
             assignee_id=assignee_id,
             kategoriya=kategoriya,
             vazhnost=vazhnost,
-            klient_id=klient_id,
             location_rel_id=location_rel_id,
+            caller_phone=caller_phone,
             povtornoe_obrashchenie=repeat.is_repeat,
             parent_task_id=repeat.parent_task_id,
         )
@@ -138,80 +144,3 @@ class CreateTwentyTaskFromSession:
 
         return task
 
-    async def _resolve_person_and_location(
-        self,
-        caller_phone: str | None,
-        dialogue_text: str | None,
-    ) -> tuple[str | None, str | None]:
-        """Resolve Person and Location for an incoming call.
-
-        Точки заводятся каталогом из xlsx и НИКОГДА не создаются автоматически —
-        только привязываются. Резолв точки:
-            1. AI-extract имени точки из транскрипта (matches displayName)
-            2. fallback: поиск по телефону. 0 или >1 результатов → None+WARN.
-
-        Person по-прежнему создаётся автоматически (контактов не блокируем).
-        """
-        if not caller_phone:
-            return None, None
-
-        klient_id: str | None = None
-        try:
-            person = await self._port.find_person_by_phone(caller_phone)
-            if person is None:
-                person = await self._port.create_person_with_phone(caller_phone)
-            klient_id = person.get("id") or None
-        except Exception:
-            logger.exception(
-                "_resolve_person_and_location: person resolution failed phone=%s",
-                caller_phone,
-            )
-
-        location_rel_id = await self._resolve_location(caller_phone, dialogue_text)
-        return klient_id, location_rel_id
-
-    async def _resolve_location(
-        self,
-        caller_phone: str | None,
-        dialogue_text: str | None,
-    ) -> str | None:
-        # Step 1: AI extract location name from transcript.
-        if dialogue_text and self._ai_port is not None:
-            extract_fn = getattr(self._ai_port, "extract_location_name", None)
-            if extract_fn is not None:
-                try:
-                    known = await self._port.list_location_display_names()
-                    name = await extract_fn(dialogue_text, known)
-                    if name:
-                        loc = await self._port.find_location_by_display_name(name)
-                        if loc and loc.get("id"):
-                            return str(loc["id"])
-                        logger.warning(
-                            "AI extracted location name %r not found in catalog", name
-                        )
-                except Exception:
-                    logger.exception("extract_location_name failed")
-
-        # Step 2: phone fallback. Ambiguous (>1) means a roving manager — leave
-        # the task without a location and let an operator pick.
-        if caller_phone:
-            try:
-                candidates = await self._port.find_locations_by_phone(caller_phone)
-            except Exception:
-                logger.exception(
-                    "find_locations_by_phone failed phone=%s", caller_phone
-                )
-                candidates = []
-            if len(candidates) == 1:
-                return str(candidates[0].get("id") or "") or None
-            if len(candidates) > 1:
-                names = [str(c.get("displayName") or c.get("id")) for c in candidates]
-                logger.warning(
-                    "ambiguous location for phone=%s: %d candidates %s",
-                    caller_phone,
-                    len(candidates),
-                    names,
-                )
-            else:
-                logger.info("no location matched phone=%s", caller_phone)
-        return None

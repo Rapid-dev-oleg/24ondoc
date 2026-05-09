@@ -11,6 +11,7 @@ from redis.asyncio import Redis as AsyncRedis
 
 from ai_classification.domain.repository import AIClassificationPort
 from telegram_ingestion.application.ports import STTPort
+from twenty_integration.application.resolve_location import ResolveLocation
 from twenty_integration.domain.ports import TwentyCRMPort
 
 from ..domain.models import CallRecord, SourceType
@@ -50,6 +51,7 @@ class ATS2PollerService:
         redis: AsyncRedis | None = None,
         poll_interval_sec: float = _DEFAULT_POLL_INTERVAL_SEC,
         sync_call_uc: SyncCallToTwentyUseCase | None = None,
+        location_resolver: ResolveLocation | None = None,
     ) -> None:
         self._ats2_client = ats2_client
         self._call_repo = call_repo
@@ -60,6 +62,7 @@ class ATS2PollerService:
         self._redis = redis
         self._poll_interval_sec = poll_interval_sec
         self._sync_call_uc = sync_call_uc
+        self._location_resolver = location_resolver
         self._last_poll_timestamp: datetime | None = None
         self._running: bool = False
         self._stop_event: asyncio.Event = asyncio.Event()
@@ -234,7 +237,9 @@ class ATS2PollerService:
             # runs check_script on the transcript.
             if task_id and self._sync_call_uc is not None:
                 try:
-                    await self._sync_call_uc.execute(record, task_id=task_id)
+                    await self._sync_call_uc.execute(
+                        record, task_id=task_id, callee_phone=callee_phone,
+                    )
                 except Exception:
                     logger.exception(
                         "ATS2 Poller: sync_call_uc failed for call %s task %s",
@@ -342,6 +347,22 @@ class ATS2PollerService:
             except Exception:
                 logger.warning("ATS2 Poller: failed to select task fields for %s", call_id)
 
+            # Resolve the outlet (Location) for this incoming call —
+            # cheap fold-match → AI extract → phone fallback. The
+            # resolver also feeds caller_phone back into Location's
+            # additionalPhones (learn-by-resolve) on a name/AI hit.
+            location_rel_id: str | None = None
+            if self._location_resolver is not None:
+                try:
+                    location_rel_id = await self._location_resolver.execute(
+                        caller_phone=caller_phone,
+                        dialogue_text=transcription,
+                    )
+                except Exception:
+                    logger.exception(
+                        "ATS2 Poller: location resolve failed for %s", call_id,
+                    )
+
             task = await self._twenty_port.create_task(
                 title=f"📞 {classification.title}",
                 body="\n".join(body_parts),
@@ -349,8 +370,13 @@ class ATS2PollerService:
                 assignee_id=None,
                 kategoriya=kategoriya_value,
                 vazhnost=vazhnost_value,
+                location_rel_id=location_rel_id,
+                caller_phone=caller_phone,
             )
-            logger.info("ATS2 call %s → Twenty task created: %s", call_id, task.twenty_id)
+            logger.info(
+                "ATS2 call %s → Twenty task created: %s (loc=%s)",
+                call_id, task.twenty_id, location_rel_id or "—",
+            )
             return task.twenty_id
         except Exception:
             logger.exception("ATS2 Poller: ошибка создания задачи для %s", call_id)

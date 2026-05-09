@@ -62,6 +62,7 @@ class SyncCallToTwentyUseCase:
         record: CallRecord,
         *,
         task_id: str | None = None,
+        callee_phone: str | None = None,
     ) -> SyncResult:
         # Prefer the locally persisted twenty_task_id (set by
         # CreateTwentyTaskFromSession) so the backfill also links calls
@@ -69,31 +70,18 @@ class SyncCallToTwentyUseCase:
         task_id = task_id or record.twenty_task_id
         existing = await self._port.find_call_record_by_ats_id(record.call_id)
 
-        # Resolve Person/Location only when needed:
-        #   - new CallRecord (existing is None) — always;
-        #   - existing CallRecord — only if its relations are still empty
-        #     (historical records from before the phone-based sync).
-        # Re-running the backfill must NOT create duplicate Person/Location
-        # rows for already-synced calls. That was the bug.
+        # Resolve Location only — Person для клиентов больше не создаём,
+        # caller phone живёт прямо на CallRecord.callerPhone и Task.callerPhone.
+        # Привязываем CallRecord к точке, только если по телефону однозначно
+        # определилась одна. >1 кандидатов (выездной менеджер) или 0 →
+        # CallRecord идёт без locationRelId, оператор вяжет в UI.
         need_resolve = (
             record.caller_phone
-            and (existing is None
-                 or not existing.get("personRelId")
-                 or not existing.get("locationRelId"))
+            and (existing is None or not existing.get("locationRelId"))
         )
-        person_id: str | None = None
         location_id: str | None = None
         if need_resolve and record.caller_phone:
             try:
-                person = await self._port.find_person_by_phone(record.caller_phone)
-                if person is None:
-                    person = await self._port.create_person_with_phone(record.caller_phone)
-                person_id = str(person.get("id") or "") or None
-                # Locations не создаются автоматически — каталог точек ведётся
-                # импортом из xlsx (см. scripts/import_locations_xlsx.py).
-                # Привязываем CallRecord к точке только если по телефону
-                # однозначно определилась одна. >1 (выездной менеджер) или 0
-                # → CallRecord идёт без locationRelId, оператор вяжет в UI.
                 candidates = await self._port.find_locations_by_phone(record.caller_phone)
                 if len(candidates) == 1:
                     location_id = str(candidates[0].get("id") or "") or None
@@ -104,7 +92,7 @@ class SyncCallToTwentyUseCase:
                     )
             except Exception:
                 logger.exception(
-                    "Failed resolving person/location for call %s", record.call_id
+                    "Failed resolving location for call %s", record.call_id
                 )
 
         transcript = record.get_best_transcription()
@@ -118,12 +106,12 @@ class SyncCallToTwentyUseCase:
                 created = await self._port.create_call_record(
                     record.call_id,
                     caller_phone=record.caller_phone,
+                    callee_phone=callee_phone,
                     direction=direction,
                     duration=record.duration,
                     call_status=call_status,
                     occurred_at=record.created_at,
                     transcript=transcript,
-                    person_rel_id=person_id,
                     location_rel_id=location_id,
                     task_rel_id=task_id,
                 )
@@ -134,14 +122,24 @@ class SyncCallToTwentyUseCase:
                 return SyncResult(twenty_id=None, created=False, linked_task=False)
         else:
             twenty_id = str(existing.get("id") or "") or None
-            if twenty_id and (task_id or (transcript and not existing.get("transcript"))):
+            existing_callee = existing.get("calleePhone") or {}
+            callee_already_set = bool(
+                isinstance(existing_callee, dict)
+                and existing_callee.get("primaryPhoneNumber")
+            )
+            wants_update = bool(
+                task_id
+                or (transcript and not existing.get("transcript"))
+                or (callee_phone and not callee_already_set)
+            )
+            if twenty_id and wants_update:
                 try:
                     await self._port.update_call_record(
                         twenty_id,
                         task_rel_id=task_id,
-                        person_rel_id=person_id if not existing.get("personRelId") else None,
                         location_rel_id=location_id if not existing.get("locationRelId") else None,
                         transcript=transcript if not existing.get("transcript") else None,
+                        callee_phone=callee_phone if not callee_already_set else None,
                     )
                 except Exception:
                     logger.exception("Failed updating Twenty CallRecord %s", twenty_id)

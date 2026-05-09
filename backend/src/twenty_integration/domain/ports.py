@@ -40,20 +40,12 @@ class TwentyCRMPort(ABC):
         kategoriya: str | None = None,
         vazhnost: str | None = None,
         *,
-        klient_id: str | None = None,
         location_rel_id: str | None = None,
+        caller_phone: str | None = None,
         call_record_rel_id: str | None = None,
         povtornoe_obrashchenie: bool | None = None,
         parent_task_id: str | None = None,
     ) -> TwentyTask: ...
-
-    @abstractmethod
-    async def find_person_by_phone(self, phone: str) -> dict[str, object] | None: ...
-
-    @abstractmethod
-    async def create_person_with_phone(
-        self, phone: str, name: str | None = None
-    ) -> dict[str, object]: ...
 
     @abstractmethod
     async def find_locations_by_phone(self, phone: str) -> list[dict[str, object]]:
@@ -76,6 +68,17 @@ class TwentyCRMPort(ABC):
         ...
 
     @abstractmethod
+    async def add_phone_to_location(
+        self, location_id: str, phone: str
+    ) -> bool:
+        """Learn-by-resolve: дописать `phone` в Location.phone, если его \
+там ещё нет. Если primary пустой — кладём в primary; иначе — в \
+additionalPhones. Возвращает True если запись была сделана, False если \
+номер уже был у точки или phone не нормализуется.
+        """
+        ...
+
+    @abstractmethod
     async def find_recent_tasks_by_location_id(
         self, location_id: str, since: datetime, limit: int = 10
     ) -> list[dict[str, object]]: ...
@@ -89,13 +92,13 @@ class TwentyCRMPort(ABC):
         ats_call_id: str,
         *,
         caller_phone: str | None = None,
+        callee_phone: str | None = None,
         direction: str = "INCOMING",
         duration: int | None = None,
         call_status: str = "ANSWERED",
         occurred_at: datetime | None = None,
         transcript: str | None = None,
         audio_url: str | None = None,
-        person_rel_id: str | None = None,
         location_rel_id: str | None = None,
         task_rel_id: str | None = None,
     ) -> dict[str, object]: ...
@@ -106,9 +109,9 @@ class TwentyCRMPort(ABC):
         call_record_id: str,
         *,
         task_rel_id: str | None = None,
-        person_rel_id: str | None = None,
         location_rel_id: str | None = None,
         transcript: str | None = None,
+        callee_phone: str | None = None,
     ) -> None: ...
 
     @abstractmethod

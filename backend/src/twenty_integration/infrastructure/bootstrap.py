@@ -125,6 +125,7 @@ CALL_RECORD = ObjectSpec(
     fields=(
         FieldSpec("atsCallId", "ATS Call ID", "TEXT", is_nullable=False),
         FieldSpec("callerPhone", "Телефон звонящего", "PHONES"),
+        FieldSpec("calleePhone", "Телефон оператора", "PHONES"),
         FieldSpec(
             "direction",
             "Направление",
@@ -201,6 +202,9 @@ TASK_EXTRA_FIELDS: tuple[FieldSpec, ...] = (
               description="Ссылка на задачу, повтором которой является эта."),
     FieldSpec("scriptViolations", "Нарушений скрипта", "NUMBER"),
     FieldSpec("scriptMissing", "Отсутствующие фразы", "TEXT"),
+    # Телефон заявителя живёт прямо на Task — Person как «бакет для номеров»
+    # больше не нужен (см. wipe_client_persons.py + use_cases.py).
+    FieldSpec("callerPhone", "Телефон заявителя", "PHONES"),
 )
 
 # Relation specs — added AFTER both target & source objects are present.

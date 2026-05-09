@@ -82,55 +82,6 @@ class TwentyRestAdapter(TwentyCRMPort):
         except httpx.HTTPError:
             return None
 
-    async def find_person_by_phone(self, phone: str) -> dict[str, Any] | None:
-        """Найти контакт по телефону.
-
-        Нормализует номер до 10-значного national (как хранит Twenty в
-        PHONES-композите) и фильтрует по `phones.primaryPhoneNumber`.
-        """
-        national = normalize_ru_phone(phone)
-        if not national:
-            return None
-        try:
-            response = await self._client.get(
-                "/rest/people",
-                params={"filter": f"phones.primaryPhoneNumber[eq]:{national}"},
-            )
-            response.raise_for_status()
-            items = response.json().get("data", {}).get("people", [])
-            return items[0] if items else None
-        except httpx.HTTPError:
-            logger.exception("find_person_by_phone failed phone=%s", national)
-            return None
-
-    async def create_person_with_phone(
-        self,
-        phone: str,
-        name: str | None = None,
-    ) -> dict[str, Any]:
-        """Создать Person с телефоном в стандартном поле `phones`.
-
-        Phone обязательно приводится к 10-значному national через
-        `normalize_ru_phone`. Без этого Twenty может сохранить сырую
-        строку в `primaryPhoneNumber` и последующий find не попадёт.
-        """
-        national = normalize_ru_phone(phone)
-        if not national:
-            raise ValueError(f"invalid phone: {phone!r}")
-        payload: dict[str, Any] = {"phones": to_phones_composite(national)}
-        if name:
-            payload["name"] = {"firstName": name, "lastName": ""}
-        response = await self._client.post("/rest/people", json=payload)
-        if response.status_code >= 400:
-            logger.error(
-                "Twenty create_person_with_phone failed: %s %s",
-                response.status_code,
-                response.text[:300],
-            )
-        response.raise_for_status()
-        data = response.json().get("data", {})
-        return dict(data.get("createPerson", data))
-
     async def find_locations_by_phone(self, phone: str) -> list[dict[str, Any]]:
         """Все Location, у которых данный телефон совпадает с primary либо
         есть в additionalPhones jsonb.
@@ -195,6 +146,78 @@ class TwentyRestAdapter(TwentyCRMPort):
             logger.exception("find_location_by_display_name failed name=%s", display_name)
             return None
 
+    async def add_phone_to_location(
+        self, location_id: str, phone: str
+    ) -> bool:
+        """Learn-by-resolve: append `phone` to Location.phone if missing.
+
+        - If primary is empty → write into primary.
+        - If primary holds a different number → append to additionalPhones.
+        - If `phone` already equals primary or appears in additionalPhones
+          (after normalization) → no-op.
+        """
+        national = normalize_ru_phone(phone)
+        if not national or not location_id:
+            return False
+        try:
+            response = await self._client.get(f"/rest/locations/{location_id}")
+            response.raise_for_status()
+            loc = (response.json().get("data") or {}).get("location") or {}
+        except httpx.HTTPError:
+            logger.exception("add_phone_to_location: GET failed loc=%s",
+                             location_id)
+            return False
+
+        cur = (loc.get("phone") or {}).copy()
+        primary_norm = normalize_ru_phone(cur.get("primaryPhoneNumber"))
+        additional = list(cur.get("additionalPhones") or [])
+        additional_norm = {
+            normalize_ru_phone(
+                ap.get("number") if isinstance(ap, dict) else ap
+            )
+            for ap in additional
+        }
+        additional_norm.discard(None)
+
+        if primary_norm == national or national in additional_norm:
+            return False
+
+        if not primary_norm:
+            new_phone: dict[str, Any] = {
+                "primaryPhoneNumber": national,
+                "primaryPhoneCountryCode": "RU",
+                "primaryPhoneCallingCode": "+7",
+                "additionalPhones": additional,
+            }
+        else:
+            new_phone = {
+                "primaryPhoneNumber": cur.get("primaryPhoneNumber"),
+                "primaryPhoneCountryCode":
+                    cur.get("primaryPhoneCountryCode") or "RU",
+                "primaryPhoneCallingCode":
+                    cur.get("primaryPhoneCallingCode") or "+7",
+                "additionalPhones": additional + [{
+                    "number": national,
+                    "callingCode": "+7",
+                    "countryCode": "RU",
+                }],
+            }
+        try:
+            r = await self._client.patch(
+                f"/rest/locations/{location_id}", json={"phone": new_phone},
+            )
+            r.raise_for_status()
+            logger.info(
+                "add_phone_to_location: %s ← +%s (slot=%s)",
+                location_id, national,
+                "primary" if not primary_norm else "additional",
+            )
+            return True
+        except httpx.HTTPError:
+            logger.exception("add_phone_to_location: PATCH failed loc=%s",
+                             location_id)
+            return False
+
     async def list_location_display_names(self) -> list[str]:
         """Все displayName из Twenty Location. Используется AI-промптом как enum.
 
@@ -249,13 +272,13 @@ class TwentyRestAdapter(TwentyCRMPort):
         ats_call_id: str,
         *,
         caller_phone: str | None = None,
+        callee_phone: str | None = None,
         direction: str = "INCOMING",
         duration: int | None = None,
         call_status: str = "ANSWERED",
         occurred_at: datetime | None = None,
         transcript: str | None = None,
         audio_url: str | None = None,
-        person_rel_id: str | None = None,
         location_rel_id: str | None = None,
         task_rel_id: str | None = None,
     ) -> dict[str, Any]:
@@ -275,6 +298,10 @@ class TwentyRestAdapter(TwentyCRMPort):
             # Twenty would reject a malformed PHONES composite.
             if national:
                 payload["callerPhone"] = to_phones_composite(national)
+        if callee_phone:
+            national = normalize_ru_phone(callee_phone)
+            if national:
+                payload["calleePhone"] = to_phones_composite(national)
         if duration is not None:
             payload["duration"] = duration
         if occurred_at is not None:
@@ -283,8 +310,6 @@ class TwentyRestAdapter(TwentyCRMPort):
             payload["transcript"] = {"markdown": transcript}
         if audio_url:
             payload["audioUrl"] = audio_url
-        if person_rel_id:
-            payload["personRelId"] = person_rel_id
         if location_rel_id:
             payload["locationRelId"] = location_rel_id
         if task_rel_id:
@@ -306,20 +331,22 @@ class TwentyRestAdapter(TwentyCRMPort):
         call_record_id: str,
         *,
         task_rel_id: str | None = None,
-        person_rel_id: str | None = None,
         location_rel_id: str | None = None,
         transcript: str | None = None,
+        callee_phone: str | None = None,
     ) -> None:
         """Патч существующей Twenty CallRecord (обычно — прикрепить task после факта)."""
         patch: dict[str, Any] = {}
         if task_rel_id is not None:
             patch["taskRelId"] = task_rel_id
-        if person_rel_id is not None:
-            patch["personRelId"] = person_rel_id
         if location_rel_id is not None:
             patch["locationRelId"] = location_rel_id
         if transcript is not None:
             patch["transcript"] = {"markdown": transcript}
+        if callee_phone is not None:
+            national = normalize_ru_phone(callee_phone)
+            if national:
+                patch["calleePhone"] = to_phones_composite(national)
         if not patch:
             return
         response = await self._client.patch(
@@ -588,8 +615,8 @@ class TwentyRestAdapter(TwentyCRMPort):
         kategoriya: str | None = None,
         vazhnost: str | None = None,
         *,
-        klient_id: str | None = None,
         location_rel_id: str | None = None,
+        caller_phone: str | None = None,
         call_record_rel_id: str | None = None,
         povtornoe_obrashchenie: bool | None = None,
         parent_task_id: str | None = None,
@@ -614,14 +641,11 @@ class TwentyRestAdapter(TwentyCRMPort):
             if vazhnost is not None:
                 payload["vazhnost"] = vazhnost
 
-            # NOTE: `klient`/`klientId` is NOT a real field on Task in this
-            # Twenty workspace — the plan mentioned it but metadata shows it
-            # was never created. Task↔Person relation goes through Location
-            # (Task.locationRelId → Location ← Person.locationRel) and via
-            # CallRecord (CallRecord.taskRel + CallRecord.personRel).
-            # Sending klientId here produces a 400 "Object task doesn't have
-            # any \"klientId\" field" from Twenty.
-            _ = klient_id  # accepted by signature but intentionally dropped
+            if caller_phone is not None:
+                national = normalize_ru_phone(caller_phone)
+                # Skip malformed phones — Twenty rejects ill-formed PHONES.
+                if national:
+                    payload["callerPhone"] = to_phones_composite(national)
 
             if location_rel_id is not None:
                 payload["locationRelId"] = location_rel_id

@@ -40,6 +40,7 @@ from config import Settings, get_settings
 from reports.infrastructure.http_handler import router as reports_router
 from telegram_ingestion.infrastructure.stt_adapter import GroqSTTAdapter
 from telegram_ingestion.infrastructure.telegram_fastapi import router as tg_router
+from twenty_integration.application.resolve_location import ResolveLocation
 from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
 
 logger = structlog.get_logger(__name__)
@@ -111,11 +112,15 @@ def _create_ats2_poller(
     # Before this wiring, the poller created only the Task — CallRecord
     # rows came only from the Telegram confirm path.
     sync_call_uc: SyncCallToTwentyUseCase | None = None
+    location_resolver: ResolveLocation | None = None
     if twenty_adapter is not None and settings.twenty_api_key:
         sync_call_uc = SyncCallToTwentyUseCase(
             twenty_port=twenty_adapter,
             script_ai=ai_port,
         )
+        # Same three-stage resolver the Telegram path uses, so live ATS
+        # calls get Task.locationRelId set up-front.
+        location_resolver = ResolveLocation(twenty_adapter, ai_port)
 
     poller = ATS2PollerService(
         ats2_client=ats2_client,
@@ -127,6 +132,7 @@ def _create_ats2_poller(
         redis=redis,
         poll_interval_sec=float(settings.ats2_poll_interval_sec),
         sync_call_uc=sync_call_uc,
+        location_resolver=location_resolver,
     )
     return poller, auth_manager, ats2_client
 
