@@ -21,6 +21,7 @@ MSK = ZoneInfo("Europe/Moscow")
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from reports.application.compute_operator_report import compute_operator_report
 from reports.application.generate_report import GenerateReport
 from reports.domain.models import ReportScope
 from reports.infrastructure.twenty_timeline_reader import TwentyTimelineReader
@@ -102,6 +103,71 @@ def _parse_query_ts(s: str, *, end_of_day: bool = False) -> datetime:
             dt = dt.replace(hour=23, minute=59, second=59)
         return dt.astimezone(UTC)
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+@router.get("/operators/data")
+async def get_operators_data(
+    request: Request,
+    from_ts: str = Query(alias="from"),
+    to_ts: str = Query(alias="to"),
+) -> JSONResponse:
+    try:
+        from_dt = _parse_query_ts(from_ts)
+        to_dt = _parse_query_ts(to_ts, end_of_day=True)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if to_dt < from_dt:
+        raise HTTPException(status_code=400, detail="'to' must be >= 'from'")
+
+    settings = request.app.state.settings
+    async with TwentyTimelineReader(
+        settings.twenty_base_url, settings.twenty_api_key,
+    ) as reader:
+        crs, ops, members_by_id = await reader.load_calls_and_operators()
+
+    dto = compute_operator_report(
+        call_records=crs,
+        operators=ops,
+        members_by_id=members_by_id,
+        period_from=from_dt,
+        period_to=to_dt,
+    )
+    payload = {
+        "period_from": dto.period_from.isoformat(),
+        "period_to": dto.period_to.isoformat(),
+        "total_calls": dto.total_calls,
+        "total_violations": dto.total_violations,
+        "rows": [
+            {
+                "operator_id": r.operator_id,
+                "display_name": r.display_name,
+                "work_phone": r.work_phone,
+                "member_name": r.member_name,
+                "calls_count": r.calls_count,
+                "calls_with_violations": r.calls_with_violations,
+                "violations_total": r.violations_total,
+                "avg_violations_per_call": r.avg_violations_per_call,
+                "avg_duration_seconds": r.avg_duration_seconds,
+                "top_missed_phrases": [
+                    {"phrase": ph, "count": n} for ph, n in r.top_missed_phrases
+                ],
+            }
+            for r in dto.rows
+        ],
+    }
+    return JSONResponse(payload)
+
+
+@router.get("/operators", response_class=HTMLResponse)
+async def operators_page() -> HTMLResponse:
+    today = datetime.now(MSK).date().isoformat()
+    html = _OPERATORS_HTML.format(default_from=today, default_to=today)
+    return HTMLResponse(html, headers={
+        "Content-Security-Policy": "frame-ancestors *",
+        "X-Frame-Options": "ALLOWALL",
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+    })
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -189,6 +255,7 @@ _REPORT_HTML = """<!doctype html>
 </head>
 <body>
 <h1>Отчёт по сотрудникам</h1>
+<nav style="margin-bottom:8px"><a href="operators" style="color:var(--accent);text-decoration:none">→ Отчёт по операторам</a></nav>
 
 <form id="f">
   <label>Период с<input type="date" name="from" value="{default_from}"></label>
@@ -292,6 +359,153 @@ form.addEventListener('submit', async (e) => {{
 }});
 
 loadMembers().then(() => form.requestSubmit());
+</script>
+</body>
+</html>
+"""
+
+
+_OPERATORS_HTML = """<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Отчёт по операторам</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {{
+    --bg: #fff; --fg: #111; --muted: #888;
+    --border: #e5e5e5; --row-alt: #fafafa; --accent: #2e7af0;
+  }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    margin: 0; padding: 16px; color: var(--fg); background: var(--bg);
+    font-size: 14px; line-height: 1.4;
+  }}
+  h1 {{ font-size: 18px; margin: 0 0 12px; font-weight: 600; }}
+  nav a {{ color: var(--accent); text-decoration: none; margin-right: 16px; }}
+  form {{
+    display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;
+    padding: 12px; background: var(--row-alt); border: 1px solid var(--border);
+    border-radius: 6px; margin-bottom: 16px;
+  }}
+  form label {{ display: flex; flex-direction: column; font-size: 12px; color: var(--muted); }}
+  form input {{
+    padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px;
+    font-size: 14px; min-height: 32px;
+  }}
+  form button {{
+    padding: 8px 16px; border: 0; border-radius: 4px; background: var(--accent);
+    color: #fff; font-weight: 600; cursor: pointer; min-height: 32px;
+  }}
+  form button:disabled {{ opacity: .5; cursor: progress; }}
+  #summary {{ color: var(--muted); font-size: 13px; margin-bottom: 8px; }}
+  table {{ width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }}
+  thead th {{
+    text-align: right; padding: 8px 10px; font-size: 12px; font-weight: 600;
+    color: var(--muted); border-bottom: 2px solid var(--border); white-space: nowrap;
+    position: sticky; top: 0; background: var(--bg);
+  }}
+  thead th:first-child, thead th.left {{ text-align: left; }}
+  tbody td {{
+    padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: right;
+    white-space: nowrap; vertical-align: top;
+  }}
+  tbody td:first-child, tbody td.left {{ text-align: left; }}
+  tbody tr:nth-child(odd) {{ background: var(--row-alt); }}
+  .phr {{ font-size: 12px; color: #555; max-width: 360px; white-space: normal; }}
+  .phr-line {{ display: block; }}
+  .phr-cnt {{ color: var(--muted); margin-right: 6px; }}
+  #err {{ color: #c0392b; margin-top: 8px; }}
+</style>
+</head>
+<body>
+<h1>Отчёт по операторам — нарушения скрипта на входящих звонках</h1>
+<nav><a href="./">← К отчёту по сотрудникам</a></nav>
+
+<form id="f">
+  <label>Период с<input type="date" name="from" value="{default_from}"></label>
+  <label>по<input type="date" name="to" value="{default_to}"></label>
+  <button type="submit">Получить отчёт</button>
+</form>
+
+<div id="summary"></div>
+<div id="table"></div>
+<div id="err"></div>
+
+<script>
+const form=document.getElementById('f');
+const tableDiv=document.getElementById('table');
+const summaryDiv=document.getElementById('summary');
+const errDiv=document.getElementById('err');
+
+function fmtSec(s){{
+  if(s===null||s===undefined) return '—';
+  s=Math.round(s);
+  if(s<60) return s+'с';
+  if(s<3600) return Math.floor(s/60)+'м '+(s%60)+'с';
+  return Math.floor(s/3600)+'ч '+Math.floor((s%3600)/60)+'м';
+}}
+function fmtFloat(x,d){{ return x==null?'—':x.toFixed(d??1); }}
+function fmtInt(n){{ return n==null?'—':n.toLocaleString('ru-RU'); }}
+
+function renderTable(dto){{
+  const head =
+    '<thead><tr>'
+    + '<th class="left">Оператор</th>'
+    + '<th class="left">Линия</th>'
+    + '<th class="left">Сотрудник</th>'
+    + '<th>Звонков</th>'
+    + '<th>С нарушениями</th>'
+    + '<th>% наруш.</th>'
+    + '<th>Σ нарушений</th>'
+    + '<th>Ср. на звонок</th>'
+    + '<th>Ср. длит.</th>'
+    + '<th class="left">Топ пропущенных фраз</th>'
+    + '</tr></thead>';
+  const rows=(dto.rows||[]).map(r=>{{
+    const pct = r.calls_count
+      ? Math.round(100*r.calls_with_violations/r.calls_count) + '%'
+      : '—';
+    const phrases = (r.top_missed_phrases||[])
+      .map(p => '<span class="phr-line"><span class="phr-cnt">'+p.count+'×</span>'+p.phrase+'</span>')
+      .join('');
+    return '<tr>'
+      + '<td class="left">'+r.display_name+'</td>'
+      + '<td class="left">'+(r.work_phone||'—')+'</td>'
+      + '<td class="left">'+(r.member_name||'<span style="color:#aaa">не привязан</span>')+'</td>'
+      + '<td>'+fmtInt(r.calls_count)+'</td>'
+      + '<td>'+fmtInt(r.calls_with_violations)+'</td>'
+      + '<td>'+pct+'</td>'
+      + '<td>'+fmtInt(r.violations_total)+'</td>'
+      + '<td>'+fmtFloat(r.avg_violations_per_call,1)+'</td>'
+      + '<td>'+fmtSec(r.avg_duration_seconds)+'</td>'
+      + '<td class="left phr">'+phrases+'</td>'
+      + '</tr>';
+  }}).join('');
+  tableDiv.innerHTML='<table>'+head+'<tbody>'+rows+'</tbody></table>';
+  summaryDiv.innerHTML='Звонков всего: <b>'+fmtInt(dto.total_calls)+'</b>'
+    +' · Σ нарушений: <b>'+fmtInt(dto.total_violations)+'</b>'
+    +' · Период: '+dto.period_from.slice(0,10)+' — '+dto.period_to.slice(0,10);
+}}
+
+form.addEventListener('submit', async (e)=>{{
+  e.preventDefault();
+  errDiv.textContent='';
+  const fd=new FormData(form);
+  const params=new URLSearchParams({{from:fd.get('from'),to:fd.get('to')}});
+  const btn=form.querySelector('button');
+  btn.disabled=true; btn.textContent='Загрузка…';
+  try{{
+    const r=await fetch('operators/data?'+params.toString());
+    if(!r.ok) throw new Error('HTTP '+r.status+': '+(await r.text()));
+    renderTable(await r.json());
+  }}catch(ex){{ errDiv.textContent=String(ex); }}
+  finally{{ btn.disabled=false; btn.textContent='Получить отчёт'; }}
+}});
+
+form.requestSubmit();
 </script>
 </body>
 </html>

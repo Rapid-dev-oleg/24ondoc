@@ -80,6 +80,26 @@ class TwentyTimelineReader:
                 break
         return out
 
+    async def load_calls_and_operators(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+        """Reduced load for the per-operator report — no timeline events."""
+        crs = await self._page_all("/rest/callRecords", "callRecords")
+        ops = await self._page_all("/rest/operators", "operators")
+        members_raw = await self._page_all(
+            "/rest/workspaceMembers", "workspaceMembers",
+        )
+        members_by_id: dict[str, str] = {}
+        for m in members_raw:
+            wmid = m.get("id")
+            if not wmid:
+                continue
+            name = m.get("name") or {}
+            fn = (name.get("firstName") or "").strip()
+            ln = (name.get("lastName") or "").strip()
+            members_by_id[wmid] = (f"{fn} {ln}".strip()) or wmid[:8]
+        return crs, ops, members_by_id
+
     async def load(self) -> TimelineData:
         updated = await self._page_all(
             "/rest/timelineActivities", "timelineActivities",

@@ -49,3 +49,32 @@ class ReportDTO:
     totals: EmployeeRow | None = None    # footer — weighted aggregate, not avg of row averages
 
     total_created_in_period: int = 0     # tasks created in [from, to] — shown in header
+
+
+@dataclass(frozen=True)
+class OperatorRow:
+    """One row in the «По операторам» report — INCOMING calls only.
+
+    Operator entity = телефонная линия 24ondoc. memberName показывает
+    привязанного WorkspaceMember (None если admin ещё не привязал).
+    """
+
+    operator_id: str
+    display_name: str
+    work_phone: str | None
+    member_name: str | None        # if Operator.memberRel attached
+    calls_count: int
+    calls_with_violations: int     # calls с ≥1 нарушением
+    violations_total: int          # sum CR.scriptViolations
+    avg_violations_per_call: float | None
+    avg_duration_seconds: float | None
+    top_missed_phrases: tuple[tuple[str, int], ...]  # ((phrase, count), ...)
+
+
+@dataclass(frozen=True)
+class OperatorReportDTO:
+    period_from: datetime
+    period_to: datetime
+    rows: tuple[OperatorRow, ...] = ()
+    total_calls: int = 0
+    total_violations: int = 0
