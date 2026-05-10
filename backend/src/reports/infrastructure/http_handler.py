@@ -312,7 +312,9 @@ function renderTable(dto) {{
     ['Сложных',   r => fmtInt(r.complex_count),                   'other'],
     ['Ср.сложн',  r => fmtDuration(r.avg_complex_duration_seconds), 'other'],
     ['Повторных', r => fmtInt(r.repeats_count),                   'other'],
-    ['Нарушений', r => fmtInt(r.script_violations),               'other'],
+    // Нарушения скрипта НЕ показываем у сотрудников: они считаются по
+    // оператору-приёмщику звонка, а это поле — assignee (технарь).
+    // Эта статистика живёт на /reports/operators.
     ['Активных',  r => fmtInt(r.pending_count),                   'pending'],
     ['Ср.реаг.',  r => fmtDuration(r.avg_response_time_seconds),  'other'],
   ];
