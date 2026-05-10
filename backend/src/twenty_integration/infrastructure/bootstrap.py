@@ -212,16 +212,12 @@ OPERATOR = ObjectSpec(
 TASK_EXTRA_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("parentTaskId", "ID родительской задачи", "TEXT",
               description="Ссылка на задачу, повтором которой является эта."),
-    # Legacy script-check fields. The source of truth migrated to CallRecord
-    # (each call gets its own scriptViolations/scriptMissing) — these stay
-    # for backwards-compatible reads; the live write path no longer touches
-    # them. Will be dropped after Reports switch to scriptViolationsTotal.
-    FieldSpec("scriptViolations", "Нарушений скрипта", "NUMBER"),
-    FieldSpec("scriptMissing", "Отсутствующие фразы", "TEXT"),
     # Aggregate snapshot for flat reporting (sum + count over related CRs).
     # Recomputed by SyncCallToTwentyUseCase after every script_check pass.
-    FieldSpec("scriptViolationsTotal", "Нарушений (сумма)", "NUMBER",
-              description="Сумма scriptViolations по всем звонкам этой задачи. Снимок для отчётов."),
+    # Source of truth — CallRecord.scriptViolations; этот snapshot живёт
+    # на Task ради скорости отчётов и UI-карточки.
+    FieldSpec("scriptViolationsTotal", "Нарушений скрипта", "NUMBER",
+              description="Сумма scriptViolations по всем звонкам этой задачи."),
     FieldSpec("callRecordCount", "Звонков по задаче", "NUMBER",
               description="Количество CallRecord-ов, привязанных к задаче."),
     # Телефон заявителя живёт прямо на Task — Person как «бакет для номеров»
