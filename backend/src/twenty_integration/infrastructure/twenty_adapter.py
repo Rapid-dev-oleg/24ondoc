@@ -296,6 +296,24 @@ class TwentyRestAdapter(TwentyCRMPort):
             "direction": direction,
             "callStatus": call_status,
         }
+        # Build a human-readable label for the auto-generated `name` field.
+        # CallRecord.name is a plain TEXT (Twenty's default when no
+        # labelIdentifier is set), without it the call shows up as blank
+        # in UI lists. Format: «↗ +79991110001 · 35с»
+        client_for_label = (
+            normalize_ru_phone(client_phone) if client_phone
+            else normalize_ru_phone(caller_phone) if caller_phone else None
+        )
+        arrow = "↗" if direction == "INCOMING" else "↘"
+        label_parts = [arrow]
+        if client_for_label:
+            label_parts.append(f"+7{client_for_label}")
+        if duration:
+            label_parts.append(f"· {duration}с")
+        if not client_for_label and not duration:
+            label_parts.append(ats_call_id[:8])
+        payload["name"] = " ".join(label_parts)
+
         if caller_phone:
             national = normalize_ru_phone(caller_phone)
             # Leave callerPhone empty when the input can't be normalized —
