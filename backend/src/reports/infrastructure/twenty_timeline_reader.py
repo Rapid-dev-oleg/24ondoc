@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
@@ -29,10 +30,42 @@ logger = logging.getLogger(__name__)
 # Twenty REST permits ~100 ops/60s shared across reads+writes. We page
 # through up to 4 endpoints × N pages; bursting that is what's been
 # yielding 429 → 500 on /reports/data. A small inter-page sleep keeps
-# us well under, and an exponential retry handles any spike.
-_PAGE_SLEEP_SEC = 0.4
+# us well under, and a bounded exponential retry handles any spike
+# without eating the nginx 60s timeout.
+_PAGE_SLEEP_SEC = 0.2
 _RETRY_STATUSES = (429, 502, 503, 504)
-_MAX_RETRIES = 6
+_MAX_RETRIES = 4
+_RETRY_CEILING_SEC = 4.0
+
+# A tiny in-process cache for the heavy load() calls. Multiple users
+# refreshing /reports back-to-back, or the same user opening several
+# tabs, used to fan out N x full-paginate against Twenty (each ≥10
+# pages) and immediately trip the 100/60s quota → 504 cascade. With a
+# 60s TTL + single-flight lock per cache key, we serve any subsequent
+# load from memory and do exactly one Twenty fetch per minute.
+_LOAD_CACHE_TTL_SEC = 60.0
+_load_cache: dict[str, tuple[float, Any]] = {}
+_load_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _cached_load(
+    key: str,
+    fn: Callable[[], Awaitable[Any]],
+    ttl: float = _LOAD_CACHE_TTL_SEC,
+) -> Any:
+    """Single-flight memoization. Two callers within `ttl` share one fetch."""
+    now = time.monotonic()
+    cached = _load_cache.get(key)
+    if cached and now - cached[0] < ttl:
+        return cached[1]
+    lock = _load_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        cached = _load_cache.get(key)
+        if cached and time.monotonic() - cached[0] < ttl:
+            return cached[1]
+        result = await fn()
+        _load_cache[key] = (time.monotonic(), result)
+        return result
 
 
 @dataclass(frozen=True)
@@ -68,22 +101,25 @@ class TwentyTimelineReader:
     async def _get_with_retry(
         self, path: str, params: dict[str, Any],
     ) -> httpx.Response:
-        """GET with exponential retry on 429/5xx. Honors Retry-After when set."""
+        """GET with bounded retry on 429/5xx. Honors Retry-After when set,
+        but caps each wait at _RETRY_CEILING_SEC so we never blow the
+        nginx 60s window on a single endpoint."""
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
             try:
                 r = await self._client.get(path, params=params)
             except (httpx.TransportError, httpx.TimeoutException) as e:
                 last_exc = e
-                await asyncio.sleep(min(2 ** attempt, 8))
+                await asyncio.sleep(min(2 ** attempt, _RETRY_CEILING_SEC))
                 continue
             if r.status_code not in _RETRY_STATUSES:
                 return r
             ra = r.headers.get("retry-after")
             try:
-                wait = float(ra) if ra is not None else min(2 ** attempt, 8)
+                wait = float(ra) if ra is not None else 2 ** attempt
             except ValueError:
-                wait = min(2 ** attempt, 8)
+                wait = float(2 ** attempt)
+            wait = min(wait, _RETRY_CEILING_SEC)
             logger.warning(
                 "Twenty %s on %s — retry %d/%d in %.1fs",
                 r.status_code, path, attempt + 1, _MAX_RETRIES, wait,
@@ -130,6 +166,13 @@ class TwentyTimelineReader:
         self,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
         """Reduced load for the per-operator report — no timeline events."""
+        return await _cached_load(
+            f"calls_ops::{self._base}", self._load_calls_and_operators_uncached,
+        )
+
+    async def _load_calls_and_operators_uncached(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
         crs = await self._page_all("/rest/callRecords", "callRecords")
         ops = await self._page_all("/rest/operators", "operators")
         members_raw = await self._page_all(
@@ -147,6 +190,11 @@ class TwentyTimelineReader:
         return crs, ops, members_by_id
 
     async def load(self) -> TimelineData:
+        return await _cached_load(
+            f"timeline::{self._base}", self._load_uncached,
+        )
+
+    async def _load_uncached(self) -> TimelineData:
         updated = await self._page_all(
             "/rest/timelineActivities", "timelineActivities",
             "name[eq]:task.updated",

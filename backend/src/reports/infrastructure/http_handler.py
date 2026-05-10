@@ -251,6 +251,20 @@ _REPORT_HTML = """<!doctype html>
   tfoot td:first-child {{ text-align: left; }}
   #err {{ color: #c0392b; margin-top: 8px; }}
   .muted {{ color: var(--muted); }}
+  /* Spinner shown while /reports/data is loading. */
+  #loader {{
+    display: none;
+    flex-direction: column; align-items: center; gap: 12px;
+    padding: 48px 16px; color: var(--muted); font-size: 13px;
+  }}
+  #loader.show {{ display: flex; }}
+  .spinner {{
+    width: 36px; height: 36px; border-radius: 50%;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }}
+  @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
 </style>
 </head>
 <body>
@@ -267,6 +281,7 @@ _REPORT_HTML = """<!doctype html>
 </form>
 
 <div id="summary"></div>
+<div id="loader"><div class="spinner"></div><div>Загружаем данные из Twenty…</div></div>
 <div id="table"></div>
 <div id="err"></div>
 
@@ -275,6 +290,7 @@ const form = document.getElementById('f');
 const tableDiv = document.getElementById('table');
 const summaryDiv = document.getElementById('summary');
 const errDiv = document.getElementById('err');
+const loaderDiv = document.getElementById('loader');
 const userSelect = form.querySelector('select[name=user_id]');
 
 function fmtDuration(sec) {{
@@ -341,6 +357,9 @@ function renderTable(dto) {{
 form.addEventListener('submit', async (e) => {{
   e.preventDefault();
   errDiv.textContent = '';
+  tableDiv.innerHTML = '';
+  summaryDiv.innerHTML = '';
+  loaderDiv.classList.add('show');
   const fd = new FormData(form);
   const params = new URLSearchParams({{
     from: fd.get('from'), to: fd.get('to'),
@@ -356,6 +375,7 @@ form.addEventListener('submit', async (e) => {{
   }} catch (ex) {{
     errDiv.textContent = String(ex);
   }} finally {{
+    loaderDiv.classList.remove('show');
     btn.disabled = false; btn.textContent = 'Получить отчёт';
   }}
 }});
@@ -420,6 +440,19 @@ _OPERATORS_HTML = """<!doctype html>
   .phr-line {{ display: block; }}
   .phr-cnt {{ color: var(--muted); margin-right: 6px; }}
   #err {{ color: #c0392b; margin-top: 8px; }}
+  #loader {{
+    display: none;
+    flex-direction: column; align-items: center; gap: 12px;
+    padding: 48px 16px; color: var(--muted); font-size: 13px;
+  }}
+  #loader.show {{ display: flex; }}
+  .spinner {{
+    width: 36px; height: 36px; border-radius: 50%;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }}
+  @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
 </style>
 </head>
 <body>
@@ -433,6 +466,7 @@ _OPERATORS_HTML = """<!doctype html>
 </form>
 
 <div id="summary"></div>
+<div id="loader"><div class="spinner"></div><div>Загружаем данные из Twenty…</div></div>
 <div id="table"></div>
 <div id="err"></div>
 
@@ -441,6 +475,7 @@ const form=document.getElementById('f');
 const tableDiv=document.getElementById('table');
 const summaryDiv=document.getElementById('summary');
 const errDiv=document.getElementById('err');
+const loaderDiv=document.getElementById('loader');
 
 function fmtSec(s){{
   if(s===null||s===undefined) return '—';
@@ -495,6 +530,9 @@ function renderTable(dto){{
 form.addEventListener('submit', async (e)=>{{
   e.preventDefault();
   errDiv.textContent='';
+  tableDiv.innerHTML='';
+  summaryDiv.innerHTML='';
+  loaderDiv.classList.add('show');
   const fd=new FormData(form);
   const params=new URLSearchParams({{from:fd.get('from'),to:fd.get('to')}});
   const btn=form.querySelector('button');
@@ -504,7 +542,10 @@ form.addEventListener('submit', async (e)=>{{
     if(!r.ok) throw new Error('HTTP '+r.status+': '+(await r.text()));
     renderTable(await r.json());
   }}catch(ex){{ errDiv.textContent=String(ex); }}
-  finally{{ btn.disabled=false; btn.textContent='Получить отчёт'; }}
+  finally{{
+    loaderDiv.classList.remove('show');
+    btn.disabled=false; btn.textContent='Получить отчёт';
+  }}
 }});
 
 form.requestSubmit();
