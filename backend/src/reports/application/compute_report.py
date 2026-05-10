@@ -51,6 +51,16 @@ def compute_report(
     user_id: str | None = None,
 ) -> ReportDTO:
     """Build the per-operator report + totals footer for [from_ts, to_ts]."""
+    # Filter out OUTGOING-only callback tasks. These were historically
+    # created by the poller for every operator-перезвонил-клиенту call;
+    # they don't represent real customer обращения and should never appear
+    # in metrics. New OUTGOING calls don't spawn tasks at all (see
+    # ats2_poller.py callType branching), so this set only ever grows
+    # from the historical backfill.
+    data = replace(
+        data,
+        tasks=[t for t in data.tasks if not t.get("isOutgoingCallback")],
+    )
     tasks_by_id = {t["id"]: t for t in data.tasks}
 
     # Real Twenty INSERT timestamp per task, from task.created events.

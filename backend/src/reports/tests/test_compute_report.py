@@ -404,3 +404,39 @@ def test_deleted_task_leaves_no_ghost_metrics() -> None:
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
     # No row for WM_VOVA at all (no pending / no completion / no response)
     assert not any(r.user_id == WM_VOVA for r in dto.rows)
+
+
+def test_outgoing_callback_tasks_excluded_from_metrics() -> None:
+    """Tasks flagged isOutgoingCallback=True are historical mush created
+    when poller treated every OUTGOING звонок как новый тикет. Reports
+    must ignore them — counts, durations, response time, everything."""
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    base = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+
+    tasks = (
+        {"id": "real",     "createdAt": _iso(base),
+         "assigneeId": WM_VOVA, "status": "VYPOLNENO"},
+        {"id": "callback", "createdAt": _iso(base),
+         "assigneeId": WM_VOVA, "status": "VYPOLNENO",
+         "isOutgoingCallback": True},
+    )
+    updated = (
+        _tu_event("real", base, {"assigneeId": {"before": None, "after": WM_VOVA}}),
+        _tu_event("real", base + timedelta(hours=1),
+                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+        _tu_event("callback", base, {"assigneeId": {"before": None, "after": WM_VOVA}}),
+        _tu_event("callback", base + timedelta(hours=1),
+                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+    )
+    created = (
+        _tc_event("real", base - timedelta(minutes=5)),
+        _tc_event("callback", base - timedelta(minutes=5)),
+    )
+    data = TimelineData(updated, tasks, members_by_id={WM_VOVA: "V"},
+                        created_events=created)
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
+    # Only `real` should count
+    rows = [r for r in dto.rows if r.user_id == WM_VOVA]
+    assert len(rows) == 1
+    assert rows[0].completed == 1, "callback task must not count as completed"
