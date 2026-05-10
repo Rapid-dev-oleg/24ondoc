@@ -45,6 +45,7 @@ class TwentyCRMPort(ABC):
         call_record_rel_id: str | None = None,
         povtornoe_obrashchenie: bool | None = None,
         parent_task_id: str | None = None,
+        istochnik: str | None = None,
     ) -> TwentyTask: ...
 
     @abstractmethod

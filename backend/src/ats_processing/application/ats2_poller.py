@@ -457,6 +457,7 @@ class ATS2PollerService:
                 caller_phone=caller_phone,
                 povtornoe_obrashchenie=repeat.is_repeat,
                 parent_task_id=repeat.parent_task_id,
+                istochnik="ZVONOK",
             )
             logger.info(
                 "ATS2 call %s → Twenty task created: %s (loc=%s)",

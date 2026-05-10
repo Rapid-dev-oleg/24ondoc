@@ -836,6 +836,7 @@ class TwentyRestAdapter(TwentyCRMPort):
         call_record_rel_id: str | None = None,
         povtornoe_obrashchenie: bool | None = None,
         parent_task_id: str | None = None,
+        istochnik: str | None = None,
     ) -> TwentyTask:
         """Создать задачу."""
         try:
@@ -874,6 +875,11 @@ class TwentyRestAdapter(TwentyCRMPort):
 
             if parent_task_id is not None:
                 payload["parentTaskId"] = parent_task_id
+
+            if istochnik is not None:
+                # SELECT options on Task.istochnikObrashcheniya:
+                # ZVONOK | POCHTA | SMS | TELEGRAM | TORGOVYY | DRUGOE
+                payload["istochnikObrashcheniya"] = istochnik
 
             response = await self._client.post("/rest/tasks", json=payload)
             if response.status_code >= 400:

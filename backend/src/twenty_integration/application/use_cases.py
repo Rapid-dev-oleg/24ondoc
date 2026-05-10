@@ -128,6 +128,19 @@ class CreateTwentyTaskFromSession:
         except Exception:
             logger.exception("DetectRepeat failed; proceeding with is_repeat=False")
 
+        # Map DraftSession.source_type → Twenty Task.istochnikObrashcheniya
+        # so reports can split «откуда пришла Задача». CALL_T2 covers
+        # operator-confirmed ATS calls passing through the bot preview;
+        # MANUAL means the operator drafted the task by hand in chat.
+        source_to_istochnik = {
+            "call_t2": "ZVONOK",
+            "manual": "TELEGRAM",
+        }
+        istochnik = source_to_istochnik.get(
+            getattr(session.source_type, "value", None) or "manual",
+            "TELEGRAM",
+        )
+
         task = await self._port.create_task(
             title=session.ai_result.title,
             body=session.ai_result.description,
@@ -139,6 +152,7 @@ class CreateTwentyTaskFromSession:
             caller_phone=caller_phone,
             povtornoe_obrashchenie=repeat.is_repeat,
             parent_task_id=repeat.parent_task_id,
+            istochnik=istochnik,
         )
 
         # 4. Загрузить файлы в Twenty и прикрепить к задаче
