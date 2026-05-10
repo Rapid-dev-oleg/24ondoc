@@ -17,10 +17,22 @@ a window + per-task lookup fallback.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+# Twenty REST permits ~100 ops/60s shared across reads+writes. We page
+# through up to 4 endpoints × N pages; bursting that is what's been
+# yielding 429 → 500 on /reports/data. A small inter-page sleep keeps
+# us well under, and an exponential retry handles any spike.
+_PAGE_SLEEP_SEC = 0.4
+_RETRY_STATUSES = (429, 502, 503, 504)
+_MAX_RETRIES = 6
 
 
 @dataclass(frozen=True)
@@ -53,6 +65,37 @@ class TwentyTimelineReader:
     async def __aexit__(self, *_a: object) -> None:
         await self.close()
 
+    async def _get_with_retry(
+        self, path: str, params: dict[str, Any],
+    ) -> httpx.Response:
+        """GET with exponential retry on 429/5xx. Honors Retry-After when set."""
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                r = await self._client.get(path, params=params)
+            except (httpx.TransportError, httpx.TimeoutException) as e:
+                last_exc = e
+                await asyncio.sleep(min(2 ** attempt, 8))
+                continue
+            if r.status_code not in _RETRY_STATUSES:
+                return r
+            ra = r.headers.get("retry-after")
+            try:
+                wait = float(ra) if ra is not None else min(2 ** attempt, 8)
+            except ValueError:
+                wait = min(2 ** attempt, 8)
+            logger.warning(
+                "Twenty %s on %s — retry %d/%d in %.1fs",
+                r.status_code, path, attempt + 1, _MAX_RETRIES, wait,
+            )
+            await asyncio.sleep(wait)
+            last_exc = httpx.HTTPStatusError(
+                f"{r.status_code} after retries", request=r.request, response=r,
+            )
+        if last_exc:
+            raise last_exc
+        raise RuntimeError(f"_get_with_retry: exhausted retries on {path}")
+
     async def _page_all(
         self, path: str, plural: str, base_filter: str = "",
     ) -> list[dict[str, Any]]:
@@ -69,7 +112,7 @@ class TwentyTimelineReader:
                 params["filter"] = base_filter
             elif cursor:
                 params["filter"] = f"createdAt[gt]:{cursor}"
-            r = await self._client.get(path, params=params)
+            r = await self._get_with_retry(path, params)
             r.raise_for_status()
             items = r.json().get("data", {}).get(plural, [])
             if not items:
@@ -78,6 +121,9 @@ class TwentyTimelineReader:
             cursor = items[-1].get("createdAt")
             if len(items) < 100:
                 break
+            # Inter-page courtesy sleep — keeps us under the shared
+            # 100/60s Twenty quota across all 4 endpoints we scan.
+            await asyncio.sleep(_PAGE_SLEEP_SEC)
         return out
 
     async def load_calls_and_operators(
