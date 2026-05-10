@@ -63,6 +63,9 @@ class SyncCallToTwentyUseCase:
         *,
         task_id: str | None = None,
         callee_phone: str | None = None,
+        client_phone: str | None = None,
+        agent_phone: str | None = None,
+        direction: str | None = None,
     ) -> SyncResult:
         # Prefer the locally persisted twenty_task_id (set by
         # CreateTwentyTaskFromSession) so the backfill also links calls
@@ -95,21 +98,22 @@ class SyncCallToTwentyUseCase:
                     "Failed resolving location for call %s", record.call_id
                 )
 
-        # Resolve Operator from callee_phone (callee = the support agent who
-        # answered). Looked up against Operator.workPhone in Twenty. Operator
-        # entity is created manually (or via bootstrap_operators script);
-        # we don't auto-create here on miss — leave operatorRel null so an
-        # admin can attach it later in Twenty UI.
+        # Resolve Operator by agent_phone — the semantic "our operator"
+        # number. For INCOMING this is callee; for OUTGOING it is caller
+        # (because operator is the one who DIALS on a callback). Looked up
+        # against Operator.workPhone in Twenty. We don't auto-create here
+        # on miss — leave operatorRel null so an admin attaches in UI.
         operator_id: str | None = None
-        if callee_phone:
+        op_phone = agent_phone or callee_phone  # backward-compat
+        if op_phone:
             try:
-                op = await self._port.find_operator_by_phone(callee_phone)
+                op = await self._port.find_operator_by_phone(op_phone)
                 if op and op.get("id"):
                     operator_id = str(op["id"])
             except Exception:
                 logger.exception(
                     "Failed resolving operator for call %s phone=%s",
-                    record.call_id, callee_phone,
+                    record.call_id, op_phone,
                 )
 
         # Snapshot Task.povtornoeObrashchenie → CallRecord.callKind so the
@@ -127,7 +131,10 @@ class SyncCallToTwentyUseCase:
                 )
 
         transcript = record.get_best_transcription()
-        direction = "INCOMING"  # ATS2 doesn't tell us direction in current poller
+        # direction comes from ATS2 callType via the poller; default to
+        # INCOMING for backward-compat (the historical Telegram path
+        # never passes direction).
+        direction = direction or "INCOMING"
         call_status = _STATUS_MAP.get(record.status, "ERROR")
 
         twenty_id: str | None = None
@@ -138,6 +145,8 @@ class SyncCallToTwentyUseCase:
                     record.call_id,
                     caller_phone=record.caller_phone,
                     callee_phone=callee_phone,
+                    client_phone=client_phone or record.caller_phone,
+                    agent_phone=agent_phone,
                     direction=direction,
                     duration=record.duration,
                     call_status=call_status,
@@ -160,10 +169,23 @@ class SyncCallToTwentyUseCase:
                 isinstance(existing_callee, dict)
                 and existing_callee.get("primaryPhoneNumber")
             )
+            existing_client = existing.get("clientPhone") or {}
+            client_already_set = bool(
+                isinstance(existing_client, dict)
+                and existing_client.get("primaryPhoneNumber")
+            )
+            existing_agent = existing.get("agentPhone") or {}
+            agent_already_set = bool(
+                isinstance(existing_agent, dict)
+                and existing_agent.get("primaryPhoneNumber")
+            )
             wants_update = bool(
                 task_id
                 or (transcript and not existing.get("transcript"))
                 or (callee_phone and not callee_already_set)
+                or (client_phone and not client_already_set)
+                or (agent_phone and not agent_already_set)
+                or (direction and existing.get("direction") != direction)
                 or (operator_id and not existing.get("operatorRelId"))
                 or (call_kind and not existing.get("callKind"))
             )
@@ -175,6 +197,9 @@ class SyncCallToTwentyUseCase:
                         location_rel_id=location_id if not existing.get("locationRelId") else None,
                         transcript=transcript if not existing.get("transcript") else None,
                         callee_phone=callee_phone if not callee_already_set else None,
+                        client_phone=client_phone if not client_already_set else None,
+                        agent_phone=agent_phone if not agent_already_set else None,
+                        direction=direction if existing.get("direction") != direction else None,
                         operator_rel_id=operator_id if not existing.get("operatorRelId") else None,
                         call_kind=call_kind if not existing.get("callKind") else None,
                     )

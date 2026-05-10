@@ -124,8 +124,16 @@ CALL_RECORD = ObjectSpec(
     icon="IconPhone",
     fields=(
         FieldSpec("atsCallId", "ATS Call ID", "TEXT", is_nullable=False),
-        FieldSpec("callerPhone", "Телефон звонящего", "PHONES"),
-        FieldSpec("calleePhone", "Телефон оператора", "PHONES"),
+        # Raw (from ATS): callerNumber/calleeNumber as-given. Don't read
+        # these for business logic — for INCOMING they happen to align
+        # with client/agent, for OUTGOING they're swapped.
+        FieldSpec("callerPhone", "Телефон звонящего (raw)", "PHONES"),
+        FieldSpec("calleePhone", "Телефон принявшего (raw)", "PHONES"),
+        # Semantic roles. Always: clientPhone = клиент (the one with the
+        # problem), agentPhone = our operator. Resolvers and reports use
+        # ONLY these.
+        FieldSpec("clientPhone", "Телефон клиента", "PHONES"),
+        FieldSpec("agentPhone", "Телефон оператора", "PHONES"),
         FieldSpec(
             "direction",
             "Направление",
@@ -220,6 +228,12 @@ TASK_EXTRA_FIELDS: tuple[FieldSpec, ...] = (
     # Телефон заявителя живёт прямо на Task — Person как «бакет для номеров»
     # больше не нужен (см. wipe_client_persons.py + use_cases.py).
     FieldSpec("callerPhone", "Телефон заявителя", "PHONES"),
+    # True only for tasks created (historically) from OUTGOING-only call
+    # streams — operators perezvonki that never should have spawned a
+    # standalone task. Reports filter these out. New OUTGOING calls do
+    # NOT create a Task at all, so this flag is set only via backfill.
+    FieldSpec("isOutgoingCallback", "Только обратные звонки", "BOOLEAN",
+              description="Task создавалась из OUTGOING-звонка (исторический мусор). Исключать в отчётах."),
 )
 
 # Relation specs — added AFTER both target & source objects are present.

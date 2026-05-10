@@ -147,10 +147,19 @@ class ATS2PollerService:
         await self._save_last_poll_timestamp(now)
 
     async def _process_new_call(self, raw_call: dict[str, object], call_id: str) -> None:
-        """Обработать новый звонок: сохранить → транскрипция → AI → задача."""
+        """Обработать новый звонок: сохранить → транскрипция → AI → задача.
+
+        Branches on callType:
+          - SINGLE_CHANNEL / MULTI_CHANNEL → INCOMING: client=caller, agent=callee.
+            Whisper + AI classify → create Task → mirror CallRecord.
+          - OUTGOING / CRM_OUTGOING → OUTGOING (callback): client=callee,
+            agent=caller. Whisper + mirror CallRecord BUT no Task. Try to
+            attach to a recent INCOMING Task of this client; orphan if not.
+        Other types are saved + logged but otherwise skipped.
+        """
         filename = str(raw_call.get("recordFileName", ""))
-        caller_phone = str(raw_call.get("callerNumber", "")) or None
-        callee_phone = str(raw_call.get("calleeNumber", "")) or None
+        raw_caller = str(raw_call.get("callerNumber", "")) or None
+        raw_callee = str(raw_call.get("calleeNumber", "")) or None
         caller_name = str(raw_call.get("callerName", "")) or None
         callee_name = str(raw_call.get("calleeName", "")) or None
         call_date = str(raw_call.get("date", "")) or None
@@ -163,6 +172,22 @@ class ATS2PollerService:
                 duration = int(str(raw_call["conversationDuration"]))
             except (ValueError, TypeError):
                 pass
+
+        # Map ATS callType → our 2-state direction + role assignment.
+        # OUTGOING/CRM_OUTGOING are callbacks: caller is OUR operator,
+        # callee is the customer. INCOMING (single/multi-channel): caller
+        # is the customer, callee is the line they reached.
+        is_outgoing = call_type in ("OUTGOING", "CRM_OUTGOING")
+        direction_value = "OUTGOING" if is_outgoing else "INCOMING"
+        if is_outgoing:
+            client_phone = raw_callee
+            agent_phone = raw_caller
+        else:
+            client_phone = raw_caller
+            agent_phone = raw_callee
+        # caller_phone here keeps the SEMANTIC client identity — used for
+        # Location resolve, Task.callerPhone, and (later) recent-task lookup.
+        caller_phone = client_phone
 
         # Получить транскрипцию: ATS2 STT → fallback Whisper
         transcription_text: str | None = None
@@ -209,15 +234,19 @@ class ATS2PollerService:
             bool(transcription_text),
         )
 
-        # AI-анализ + создание задачи в Twenty
-        if transcription_text and self._ai_port and self._twenty_port:
+        # AI-анализ + создание задачи в Twenty (только INCOMING)
+        task_id: str | None = None
+        if (not is_outgoing
+                and transcription_text
+                and self._ai_port
+                and self._twenty_port):
             task_id = await self._create_task_from_call(
                 call_id=call_id,
                 transcription=transcription_text,
-                caller_phone=caller_phone,
+                caller_phone=client_phone,
                 caller_name=caller_name,
                 callee_name=callee_name,
-                callee_phone=callee_phone,
+                callee_phone=agent_phone,
                 duration=duration,
                 call_date=call_date,
                 call_type=call_type,
@@ -231,20 +260,45 @@ class ATS2PollerService:
                 record.mark_error()
             await self._call_repo.save(record)
 
-            # Mirror the call into Twenty CallRecord and link back to the
-            # task — creates the Звонки row the operator sees in CRM,
-            # populates task.callRecordRelId, and (inside sync_call_uc)
-            # runs check_script on the transcript.
-            if task_id and self._sync_call_uc is not None:
-                try:
-                    await self._sync_call_uc.execute(
-                        record, task_id=task_id, callee_phone=callee_phone,
-                    )
-                except Exception:
-                    logger.exception(
-                        "ATS2 Poller: sync_call_uc failed for call %s task %s",
-                        call_id, task_id,
-                    )
+        # OUTGOING: попытаться прицепиться к недавней Task этого клиента
+        # (создаёт ли клиент новый тикет — решает он сам, OUT-звонок не
+        # должен порождать тикет).
+        if (is_outgoing
+                and self._twenty_port is not None
+                and client_phone):
+            try:
+                since = datetime.now(UTC) - timedelta(days=30)
+                parent = await self._twenty_port.find_recent_task_by_caller_phone(
+                    client_phone, since,
+                )
+                if parent and parent.get("id"):
+                    task_id = str(parent["id"])
+                    record.twenty_task_id = task_id
+                    record.mark_created()
+                    await self._call_repo.save(record)
+            except Exception:
+                logger.exception(
+                    "ATS2 Poller: failed attaching OUTGOING %s to existing Task",
+                    call_id,
+                )
+
+        # Mirror the call into Twenty CallRecord (всегда — и INCOMING, и
+        # OUTGOING). taskRel populated when we have a task to attach.
+        if (transcription_text or is_outgoing) and self._sync_call_uc is not None:
+            try:
+                await self._sync_call_uc.execute(
+                    record,
+                    task_id=task_id,
+                    callee_phone=agent_phone,  # legacy raw callee
+                    client_phone=client_phone,
+                    agent_phone=agent_phone,
+                    direction=direction_value,
+                )
+            except Exception:
+                logger.exception(
+                    "ATS2 Poller: sync_call_uc failed for call %s task %s",
+                    call_id, task_id,
+                )
 
     async def _create_task_from_call(
         self,

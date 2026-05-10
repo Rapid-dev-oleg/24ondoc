@@ -273,6 +273,8 @@ class TwentyRestAdapter(TwentyCRMPort):
         *,
         caller_phone: str | None = None,
         callee_phone: str | None = None,
+        client_phone: str | None = None,
+        agent_phone: str | None = None,
         direction: str = "INCOMING",
         duration: int | None = None,
         call_status: str = "ANSWERED",
@@ -305,6 +307,14 @@ class TwentyRestAdapter(TwentyCRMPort):
             national = normalize_ru_phone(callee_phone)
             if national:
                 payload["calleePhone"] = to_phones_composite(national)
+        if client_phone:
+            national = normalize_ru_phone(client_phone)
+            if national:
+                payload["clientPhone"] = to_phones_composite(national)
+        if agent_phone:
+            national = normalize_ru_phone(agent_phone)
+            if national:
+                payload["agentPhone"] = to_phones_composite(national)
         if duration is not None:
             payload["duration"] = duration
         if occurred_at is not None:
@@ -341,6 +351,9 @@ class TwentyRestAdapter(TwentyCRMPort):
         location_rel_id: str | None = None,
         transcript: str | None = None,
         callee_phone: str | None = None,
+        client_phone: str | None = None,
+        agent_phone: str | None = None,
+        direction: str | None = None,
         operator_rel_id: str | None = None,
         call_kind: str | None = None,
     ) -> None:
@@ -356,6 +369,16 @@ class TwentyRestAdapter(TwentyCRMPort):
             national = normalize_ru_phone(callee_phone)
             if national:
                 patch["calleePhone"] = to_phones_composite(national)
+        if client_phone is not None:
+            national = normalize_ru_phone(client_phone)
+            if national:
+                patch["clientPhone"] = to_phones_composite(national)
+        if agent_phone is not None:
+            national = normalize_ru_phone(agent_phone)
+            if national:
+                patch["agentPhone"] = to_phones_composite(national)
+        if direction is not None:
+            patch["direction"] = direction
         if operator_rel_id is not None:
             patch["operatorRelId"] = operator_rel_id
         if call_kind is not None:
@@ -513,6 +536,45 @@ class TwentyRestAdapter(TwentyCRMPort):
         r.raise_for_status()
         data = r.json().get("data", {})
         return dict(data.get("createOperator", data))
+
+    async def find_recent_task_by_caller_phone(
+        self, caller_phone: str, since: datetime,
+    ) -> dict[str, Any] | None:
+        """Most-recent non-callback Task whose Task.callerPhone matches.
+
+        Used to attach OUTGOING CallRecord-ы (callbacks operatоrов клиенту)
+        к тикету, который этот же клиент завёл ранее. Skips tasks marked
+        isOutgoingCallback=true (those ARE the callback-only tickets we
+        flagged in the historical backfill — pointing to one of them
+        defeats the purpose).
+        """
+        national = normalize_ru_phone(caller_phone)
+        if not national:
+            return None
+        since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            response = await self._client.get(
+                "/rest/tasks",
+                params={
+                    "filter": (
+                        f"callerPhone.primaryPhoneNumber[eq]:{national}"
+                        f",createdAt[gt]:{since_iso}"
+                    ),
+                    "order_by": "createdAt[DescNullsLast]",
+                    "limit": 5,
+                },
+            )
+            response.raise_for_status()
+            items = response.json().get("data", {}).get("tasks", []) or []
+            for t in items:
+                if not t.get("isOutgoingCallback"):
+                    return t
+            return None
+        except httpx.HTTPError:
+            logger.exception(
+                "find_recent_task_by_caller_phone failed phone=%s", national,
+            )
+            return None
 
     async def find_recent_tasks_by_location_id(
         self, location_id: str, since: datetime, limit: int = 10

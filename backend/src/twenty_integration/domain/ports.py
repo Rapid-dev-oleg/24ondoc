@@ -93,6 +93,8 @@ additionalPhones. Возвращает True если запись была сд�
         *,
         caller_phone: str | None = None,
         callee_phone: str | None = None,
+        client_phone: str | None = None,
+        agent_phone: str | None = None,
         direction: str = "INCOMING",
         duration: int | None = None,
         call_status: str = "ANSWERED",
@@ -114,9 +116,23 @@ additionalPhones. Возвращает True если запись была сд�
         location_rel_id: str | None = None,
         transcript: str | None = None,
         callee_phone: str | None = None,
+        client_phone: str | None = None,
+        agent_phone: str | None = None,
+        direction: str | None = None,
         operator_rel_id: str | None = None,
         call_kind: str | None = None,
     ) -> None: ...
+
+    @abstractmethod
+    async def find_recent_task_by_caller_phone(
+        self, caller_phone: str, since: datetime,
+    ) -> dict[str, object] | None:
+        """Find a recent INCOMING-derived Task whose Task.callerPhone matches.
+
+        Used to attach OUTGOING CallRecord-ов (callbacks) к существующему
+        тикету клиента. Skips tasks marked isOutgoingCallback=true.
+        """
+        ...
 
     @abstractmethod
     async def update_call_record_script_check(
