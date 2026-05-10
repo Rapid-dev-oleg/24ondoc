@@ -156,7 +156,6 @@ CALL_RECORD = ObjectSpec(
         ),
         FieldSpec("occurredAt", "Время звонка", "DATE_TIME"),
         FieldSpec("transcript", "Транскрипт", "RICH_TEXT_V2"),
-        FieldSpec("audioUrl", "Ссылка на аудио", "TEXT"),
         # Script-check results live on the call (per-call check), with a
         # snapshot/sum on Task for flat reporting (`scriptViolationsTotal`).
         FieldSpec("scriptViolations", "Нарушений скрипта", "NUMBER"),

@@ -280,7 +280,6 @@ class TwentyRestAdapter(TwentyCRMPort):
         call_status: str = "ANSWERED",
         occurred_at: datetime | None = None,
         transcript: str | None = None,
-        audio_url: str | None = None,
         location_rel_id: str | None = None,
         task_rel_id: str | None = None,
         operator_rel_id: str | None = None,
@@ -321,8 +320,6 @@ class TwentyRestAdapter(TwentyCRMPort):
             payload["occurredAt"] = occurred_at.strftime("%Y-%m-%dT%H:%M:%SZ")
         if transcript:
             payload["transcript"] = {"markdown": transcript}
-        if audio_url:
-            payload["audioUrl"] = audio_url
         if location_rel_id:
             payload["locationRelId"] = location_rel_id
         if task_rel_id:

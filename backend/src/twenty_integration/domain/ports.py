@@ -101,7 +101,6 @@ additionalPhones. Возвращает True если запись была сд�
         call_status: str = "ANSWERED",
         occurred_at: datetime | None = None,
         transcript: str | None = None,
-        audio_url: str | None = None,
         location_rel_id: str | None = None,
         task_rel_id: str | None = None,
         operator_rel_id: str | None = None,
