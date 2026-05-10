@@ -166,8 +166,9 @@ CALL_RECORD = ObjectSpec(
         FieldSpec(
             "callKind", "Тип обращения", "SELECT",
             options=(
-                {"label": "Первое обращение", "value": "FIRST", "color": "blue"},
-                {"label": "Повторное", "value": "REPEAT", "color": "orange"},
+                {"label": "Новая", "value": "NEW", "color": "blue"},
+                {"label": "Повторная", "value": "REPEAT", "color": "orange"},
+                {"label": "Системная", "value": "SYSTEM", "color": "red"},
             ),
         ),
     ),
@@ -220,6 +221,19 @@ TASK_EXTRA_FIELDS: tuple[FieldSpec, ...] = (
               description="Сумма scriptViolations по всем звонкам этой задачи."),
     FieldSpec("callRecordCount", "Звонков по задаче", "NUMBER",
               description="Количество CallRecord-ов, привязанных к задаче."),
+    # Длина цепочки обращений того же клиента: NEW (новая), REPEAT
+    # (повторная — 2-е обращение в цепочке), SYSTEM (3+ — системная
+    # проблема, не закрытая прошлыми попытками). Используется для
+    # фильтрации в отчётах + цвета в Twenty UI.
+    FieldSpec(
+        "obrashchenieKind", "Тип обращения", "SELECT",
+        description="Длина цепочки обращений того же клиента в окне 3 дня.",
+        options=(
+            {"label": "Новая", "value": "NEW", "color": "blue"},
+            {"label": "Повторная", "value": "REPEAT", "color": "orange"},
+            {"label": "Системная", "value": "SYSTEM", "color": "red"},
+        ),
+    ),
     # Телефон заявителя живёт прямо на Task — Person как «бакет для номеров»
     # больше не нужен (см. wipe_client_persons.py + use_cases.py).
     FieldSpec("callerPhone", "Телефон заявителя", "PHONES"),
