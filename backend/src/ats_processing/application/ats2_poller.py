@@ -189,21 +189,16 @@ class ATS2PollerService:
         # Location resolve, Task.callerPhone, and (later) recent-task lookup.
         caller_phone = client_phone
 
-        # Получить транскрипцию: ATS2 STT → fallback Whisper
+        # Получить транскрипцию: Whisper (Groq) → fallback ATS2 STT.
+        # Comparing both on the same call (см. /tmp/compare_stt.py) showed
+        # Whisper resolves time- and address-words noticeably better; ATS2
+        # STT mangles key fragments ("Мы до пяти не успели" → "надо пить
+        # и не успели"). We keep ATS2 STT as a safety net for когда
+        # Groq падает или upload не доходит.
         transcription_text: str | None = None
         if filename:
-            # Попытка 1: ATS2 STT
-            try:
-                raw_transcription = await self._ats2_client.get_transcription(filename)
-                raw_words: Any = raw_transcription.get("words", [])
-                if isinstance(raw_words, list) and raw_words:
-                    words = [ATS2Word(**w) for w in raw_words]
-                    transcription_text = self._mapper.map_to_dialogue(words)
-            except Exception:
-                pass
-
-            # Попытка 2: скачать аудио + Whisper
-            if not transcription_text and self._stt_port is not None:
+            # Попытка 1: Whisper по аудио
+            if self._stt_port is not None:
                 try:
                     audio_bytes = await self._ats2_client.download_recording(filename)
                     transcription_text = await self._stt_port.transcribe(audio_bytes)
@@ -212,6 +207,21 @@ class ATS2PollerService:
                         call_id,
                         len(audio_bytes),
                     )
+                except Exception:
+                    logger.warning("ATS2 Poller: Whisper не смог для %s — пробую ATS2 STT", call_id)
+
+            # Попытка 2 (fallback): ATS2 STT
+            if not transcription_text:
+                try:
+                    raw_transcription = await self._ats2_client.get_transcription(filename)
+                    raw_words: Any = raw_transcription.get("words", [])
+                    if isinstance(raw_words, list) and raw_words:
+                        words = [ATS2Word(**w) for w in raw_words]
+                        transcription_text = self._mapper.map_to_dialogue(words)
+                        logger.info(
+                            "ATS2 Poller: fallback ATS2 STT для %s",
+                            call_id,
+                        )
                 except Exception:
                     logger.warning("ATS2 Poller: транскрипция недоступна для %s", call_id)
 
