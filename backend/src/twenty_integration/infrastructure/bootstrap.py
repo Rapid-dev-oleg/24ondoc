@@ -1,7 +1,7 @@
 """Twenty schema bootstrap — idempotent creation of custom objects and fields.
 
 Declarative description of objects/fields the app depends on (Location,
-CallRecord, TaskLog + script/escalation fields on Task). `ensure_twenty_schema`
+CallRecord + script/escalation fields on Task). `ensure_twenty_schema`
 lists existing metadata and creates only what's missing, then patches anything
 whose flags drifted from the spec (isNullable, isUnique). Safe to re-run.
 
@@ -152,47 +152,12 @@ CALL_RECORD = ObjectSpec(
     ),
 )
 
-TASK_LOG = ObjectSpec(
-    name_singular="taskLog",
-    name_plural="taskLogs",
-    label_singular="Событие задачи",
-    label_plural="События задач",
-    description="Аудит действий с задачей: создание, назначение, смена статуса, AI-проверки.",
-    icon="IconHistory",
-    fields=(
-        FieldSpec(
-            "action",
-            "Действие",
-            "SELECT",
-            options=(
-                {"label": "Создана", "value": "CREATED", "color": "gray"},
-                {"label": "Назначена", "value": "ASSIGNED", "color": "blue"},
-                {"label": "Смена статуса", "value": "STATUS_CHANGED", "color": "yellow"},
-                {"label": "Завершена", "value": "COMPLETED", "color": "green"},
-                {"label": "Отменена", "value": "CANCELLED", "color": "red"},
-                {"label": "Комментарий", "value": "COMMENT_ADDED", "color": "purple"},
-                {"label": "Проверен скрипт", "value": "SCRIPT_CHECKED", "color": "pink"},
-                {"label": "Проверен повтор", "value": "REPEAT_CHECKED", "color": "orange"},
-            ),
-        ),
-        FieldSpec(
-            "actorType",
-            "Источник",
-            "SELECT",
-            options=(
-                {"label": "Оператор", "value": "OPERATOR", "color": "blue"},
-                {"label": "Администратор", "value": "ADMIN", "color": "purple"},
-                {"label": "AI", "value": "SYSTEM_AI", "color": "pink"},
-            ),
-        ),
-        FieldSpec("actorId", "ID актора", "TEXT"),
-        FieldSpec("actorName", "Имя актора", "TEXT"),
-        FieldSpec("details", "Описание", "RICH_TEXT_V2"),
-        FieldSpec("meta", "Мета", "RICH_TEXT_V2",
-                  description="JSON с payload события (updatedFields, priority и т.п.)"),
-        FieldSpec("occurredAt", "Время события", "DATE_TIME"),
-    ),
-)
+# NOTE: the custom `taskLog` Object that lived here was a redundant mirror
+# of Twenty's built-in `timelineActivity` (which records every CRUD diff
+# automatically). The mirror was never wired into the live write path and
+# `task_events` reports already read from `timelineActivity`. The Object
+# is dropped from the schema in scripts/migrate_drop_tasklog.py and the
+# matching local Postgres table goes away in alembic 0010.
 
 # Custom fields to add to EXISTING objects (task only).
 # Person.location* кэш-поля и Person.locationRel были удалены при переходе
@@ -214,12 +179,6 @@ TASK_RELATIONS: tuple[FieldSpec, ...] = (
     FieldSpec(
         "locationRel", "Точка", "RELATION",
         relation_target="location", reverse_label="Задачи точки",
-    ),
-)
-TASKLOG_RELATIONS: tuple[FieldSpec, ...] = (
-    FieldSpec(
-        "taskRel", "Задача", "RELATION",
-        relation_target="task", reverse_label="События задачи",
     ),
 )
 CALLRECORD_RELATIONS: tuple[FieldSpec, ...] = (
@@ -317,7 +276,7 @@ async def ensure_twenty_schema(adapter: Any) -> BootstrapReport:
 
     Steps:
       1. Pull current objects+fields via GraphQL `/metadata`.
-      2. Create missing custom objects (Location, CallRecord, TaskLog).
+      2. Create missing custom objects (Location, CallRecord).
       3. Create missing non-relation fields on every target object.
       4. Set Object.labelIdentifierFieldMetadataId for objects whose spec has
          a field marked `is_label_identifier=True`.
@@ -331,7 +290,7 @@ async def ensure_twenty_schema(adapter: Any) -> BootstrapReport:
     objects_by_name: dict[str, dict[str, Any]] = {o["nameSingular"]: o for o in objects}
 
     # ---- Step 2: create missing custom objects ----
-    for spec in (LOCATION, CALL_RECORD, TASK_LOG):
+    for spec in (LOCATION, CALL_RECORD):
         if spec.name_singular in objects_by_name:
             report.objects_existing.append(spec.name_singular)
             continue
@@ -362,7 +321,6 @@ async def ensure_twenty_schema(adapter: Any) -> BootstrapReport:
     extras_plan: list[tuple[ObjectSpec | None, str, tuple[FieldSpec, ...]]] = [
         (LOCATION, LOCATION.name_singular, LOCATION.fields),
         (CALL_RECORD, CALL_RECORD.name_singular, CALL_RECORD.fields),
-        (TASK_LOG, TASK_LOG.name_singular, TASK_LOG.fields),
         (None, "task", TASK_EXTRA_FIELDS),
     ]
 
@@ -427,7 +385,6 @@ async def ensure_twenty_schema(adapter: Any) -> BootstrapReport:
     # ---- Step 6: relation fields ----
     relations_plan: list[tuple[str, tuple[FieldSpec, ...]]] = [
         ("task", TASK_RELATIONS),
-        (TASK_LOG.name_singular, TASKLOG_RELATIONS),
         (CALL_RECORD.name_singular, CALLRECORD_RELATIONS),
     ]
     for obj_name, specs in relations_plan:

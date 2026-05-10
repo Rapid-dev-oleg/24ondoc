@@ -16,7 +16,6 @@ from src.twenty_integration.infrastructure.bootstrap import (
     CALL_RECORD,
     LOCATION,
     TASK_EXTRA_FIELDS,
-    TASK_LOG,
     TASK_RELATIONS,
     ensure_twenty_schema,
 )
@@ -179,7 +178,7 @@ async def test_bootstrap_creates_all_missing_objects_and_fields() -> None:
 
     report = await ensure_twenty_schema(adapter)
 
-    assert set(report.objects_created) == {"location", "callRecord", "taskLog"}
+    assert set(report.objects_created) == {"location", "callRecord"}
     assert not report.objects_existing
     assert not report.errors
 
@@ -217,7 +216,7 @@ async def test_bootstrap_is_idempotent() -> None:
     assert creates_first == creates_second, "second pass must not create anything"
     assert not report2.objects_created
     assert not report2.fields_created
-    assert set(report2.objects_existing) == {"location", "callRecord", "taskLog"}
+    assert set(report2.objects_existing) == {"location", "callRecord"}
     assert not report2.errors
 
 
