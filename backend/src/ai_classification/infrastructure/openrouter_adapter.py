@@ -169,12 +169,14 @@ class OpenRouterAdapter(AIClassificationPort):
 {vazhnost_list}
 
 Правила:
-- Если ни одна категория не подходит — верни null для kategoriya.
+- Если ни одна категория не подходит — верни value `TREBUET_RAZBORA` \
+(специальное значение «требует разбора» — оператор разберёт вручную). \
+НЕ возвращай null для kategoriya: пустая категория ломает отчёты.
 - Если не можешь определить важность — верни null для vazhnost.
-- Возвращай ТОЛЬКО value из списка, не label.
+- Возвращай ТОЛЬКО value из списка (или `TREBUET_RAZBORA`), не label.
 
 Ответь ТОЛЬКО JSON-объектом:
-{{"kategoriya": "<value или null>", "vazhnost": "<value или null>"}}"""
+{{"kategoriya": "<value или TREBUET_RAZBORA>", "vazhnost": "<value или null>"}}"""
 
     async def select_task_fields(
         self,
@@ -229,8 +231,16 @@ class OpenRouterAdapter(AIClassificationPort):
                 kat_value = parsed.get("kategoriya")
                 vazh_value = parsed.get("vazhnost")
 
+                # `TREBUET_RAZBORA` is the «can't decide» bucket added in
+                # bootstrap (см. ensure_treubet_razbora_option) — accept
+                # it even if option list snapshot is stale here.
+                kat_accepted = (
+                    kat_value if kat_value in valid_kat
+                    or kat_value == "TREBUET_RAZBORA"
+                    else None
+                )
                 result = TaskFieldSelection(
-                    kategoriya=kat_value if kat_value in valid_kat else None,
+                    kategoriya=kat_accepted,
                     vazhnost=vazh_value if vazh_value in valid_vazh else None,
                 )
                 logger.info(
@@ -531,3 +541,154 @@ async def _check_script_impl(
 
 
 OpenRouterAdapter.check_script = _check_script_impl  # type: ignore[attr-defined]
+
+
+INTENT_CLASSIFICATION_PROMPT = """\
+Ты — диспетчер входящих звонков техподдержки 24ondoc. Решаешь, что делать \
+с НОВЫМ звонком клиента, опираясь на список его ОТКРЫТЫХ заявок.
+
+Возможные решения (`kind`):
+  - "NEW_TASK" — клиент сообщает о новой проблеме / новой просьбе. Создавать \
+заявку.
+  - "UPDATE_EXISTING" — звонок продолжает уже открытую заявку клиента: ack \
+о выполнении, статус-вопрос, передача пароля по уже идущей работе, follow-up. \
+Если уверен, верни `parent_task_id` из списка открытых заявок.
+  - "NO_ACTION" — звонок не несёт смысла: недозвон, мусор STT, односложное \
+«Алло./Спасибо.» без контекста, ошибка номером, внутренняя координация \
+между сотрудниками без обращения клиента.
+  - "NEEDS_REVIEW" — ты не уверен. Лучше создать заявку с пометкой «требует \
+разбора», чем потерять клиента. Используй при любых сомнениях.
+
+Жёсткие правила:
+  - Пропустить настоящую заявку — ХУЖЕ, чем создать пустышку. При сомнении \
+в пользу NEEDS_REVIEW.
+  - NO_ACTION только когда ОЧЕВИДНО: транскрипт полностью пуст / состоит из \
+одного «Алло.» / явный недозвон / явный мусор STT (нерусский текст, бессвязица).
+  - UPDATE_EXISTING требует, чтобы новый разговор семантически продолжал \
+конкретную открытую заявку. Если открытых заявок нет — UPDATE_EXISTING запрещён.
+  - `confidence` — твоя оценка уверенности (0.0..1.0). Низкая уверенность \
+в NO_ACTION → лучше отдай NEEDS_REVIEW.
+
+Верни строго JSON-объект:
+{
+  "kind": "NEW_TASK" | "UPDATE_EXISTING" | "NO_ACTION" | "NEEDS_REVIEW",
+  "parent_task_id": "<id из открытых> или null",
+  "confidence": 0.0..1.0,
+  "reason": "<кратко, по-русски, до 200 символов>"
+}
+Отвечай ТОЛЬКО JSON-объектом."""
+
+
+_VALID_INTENT_KINDS = {"NEW_TASK", "UPDATE_EXISTING", "NO_ACTION", "NEEDS_REVIEW"}
+
+
+async def _classify_call_intent_impl(
+    self: "OpenRouterAdapter",
+    new_dialogue: str,
+    open_tasks: list[dict[str, str]],
+) -> dict[str, object]:
+    """Stage-1 intent classifier. See port docstring for semantics."""
+    # Build the prior-tasks block. Empty list is a valid signal: AI must
+    # then choose NEW_TASK / NO_ACTION / NEEDS_REVIEW (UPDATE_EXISTING
+    # disallowed by prompt).
+    open_lines: list[str] = []
+    open_ids: set[str] = set()
+    for t in open_tasks or []:
+        tid = str(t.get("id") or "")
+        if not tid:
+            continue
+        open_ids.add(tid)
+        title = str(t.get("title") or "")[:160]
+        tx = str(t.get("transcript") or "")[:1500]
+        body = f"id={tid}"
+        if title:
+            body += f" :: {title}"
+        if tx:
+            body += f"\n  транскрипт первого звонка:\n  {tx}"
+        open_lines.append(body)
+    open_block = "\n\n".join(open_lines) if open_lines else "(открытых заявок нет)"
+
+    user_prompt = (
+        f"Новый звонок (транскрипт):\n{(new_dialogue or '')[:3000]}\n\n"
+        f"Открытые заявки этого клиента:\n{open_block}"
+    )
+
+    safe_default: dict[str, object] = {
+        "kind": "NEEDS_REVIEW",
+        "parent_task_id": None,
+        "confidence": 0.0,
+        "reason": "AI fallback (all models failed)",
+    }
+
+    for model in (self._primary_model, self._fallback_model):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self._BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": INTENT_CLASSIFICATION_PROMPT},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            if not content:
+                raise ValueError(f"Empty content from model {model}")
+            text_to_parse = content.strip()
+            if text_to_parse.startswith("```"):
+                text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(text_to_parse)
+
+            kind = str(parsed.get("kind") or "").upper().strip()
+            if kind not in _VALID_INTENT_KINDS:
+                # Unknown verdict — degrade to NEEDS_REVIEW so we don't drop
+                # the call silently.
+                kind = "NEEDS_REVIEW"
+
+            parent_raw = parsed.get("parent_task_id")
+            parent_id: str | None = None
+            if parent_raw and str(parent_raw).strip().lower() not in {"null", "none", ""}:
+                pid = str(parent_raw).strip()
+                # Only accept a parent that is actually in the open set.
+                # Hallucinated ids would cause CR to attach to nothing.
+                if pid in open_ids:
+                    parent_id = pid
+
+            try:
+                conf = float(parsed.get("confidence") or 0.0)
+            except (TypeError, ValueError):
+                conf = 0.0
+            conf = max(0.0, min(1.0, conf))
+
+            reason = str(parsed.get("reason") or "")[:300]
+
+            result = {
+                "kind": kind,
+                "parent_task_id": parent_id,
+                "confidence": conf,
+                "reason": reason,
+            }
+            logger.info(
+                "classify_call_intent OK (model=%s): kind=%s parent=%s conf=%.2f",
+                model, kind, parent_id, conf,
+            )
+            return result
+        except Exception:
+            logger.warning(
+                "classify_call_intent failed with model=%s", model, exc_info=True,
+            )
+
+    logger.error("classify_call_intent: all models failed")
+    return safe_default
+
+
+OpenRouterAdapter.classify_call_intent = _classify_call_intent_impl  # type: ignore[attr-defined]

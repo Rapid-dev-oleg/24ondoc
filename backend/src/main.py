@@ -40,6 +40,7 @@ from config import Settings, get_settings
 from reports.infrastructure.http_handler import router as reports_router
 from telegram_ingestion.infrastructure.stt_adapter import GroqSTTAdapter
 from telegram_ingestion.infrastructure.telegram_fastapi import router as tg_router
+from twenty_integration.application.classify_call_intent import ClassifyCallIntent
 from twenty_integration.application.detect_repeat import DetectRepeat
 from twenty_integration.application.resolve_location import ResolveLocation
 from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
@@ -115,6 +116,7 @@ def _create_ats2_poller(
     sync_call_uc: SyncCallToTwentyUseCase | None = None
     location_resolver: ResolveLocation | None = None
     detect_repeat: DetectRepeat | None = None
+    classify_intent: ClassifyCallIntent | None = None
     if twenty_adapter is not None and settings.twenty_api_key:
         sync_call_uc = SyncCallToTwentyUseCase(
             twenty_port=twenty_adapter,
@@ -126,6 +128,13 @@ def _create_ats2_poller(
         # Same DetectRepeat the Telegram path runs — без него каждая ATS-
         # Task создавалась с povtornoeObrashchenie=false и портила M6.
         detect_repeat = DetectRepeat(twenty_port=twenty_adapter, ai_port=ai_port)
+        # Stage-1 intent classifier — отсекает шум (NO_ACTION) и прицепляет
+        # follow-up звонки к открытым тикетам клиента (UPDATE_EXISTING) до
+        # того, как мы создадим Task. Без него каждый «алло, спасибо»
+        # порождал пустую задачу.
+        classify_intent = ClassifyCallIntent(
+            twenty_port=twenty_adapter, ai_port=ai_port,
+        )
 
     poller = ATS2PollerService(
         ats2_client=ats2_client,
@@ -139,6 +148,7 @@ def _create_ats2_poller(
         sync_call_uc=sync_call_uc,
         location_resolver=location_resolver,
         detect_repeat=detect_repeat,
+        classify_intent=classify_intent,
     )
     return poller, auth_manager, ats2_client
 

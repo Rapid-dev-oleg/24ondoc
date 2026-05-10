@@ -34,3 +34,10 @@ class AIClassificationPort(ABC):
         normalizes before matching.
         """
         ...
+
+    # Note: `classify_call_intent`, `check_repeat_status`, and
+    # `check_script` are implemented on OpenRouterAdapter via runtime
+    # attachment (see infrastructure/openrouter_adapter.py). They are
+    # intentionally NOT @abstractmethod here — declaring them so would
+    # break adapter instantiation. Use cases consume these via Protocol
+    # types in their own modules.

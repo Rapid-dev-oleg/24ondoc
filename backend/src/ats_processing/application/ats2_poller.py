@@ -11,6 +11,14 @@ from redis.asyncio import Redis as AsyncRedis
 
 from ai_classification.domain.repository import AIClassificationPort
 from telegram_ingestion.application.ports import STTPort
+from twenty_integration.application.classify_call_intent import (
+    KIND_NEEDS_REVIEW,
+    KIND_NEW_TASK,
+    KIND_NO_ACTION,
+    KIND_UPDATE_EXISTING,
+    ClassifyCallIntent,
+    IntentResult,
+)
 from twenty_integration.application.detect_repeat import DetectRepeat, RepeatResult
 from twenty_integration.application.resolve_location import ResolveLocation
 from twenty_integration.domain.ports import TwentyCRMPort
@@ -54,6 +62,7 @@ class ATS2PollerService:
         sync_call_uc: SyncCallToTwentyUseCase | None = None,
         location_resolver: ResolveLocation | None = None,
         detect_repeat: DetectRepeat | None = None,
+        classify_intent: ClassifyCallIntent | None = None,
     ) -> None:
         self._ats2_client = ats2_client
         self._call_repo = call_repo
@@ -66,6 +75,7 @@ class ATS2PollerService:
         self._sync_call_uc = sync_call_uc
         self._location_resolver = location_resolver
         self._detect_repeat = detect_repeat
+        self._classify_intent = classify_intent
         self._last_poll_timestamp: datetime | None = None
         self._running: bool = False
         self._stop_event: asyncio.Event = asyncio.Event()
@@ -247,30 +257,80 @@ class ATS2PollerService:
             bool(transcription_text),
         )
 
-        # AI-анализ + создание задачи в Twenty (только INCOMING)
+        # AI-анализ + создание задачи в Twenty (только INCOMING).
+        #
+        # Stage 1 — intent classifier. Решает, нужен ли вообще новый Task
+        # для этого звонка, или CR должен прицепиться к уже открытому
+        # тикету этого клиента, или это шум (недозвон / ack / мусор STT).
+        # Без этого каждый «алло, спасибо» порождал пустой Task.
         task_id: str | None = None
+        intent: IntentResult | None = None
         if (not is_outgoing
                 and transcription_text
                 and self._ai_port
                 and self._twenty_port):
-            task_id = await self._create_task_from_call(
-                call_id=call_id,
-                transcription=transcription_text,
-                caller_phone=client_phone,
-                caller_name=caller_name,
-                callee_name=callee_name,
-                callee_phone=agent_phone,
-                duration=duration,
-                call_date=call_date,
-                call_type=call_type,
-                call_status=call_status,
-                destination=destination,
-            )
-            if task_id:
+            if self._classify_intent is not None:
+                try:
+                    intent = await self._classify_intent.execute(
+                        transcript=transcription_text,
+                        client_phone=client_phone,
+                        duration_sec=duration,
+                    )
+                    logger.info(
+                        "ATS2 intent for %s: kind=%s parent=%s conf=%.2f reason=%s",
+                        call_id, intent.kind, intent.parent_task_id,
+                        intent.confidence, intent.reason,
+                    )
+                except Exception:
+                    logger.exception(
+                        "ATS2 Poller: intent classify failed for %s — "
+                        "defaulting to NEW_TASK", call_id,
+                    )
+                    intent = None
+
+            if intent is not None and intent.kind == KIND_NO_ACTION:
+                # No Task. CR still mirrors below into Twenty without taskRel,
+                # so the call is visible in the calls feed.
+                logger.info(
+                    "ATS2 call %s — NO_ACTION (%s) — skipping Task creation",
+                    call_id, intent.reason,
+                )
+            elif (intent is not None
+                  and intent.kind == KIND_UPDATE_EXISTING
+                  and intent.parent_task_id):
+                # No new Task. CR will mirror onto the existing one.
+                task_id = intent.parent_task_id
                 record.twenty_task_id = task_id
                 record.mark_created()
+                logger.info(
+                    "ATS2 call %s — UPDATE_EXISTING → CR attaches to task %s",
+                    call_id, task_id,
+                )
             else:
-                record.mark_error()
+                # NEW_TASK or NEEDS_REVIEW — both produce a Task. The
+                # NEEDS_REVIEW flag forces kategoriya='TREBUET_RAZBORA'.
+                force_review = (
+                    intent is not None and intent.kind == KIND_NEEDS_REVIEW
+                )
+                task_id = await self._create_task_from_call(
+                    call_id=call_id,
+                    transcription=transcription_text,
+                    caller_phone=client_phone,
+                    caller_name=caller_name,
+                    callee_name=callee_name,
+                    callee_phone=agent_phone,
+                    duration=duration,
+                    call_date=call_date,
+                    call_type=call_type,
+                    call_status=call_status,
+                    destination=destination,
+                    force_needs_review=force_review,
+                )
+                if task_id:
+                    record.twenty_task_id = task_id
+                    record.mark_created()
+                else:
+                    record.mark_error()
             await self._call_repo.save(record)
 
         # OUTGOING: попытаться прицепиться к недавней Task этого клиента
@@ -326,6 +386,8 @@ class ATS2PollerService:
         call_type: str | None = None,
         call_status: str | None = None,
         destination: str | None = None,
+        *,
+        force_needs_review: bool = False,
     ) -> str | None:
         """AI-анализ транскрипции → создание задачи в Twenty. Returns task id."""
         assert self._ai_port is not None
@@ -399,7 +461,11 @@ class ATS2PollerService:
                 body_parts.append(f"- Длительность разговора: {mins}м {secs}с")
             body_parts.append(f"\n**Транскрипция:**\n{transcription}")
 
-            # Подобрать kategoriya и vazhnost из актуальных списков Twenty
+            # Подобрать kategoriya и vazhnost из актуальных списков Twenty.
+            # Когда intent классификатор маркировал звонок как NEEDS_REVIEW
+            # — категорию форсим на «Требует разбора», игнорируя AI: оператор
+            # сам разберёт. select_task_fields всё равно вызываем ради
+            # vazhnost, но его kategoriya мы перезапишем.
             kategoriya_value: str | None = None
             vazhnost_value: str | None = None
             try:
@@ -413,6 +479,11 @@ class ATS2PollerService:
                 vazhnost_value = selection.vazhnost
             except Exception:
                 logger.warning("ATS2 Poller: failed to select task fields for %s", call_id)
+            if force_needs_review or not kategoriya_value:
+                # Either intent said «нужен ручной разбор», или AI не нашёл
+                # ни одной подходящей категории — обе ситуации лечит один
+                # и тот же бакет.
+                kategoriya_value = "TREBUET_RAZBORA"
 
             # Resolve the outlet (Location) for this incoming call —
             # cheap fold-match → AI extract → phone fallback. The
