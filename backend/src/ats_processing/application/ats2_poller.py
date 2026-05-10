@@ -446,11 +446,29 @@ class ATS2PollerService:
                         "ATS2 Poller: DetectRepeat failed for %s", call_id,
                     )
 
+            # Resolve assignee from Operator: callee_phone is the agent
+            # number, find_operator_by_phone returns the Operator entity,
+            # and Operator.memberRel points to the WorkspaceMember who
+            # answered. That same member becomes the Task assignee, so
+            # closure metrics (M1–M5) credit the right person.
+            assignee_id: str | None = None
+            if callee_phone:
+                try:
+                    op = await self._twenty_port.find_operator_by_phone(callee_phone)
+                    if op:
+                        member_id = op.get("memberRelId")
+                        if member_id:
+                            assignee_id = str(member_id)
+                except Exception:
+                    logger.exception(
+                        "ATS2 Poller: assignee resolve failed for %s", call_id,
+                    )
+
             task = await self._twenty_port.create_task(
                 title=f"📞 {classification.title}",
                 body="\n".join(body_parts),
                 due_at=call_datetime,
-                assignee_id=None,
+                assignee_id=assignee_id,
                 kategoriya=kategoriya_value,
                 vazhnost=vazhnost_value,
                 location_rel_id=location_rel_id,
