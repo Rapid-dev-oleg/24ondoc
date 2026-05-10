@@ -39,6 +39,9 @@ class _RepeatPort(Protocol):
     async def find_recent_tasks_by_caller_phone(
         self, caller_phone: str, since: datetime, limit: int = 10,
     ) -> list[dict[str, Any]]: ...
+    async def find_call_records_by_task_id(
+        self, task_id: str, *, direction: str | None = None,
+    ) -> list[dict[str, Any]]: ...
 
 
 class _RepeatAIPort(Protocol):
@@ -173,15 +176,30 @@ class DetectRepeat:
         if self._ai is None:
             return _result(KIND_NEW, None, "none", len(recent))
 
-        # Semantic path — ask the AI to match against recent candidates
-        ai_input = [
-            {
-                "id": str(r.get("id") or ""),
+        # Semantic path — feed AI the FIRST INCOMING CR transcript per
+        # prior task instead of just title/description. The transcript
+        # carries the actual problem the customer described, which is
+        # what we want to match against the new dialogue.
+        ai_input: list[dict[str, str]] = []
+        for r in recent:
+            tid = str(r.get("id") or "")
+            transcript = ""
+            try:
+                crs = await self._twenty.find_call_records_by_task_id(
+                    tid, direction="INCOMING",
+                )
+                if crs:
+                    tr = crs[0].get("transcript") or {}
+                    if isinstance(tr, dict):
+                        transcript = tr.get("markdown") or ""
+            except Exception:
+                logger.exception("loading prior CR transcripts failed task=%s", tid)
+            ai_input.append({
+                "id": tid,
                 "title": str(r.get("title") or ""),
                 "description": _body_markdown(r.get("bodyV2")) or "",
-            }
-            for r in recent
-        ]
+                "transcript": transcript,
+            })
         try:
             ai_out = await self._ai.check_repeat_status(new_dialogue or "", ai_input)
         except Exception:

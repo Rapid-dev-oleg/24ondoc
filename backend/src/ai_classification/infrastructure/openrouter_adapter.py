@@ -368,12 +368,27 @@ async def _check_repeat_status_impl(
     if not recent_tasks:
         return {"matches": [], "reasoning": "no recent tasks"}
 
-    recent_payload = "\n".join(
-        f"- id={t.get('id')}: {t.get('title', '')[:80]} — {t.get('description', '')[:200]}"
-        for t in recent_tasks
-    )
+    # Each prior task may carry either a short title/description (cheap path)
+    # or a full transcript of its earliest INCOMING call (precise path) —
+    # we just dump whatever fields are present, joined as one prose block.
+    recent_lines = []
+    for t in recent_tasks:
+        tid = t.get("id", "")
+        title = t.get("title", "")[:120]
+        desc = t.get("description", "")[:400]
+        tx = t.get("transcript", "")[:2000]
+        body = f"id={tid}"
+        if title:
+            body += f" :: {title}"
+        if desc:
+            body += f"\n  описание: {desc}"
+        if tx:
+            body += f"\n  транскрипт прежнего звонка:\n  {tx}"
+        recent_lines.append(body)
+    recent_payload = "\n\n".join(recent_lines)
     user_prompt = (
-        f"Новое обращение:\n{new_text}\n\nПредыдущие задачи этой точки:\n{recent_payload}"
+        f"Новое обращение:\n{new_text[:3000]}\n\n"
+        f"Предыдущие обращения этого клиента:\n{recent_payload}"
     )
 
     for model in (self._primary_model, self._fallback_model):

@@ -89,6 +89,16 @@ additionalPhones. Возвращает True если запись была сд�
     async def find_call_record_by_ats_id(self, ats_call_id: str) -> dict[str, object] | None: ...
 
     @abstractmethod
+    async def find_call_records_by_task_id(
+        self, task_id: str, *, direction: str | None = None,
+    ) -> list[dict[str, object]]:
+        """All CallRecord rows attached to this Task. Optional direction
+        filter ("INCOMING" | "OUTGOING") to grab only one side of the
+        conversation. Used by DetectRepeat to feed prior transcripts to
+        the AI."""
+        ...
+
+    @abstractmethod
     async def create_call_record(
         self,
         ats_call_id: str,

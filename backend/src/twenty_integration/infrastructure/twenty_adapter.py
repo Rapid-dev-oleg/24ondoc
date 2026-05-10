@@ -534,6 +534,30 @@ class TwentyRestAdapter(TwentyCRMPort):
         data = r.json().get("data", {})
         return dict(data.get("createOperator", data))
 
+    async def find_call_records_by_task_id(
+        self, task_id: str, *, direction: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """All CRs of a task, oldest first. Optional direction filter."""
+        if not task_id:
+            return []
+        flt = f"taskRelId[eq]:{task_id}"
+        if direction:
+            flt += f",direction[eq]:{direction}"
+        try:
+            r = await self._client.get(
+                "/rest/callRecords",
+                params={
+                    "filter": flt,
+                    "order_by": "occurredAt[AscNullsLast]",
+                    "limit": 50,
+                },
+            )
+            r.raise_for_status()
+            return list(r.json().get("data", {}).get("callRecords", []) or [])
+        except httpx.HTTPError:
+            logger.exception("find_call_records_by_task_id failed task=%s", task_id)
+            return []
+
     async def find_recent_tasks_by_caller_phone(
         self, caller_phone: str, since: datetime, limit: int = 10,
     ) -> list[dict[str, Any]]:
