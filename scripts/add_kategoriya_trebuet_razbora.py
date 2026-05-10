@@ -29,7 +29,7 @@ query Objects($paging: CursorPaging!, $filter: ObjectFilter!) {
   objects(paging: $paging, filter: $filter) {
     edges { node {
       id nameSingular
-      fieldsList { id name type options { id label value color position } }
+      fieldsList { id name type options }
     } }
   }
 }
@@ -38,7 +38,7 @@ query Objects($paging: CursorPaging!, $filter: ObjectFilter!) {
 _MUT_UPDATE = """
 mutation UpdateField($input: UpdateOneFieldMetadataInput!) {
   updateOneField(input: $input) {
-    id name options { id value label }
+    id name options
   }
 }
 """

@@ -1,289 +1,158 @@
-"""Tests for ClassifyCallIntent — the Stage-1 intent gate that decides
-whether to create a Task, attach to an existing one, drop the call, or
-flag for manual review.
+"""Tests for ClassifyCallIntent — the binary gate that decides whether
+to create a Task for an INCOMING call or skip it as noise.
 
-The use case mostly enforces asymmetric confidence thresholds and
-filters out hallucinated parent ids, so the tests target those branches
-explicitly. AI calls are stubbed; we feed back the exact dict the
-adapter would return.
+The use case enforces an asymmetric confidence threshold so that
+losing real requests is harder than creating empty Tasks. Tests pin
+the corner cases.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 from twenty_integration.application.classify_call_intent import (
-    KIND_NEEDS_REVIEW,
     KIND_NEW_TASK,
     KIND_NO_ACTION,
-    KIND_UPDATE_EXISTING,
     ClassifyCallIntent,
 )
 
 
-def _ai_returning(payload: dict[str, Any]) -> AsyncMock:
+def _ai(payload: dict[str, Any]) -> AsyncMock:
     ai = AsyncMock()
     ai.classify_call_intent = AsyncMock(return_value=payload)
     return ai
 
 
-def _twenty_with_open_tasks(open_tasks: list[dict[str, Any]]) -> AsyncMock:
-    """Twenty stub returning a fixed list and empty CRs per task.
-
-    `open_tasks` is what `find_recent_tasks_by_caller_phone` will hand back;
-    the use case applies its own status filter, so include the status
-    field in the fixtures (TODO/V_RABOTE = open).
-    """
-    twenty = AsyncMock()
-    twenty.find_recent_tasks_by_caller_phone = AsyncMock(return_value=open_tasks)
-    twenty.find_call_records_by_task_id = AsyncMock(return_value=[])
-    return twenty
-
-
 @pytest.mark.asyncio
-async def test_stage0_short_duration_no_action_without_ai_call():
-    ai = _ai_returning({})
-    twenty = _twenty_with_open_tasks([])
-    uc = ClassifyCallIntent(twenty, ai)
+async def test_stage0_short_duration_skips_ai():
+    ai = _ai({})
+    uc = ClassifyCallIntent(ai)
 
-    result = await uc.execute(
-        transcript="Алло.", client_phone="79991234567", duration_sec=3,
-    )
+    result = await uc.execute(transcript="Алло.", duration_sec=3)
 
     assert result.kind == KIND_NO_ACTION
-    # Heuristic must short-circuit BEFORE calling AI.
+    # Heuristic must short-circuit before the AI call.
     ai.classify_call_intent.assert_not_called()
-    twenty.find_recent_tasks_by_caller_phone.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_stage0_threshold_inclusive():
-    """duration == 5s still trips Stage-0; 6s does not."""
-    ai = _ai_returning({"kind": "NEW_TASK", "confidence": 0.9})
-    twenty = _twenty_with_open_tasks([])
+    """duration == 5 still trips Stage-0; 6 does not."""
+    ai = _ai({"is_actionable": True, "confidence": 0.9})
 
-    res5 = await ClassifyCallIntent(twenty, ai).execute(
-        transcript="Алло.", client_phone="79991234567", duration_sec=5,
-    )
+    res5 = await ClassifyCallIntent(ai).execute(transcript="Алло.", duration_sec=5)
     assert res5.kind == KIND_NO_ACTION
     ai.classify_call_intent.assert_not_called()
 
-    res6 = await ClassifyCallIntent(twenty, ai).execute(
-        transcript="Алло.", client_phone="79991234567", duration_sec=6,
-    )
+    res6 = await ClassifyCallIntent(ai).execute(transcript="Алло.", duration_sec=6)
     assert res6.kind == KIND_NEW_TASK
     ai.classify_call_intent.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_no_action_high_confidence_accepted():
-    ai = _ai_returning({
-        "kind": "NO_ACTION",
-        "confidence": 0.92,
-        "parent_task_id": None,
+async def test_not_actionable_above_threshold_skips_task():
+    ai = _ai({
+        "is_actionable": False,
+        "confidence": 0.85,
         "reason": "garbled STT",
     })
-    twenty = _twenty_with_open_tasks([])
-    uc = ClassifyCallIntent(twenty, ai)
+    uc = ClassifyCallIntent(ai)
 
     result = await uc.execute(
-        transcript="Афганистан? Афганистан?", client_phone="79991234567",
-        duration_sec=15,
+        transcript="Афганистан? Афганистан?", duration_sec=15,
     )
 
     assert result.kind == KIND_NO_ACTION
-    assert result.parent_task_id is None
 
 
 @pytest.mark.asyncio
-async def test_no_action_low_confidence_degrades_to_needs_review():
-    ai = _ai_returning({
-        "kind": "NO_ACTION",
-        "confidence": 0.6,
-        "parent_task_id": None,
-        "reason": "unsure",
-    })
-    twenty = _twenty_with_open_tasks([])
-    uc = ClassifyCallIntent(twenty, ai)
+async def test_not_actionable_at_minimum_threshold_inclusive():
+    """Threshold = 0.70: exactly 0.70 still counts as NO_ACTION."""
+    ai = _ai({"is_actionable": False, "confidence": 0.70, "reason": "noise"})
+    uc = ClassifyCallIntent(ai)
 
-    result = await uc.execute(
-        transcript="Алло, что-то там...", client_phone="79991234567",
-        duration_sec=15,
-    )
-
-    # Critical asymmetry: an uncertain «not a task» MUST become a task
-    # (NEEDS_REVIEW) so a real request never gets dropped silently.
-    assert result.kind == KIND_NEEDS_REVIEW
+    result = await uc.execute(transcript="внутр. координация", duration_sec=20)
+    assert result.kind == KIND_NO_ACTION
 
 
 @pytest.mark.asyncio
-async def test_update_existing_accepted_with_valid_parent():
-    ai = _ai_returning({
-        "kind": "UPDATE_EXISTING",
-        "confidence": 0.85,
-        "parent_task_id": "open-1",
-        "reason": "ack on prior request",
-    })
-    twenty = _twenty_with_open_tasks([
-        {"id": "open-1", "title": "Нет интернета", "status": "V_RABOTE"},
-    ])
-    uc = ClassifyCallIntent(twenty, ai)
-
-    result = await uc.execute(
-        transcript="Алло, всё работает уже, спасибо",
-        client_phone="79991234567", duration_sec=20,
-    )
-
-    assert result.kind == KIND_UPDATE_EXISTING
-    assert result.parent_task_id == "open-1"
-
-
-@pytest.mark.asyncio
-async def test_update_existing_low_confidence_falls_back_to_new_task():
-    ai = _ai_returning({
-        "kind": "UPDATE_EXISTING",
+async def test_not_actionable_below_threshold_falls_back_to_new_task():
+    ai = _ai({
+        "is_actionable": False,
         "confidence": 0.65,
-        "parent_task_id": "open-1",
-        "reason": "weak match",
+        "reason": "weak guess",
     })
-    twenty = _twenty_with_open_tasks([
-        {"id": "open-1", "title": "Прошлая заявка", "status": "TODO"},
-    ])
-    uc = ClassifyCallIntent(twenty, ai)
+    uc = ClassifyCallIntent(ai)
 
     result = await uc.execute(
-        transcript="что-то там про другое", client_phone="79991234567",
-        duration_sec=20,
+        transcript="что-то непонятное", duration_sec=15,
     )
 
-    # Low-confidence linkage must NOT silently attach the call to an
-    # existing ticket — that would hide a possibly-new request inside
-    # an unrelated thread.
+    # Asymmetry: an uncertain «not a request» becomes a Task. Losing a
+    # real request silently is the worst outcome we want to avoid.
     assert result.kind == KIND_NEW_TASK
-    assert result.parent_task_id is None
 
 
 @pytest.mark.asyncio
-async def test_update_existing_with_hallucinated_parent_falls_back_to_new_task():
-    ai = _ai_returning({
-        "kind": "UPDATE_EXISTING",
-        "confidence": 0.95,
-        "parent_task_id": "task-that-doesnt-exist",
-        "reason": "hallucinated id",
-    })
-    twenty = _twenty_with_open_tasks([
-        {"id": "open-1", "title": "Реальная задача", "status": "TODO"},
-    ])
-    uc = ClassifyCallIntent(twenty, ai)
-
-    result = await uc.execute(
-        transcript="продолжаем разговор", client_phone="79991234567",
-        duration_sec=20,
-    )
-
-    # The AI named an id that's not in the open set: cannot trust it,
-    # default to NEW_TASK.
-    assert result.kind == KIND_NEW_TASK
-    assert result.parent_task_id is None
-
-
-@pytest.mark.asyncio
-async def test_closed_tasks_filtered_out_of_open_set():
-    """`find_recent_tasks_by_caller_phone` returns all recent tasks; the
-    use case must keep only TODO/V_RABOTE in the open set fed to the AI
-    AND when validating parent_task_id."""
-    ai = _ai_returning({
-        "kind": "UPDATE_EXISTING",
-        "confidence": 0.95,
-        "parent_task_id": "closed-1",  # closed → not in open set
-        "reason": "linking to a closed ticket",
-    })
-    twenty = _twenty_with_open_tasks([
-        {"id": "closed-1", "title": "Уже закрыта", "status": "VYPOLNENO"},
-    ])
-    uc = ClassifyCallIntent(twenty, ai)
-
-    result = await uc.execute(
-        transcript="что-то про прошлую закрытую", client_phone="79991234567",
-        duration_sec=20,
-    )
-
-    assert result.kind == KIND_NEW_TASK
-    # And the AI was given an empty open set (closed tickets stripped).
-    args, kwargs = ai.classify_call_intent.call_args
-    open_tasks_arg = args[1] if len(args) >= 2 else kwargs.get("open_tasks")
-    assert open_tasks_arg == []
-
-
-@pytest.mark.asyncio
-async def test_new_task_passes_through():
-    ai = _ai_returning({
-        "kind": "NEW_TASK",
-        "confidence": 0.9,
-        "parent_task_id": None,
+async def test_actionable_returns_new_task():
+    ai = _ai({
+        "is_actionable": True,
+        "confidence": 0.92,
         "reason": "fresh request",
     })
-    twenty = _twenty_with_open_tasks([])
-    uc = ClassifyCallIntent(twenty, ai)
+    uc = ClassifyCallIntent(ai)
 
     result = await uc.execute(
-        transcript="Удалите позицию из чека", client_phone="79991234567",
-        duration_sec=12,
+        transcript="Удалите позицию из чека", duration_sec=12,
     )
-
     assert result.kind == KIND_NEW_TASK
-    assert result.parent_task_id is None
 
 
 @pytest.mark.asyncio
-async def test_ai_raises_falls_to_needs_review():
-    twenty = _twenty_with_open_tasks([])
+async def test_actionable_low_confidence_still_new_task():
+    """Even shaky «yes, it's a task» wins — we never drop a request
+    for low confidence on the actionable side."""
+    ai = _ai({
+        "is_actionable": True,
+        "confidence": 0.30,
+        "reason": "hard to tell but seems like a request",
+    })
+    uc = ClassifyCallIntent(ai)
+
+    result = await uc.execute(transcript="что-то про настройку", duration_sec=20)
+    assert result.kind == KIND_NEW_TASK
+
+
+@pytest.mark.asyncio
+async def test_ai_raises_falls_to_new_task():
     ai = AsyncMock()
     ai.classify_call_intent = AsyncMock(side_effect=RuntimeError("network"))
-    uc = ClassifyCallIntent(twenty, ai)
+    uc = ClassifyCallIntent(ai)
 
-    result = await uc.execute(
-        transcript="что-то там", client_phone="79991234567", duration_sec=20,
-    )
+    result = await uc.execute(transcript="что-то", duration_sec=20)
 
-    # On AI failure the right side is «needs human review» — NOT skipping
-    # the call (which would lose data) and NOT NEW_TASK (which would let
-    # spam through if AI is down).
-    assert result.kind == KIND_NEEDS_REVIEW
+    # On AI failure: keep creating Tasks. Otherwise an AI outage would
+    # mass-skip real requests for an hour.
+    assert result.kind == KIND_NEW_TASK
 
 
 @pytest.mark.asyncio
 async def test_no_ai_port_defaults_to_new_task():
-    twenty = _twenty_with_open_tasks([])
-    uc = ClassifyCallIntent(twenty, ai_port=None)
+    uc = ClassifyCallIntent(ai_port=None)
 
-    result = await uc.execute(
-        transcript="что-то", client_phone="79991234567", duration_sec=20,
-    )
+    result = await uc.execute(transcript="что-то", duration_sec=20)
 
-    # Without AI we cannot judge — safest is to keep creating tasks so
-    # nothing gets lost; degenerates back to pre-Stage-1 behaviour.
     assert result.kind == KIND_NEW_TASK
-    twenty.find_recent_tasks_by_caller_phone.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_unknown_kind_degrades_to_needs_review():
-    ai = _ai_returning({
-        "kind": "WHATEVER",
-        "confidence": 0.99,
-        "parent_task_id": None,
-        "reason": "model hallucinated a new kind",
-    })
-    twenty = _twenty_with_open_tasks([])
-    uc = ClassifyCallIntent(twenty, ai)
+async def test_unknown_payload_shape_is_treated_as_actionable():
+    """Defensive: if AI returns a malformed dict (no is_actionable key),
+    we MUST default to creating the Task — not silently swallowing it."""
+    ai = _ai({"confidence": 0.9, "reason": "missing key"})
+    uc = ClassifyCallIntent(ai)
 
-    result = await uc.execute(
-        transcript="реальный запрос", client_phone="79991234567",
-        duration_sec=20,
-    )
-
-    assert result.kind == KIND_NEEDS_REVIEW
+    result = await uc.execute(transcript="реальный запрос", duration_sec=20)
+    assert result.kind == KIND_NEW_TASK

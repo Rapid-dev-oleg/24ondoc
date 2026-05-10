@@ -169,14 +169,12 @@ class OpenRouterAdapter(AIClassificationPort):
 {vazhnost_list}
 
 Правила:
-- Если ни одна категория не подходит — верни value `TREBUET_RAZBORA` \
-(специальное значение «требует разбора» — оператор разберёт вручную). \
-НЕ возвращай null для kategoriya: пустая категория ломает отчёты.
+- Если ни одна категория не подходит — верни null для kategoriya.
 - Если не можешь определить важность — верни null для vazhnost.
-- Возвращай ТОЛЬКО value из списка (или `TREBUET_RAZBORA`), не label.
+- Возвращай ТОЛЬКО value из списка, не label.
 
 Ответь ТОЛЬКО JSON-объектом:
-{{"kategoriya": "<value или TREBUET_RAZBORA>", "vazhnost": "<value или null>"}}"""
+{{"kategoriya": "<value или null>", "vazhnost": "<value или null>"}}"""
 
     async def select_task_fields(
         self,
@@ -231,16 +229,8 @@ class OpenRouterAdapter(AIClassificationPort):
                 kat_value = parsed.get("kategoriya")
                 vazh_value = parsed.get("vazhnost")
 
-                # `TREBUET_RAZBORA` is the «can't decide» bucket added in
-                # bootstrap (см. ensure_treubet_razbora_option) — accept
-                # it even if option list snapshot is stale here.
-                kat_accepted = (
-                    kat_value if kat_value in valid_kat
-                    or kat_value == "TREBUET_RAZBORA"
-                    else None
-                )
                 result = TaskFieldSelection(
-                    kategoriya=kat_accepted,
+                    kategoriya=kat_value if kat_value in valid_kat else None,
                     vazhnost=vazh_value if vazh_value in valid_vazh else None,
                 )
                 logger.info(
@@ -544,80 +534,48 @@ OpenRouterAdapter.check_script = _check_script_impl  # type: ignore[attr-defined
 
 
 INTENT_CLASSIFICATION_PROMPT = """\
-Ты — диспетчер входящих звонков техподдержки 24ondoc. Решаешь, что делать \
-с НОВЫМ звонком клиента, опираясь на список его ОТКРЫТЫХ заявок.
+Ты — фильтр входящих звонков техподдержки 24ondoc. Отвечаешь на ОДИН \
+бинарный вопрос: содержит ли разговор настоящий запрос клиента в техподдержку?
 
-Возможные решения (`kind`):
-  - "NEW_TASK" — клиент сообщает о новой проблеме / новой просьбе. Создавать \
-заявку.
-  - "UPDATE_EXISTING" — звонок продолжает уже открытую заявку клиента: ack \
-о выполнении, статус-вопрос, передача пароля по уже идущей работе, follow-up. \
-Если уверен, верни `parent_task_id` из списка открытых заявок.
-  - "NO_ACTION" — звонок не несёт смысла: недозвон, мусор STT, односложное \
-«Алло./Спасибо.» без контекста, ошибка номером, внутренняя координация \
-между сотрудниками без обращения клиента.
-  - "NEEDS_REVIEW" — ты не уверен. Лучше создать заявку с пометкой «требует \
-разбора», чем потерять клиента. Используй при любых сомнениях.
+Считаются «настоящим запросом» (`is_actionable: true`):
+  - сообщение о проблеме («не работает касса», «нет интернета», «не пробивается чек»)
+  - просьба что-то сделать («распечатайте ценники», «удалите позицию», «настройте сканер»)
+  - вопрос о работе системы / оборудования («что такое AnyDesk», «как сменить цену»)
+  - передача данных по новой задаче клиента (пароль/код/номер для решения проблемы клиента)
+
+НЕ считаются запросом (`is_actionable: false`):
+  - недозвон, обрыв связи, тишина, односложное «Алло./Спасибо./Угу» без контекста
+  - мусор STT: нерусский текст, бессвязица, повторение одного слова
+  - ошибка номером
+  - внутренняя координация между сотрудниками без обращения клиента в техподдержку
+  - чисто завершающие реплики «всё, спасибо, до свидания» без новой информации
 
 Жёсткие правила:
-  - Пропустить настоящую заявку — ХУЖЕ, чем создать пустышку. При сомнении \
-в пользу NEEDS_REVIEW.
-  - NO_ACTION только когда ОЧЕВИДНО: транскрипт полностью пуст / состоит из \
-одного «Алло.» / явный недозвон / явный мусор STT (нерусский текст, бессвязица).
-  - UPDATE_EXISTING требует, чтобы новый разговор семантически продолжал \
-конкретную открытую заявку. Если открытых заявок нет — UPDATE_EXISTING запрещён.
-  - `confidence` — твоя оценка уверенности (0.0..1.0). Низкая уверенность \
-в NO_ACTION → лучше отдай NEEDS_REVIEW.
+  - Пропустить настоящий запрос — ХУЖЕ, чем создать пустую задачу. При любом \
+сомнении возвращай `is_actionable: true`. Бинарность — не повод гадать.
+  - `confidence` — твоя уверенность В ИМЕННО ЭТОМ ОТВЕТЕ (0.0..1.0). \
+Не «уверенность что-то делать», а «насколько чётко ты различаешь ответ».
 
 Верни строго JSON-объект:
 {
-  "kind": "NEW_TASK" | "UPDATE_EXISTING" | "NO_ACTION" | "NEEDS_REVIEW",
-  "parent_task_id": "<id из открытых> или null",
+  "is_actionable": true | false,
   "confidence": 0.0..1.0,
   "reason": "<кратко, по-русски, до 200 символов>"
 }
 Отвечай ТОЛЬКО JSON-объектом."""
 
 
-_VALID_INTENT_KINDS = {"NEW_TASK", "UPDATE_EXISTING", "NO_ACTION", "NEEDS_REVIEW"}
-
-
 async def _classify_call_intent_impl(
     self: "OpenRouterAdapter",
     new_dialogue: str,
-    open_tasks: list[dict[str, str]],
 ) -> dict[str, object]:
-    """Stage-1 intent classifier. See port docstring for semantics."""
-    # Build the prior-tasks block. Empty list is a valid signal: AI must
-    # then choose NEW_TASK / NO_ACTION / NEEDS_REVIEW (UPDATE_EXISTING
-    # disallowed by prompt).
-    open_lines: list[str] = []
-    open_ids: set[str] = set()
-    for t in open_tasks or []:
-        tid = str(t.get("id") or "")
-        if not tid:
-            continue
-        open_ids.add(tid)
-        title = str(t.get("title") or "")[:160]
-        tx = str(t.get("transcript") or "")[:1500]
-        body = f"id={tid}"
-        if title:
-            body += f" :: {title}"
-        if tx:
-            body += f"\n  транскрипт первого звонка:\n  {tx}"
-        open_lines.append(body)
-    open_block = "\n\n".join(open_lines) if open_lines else "(открытых заявок нет)"
-
-    user_prompt = (
-        f"Новый звонок (транскрипт):\n{(new_dialogue or '')[:3000]}\n\n"
-        f"Открытые заявки этого клиента:\n{open_block}"
-    )
+    """Binary intent gate. Returns {is_actionable, confidence, reason}."""
+    user_prompt = f"Транскрипт звонка:\n{(new_dialogue or '')[:3000]}"
 
     safe_default: dict[str, object] = {
-        "kind": "NEEDS_REVIEW",
-        "parent_task_id": None,
+        "is_actionable": True,
         "confidence": 0.0,
-        "reason": "AI fallback (all models failed)",
+        "reason": "AI fallback (all models failed) — defaulting to actionable",
     }
 
     for model in (self._primary_model, self._fallback_model):
@@ -648,38 +606,22 @@ async def _classify_call_intent_impl(
                 text_to_parse = text_to_parse.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
             parsed = json.loads(text_to_parse)
 
-            kind = str(parsed.get("kind") or "").upper().strip()
-            if kind not in _VALID_INTENT_KINDS:
-                # Unknown verdict — degrade to NEEDS_REVIEW so we don't drop
-                # the call silently.
-                kind = "NEEDS_REVIEW"
-
-            parent_raw = parsed.get("parent_task_id")
-            parent_id: str | None = None
-            if parent_raw and str(parent_raw).strip().lower() not in {"null", "none", ""}:
-                pid = str(parent_raw).strip()
-                # Only accept a parent that is actually in the open set.
-                # Hallucinated ids would cause CR to attach to nothing.
-                if pid in open_ids:
-                    parent_id = pid
-
+            is_actionable = bool(parsed.get("is_actionable", True))
             try:
                 conf = float(parsed.get("confidence") or 0.0)
             except (TypeError, ValueError):
                 conf = 0.0
             conf = max(0.0, min(1.0, conf))
-
             reason = str(parsed.get("reason") or "")[:300]
 
             result = {
-                "kind": kind,
-                "parent_task_id": parent_id,
+                "is_actionable": is_actionable,
                 "confidence": conf,
                 "reason": reason,
             }
             logger.info(
-                "classify_call_intent OK (model=%s): kind=%s parent=%s conf=%.2f",
-                model, kind, parent_id, conf,
+                "classify_call_intent OK (model=%s): actionable=%s conf=%.2f",
+                model, is_actionable, conf,
             )
             return result
         except Exception:

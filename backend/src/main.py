@@ -128,13 +128,10 @@ def _create_ats2_poller(
         # Same DetectRepeat the Telegram path runs — без него каждая ATS-
         # Task создавалась с povtornoeObrashchenie=false и портила M6.
         detect_repeat = DetectRepeat(twenty_port=twenty_adapter, ai_port=ai_port)
-        # Stage-1 intent classifier — отсекает шум (NO_ACTION) и прицепляет
-        # follow-up звонки к открытым тикетам клиента (UPDATE_EXISTING) до
-        # того, как мы создадим Task. Без него каждый «алло, спасибо»
-        # порождал пустую задачу.
-        classify_intent = ClassifyCallIntent(
-            twenty_port=twenty_adapter, ai_port=ai_port,
-        )
+        # Stage-1 intent gate — бинарный: пропускаем NO_ACTION (мусор/недозвон/
+        # ack) до того как мы создадим Task. На сомнении создаём — потеря
+        # настоящей заявки дороже одной пустышки.
+        classify_intent = ClassifyCallIntent(ai_port=ai_port)
 
     poller = ATS2PollerService(
         ats2_client=ats2_client,
