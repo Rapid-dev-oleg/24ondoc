@@ -571,6 +571,18 @@ def create_router(
                 content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
                 return raw.read(), filename, content_type
 
+            # Build dialogue_text for ResolveLocation: AI-distilled
+            # title + description gives the resolver clean text to fold
+            # against displayName / locationAddress. When operator manually
+            # picked a Location (twenty_location_rel_id set), execute()
+            # skips the resolver entirely — dialogue_text is harmless then.
+            ai = fetched.ai_result
+            dialogue_text: str | None = None
+            if ai is not None:
+                parts = [s for s in (ai.title, ai.description) if s]
+                if parts:
+                    dialogue_text = "\n".join(parts)
+
             task = await create_twenty_task.execute(
                 fetched,
                 telegram_id=callback.from_user.id,
@@ -580,7 +592,7 @@ def create_router(
                 kategoriya=data.get("twenty_kategoriya"),
                 vazhnost=data.get("twenty_vazhnost"),
                 caller_phone=data.get("twenty_caller_phone"),
-                # Telegram path doesn't run AI resolve — operator is here.
+                dialogue_text=dialogue_text,
                 # When location_rel_id is provided, the use case skips the
                 # auto-resolver entirely; if both are provided it still runs
                 # learn-by-resolve so the catalog grows from manual picks.
