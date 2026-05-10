@@ -116,17 +116,18 @@ class CreateTwentyTaskFromSession:
                 caller_phone, dialogue_text,
             )
 
-        # Detect repeat obrashchenie BEFORE we create the task — so the
-        # Task is born with the correct povtornoeObrashchenie and
-        # parentTaskId, without an extra PATCH round-trip.
-        repeat = RepeatResult(False, None, "none", 0)
+        # Detect chain-position (NEW / REPEAT / SYSTEM) BEFORE create_task
+        # so the Task is born with the right obrashchenieKind +
+        # parentTaskId without an extra PATCH round-trip.
+        repeat = RepeatResult()
         try:
             repeat = await self._detect_repeat.execute(
                 location_id=str(location_rel_id) if location_rel_id else None,
+                client_phone=caller_phone,
                 new_dialogue=dialogue_text or "",
             )
         except Exception:
-            logger.exception("DetectRepeat failed; proceeding with is_repeat=False")
+            logger.exception("DetectRepeat failed; proceeding with chain=NEW")
 
         # Map DraftSession.source_type → Twenty Task.istochnikObrashcheniya
         # so reports can split «откуда пришла Задача». CALL_T2 covers
@@ -153,6 +154,7 @@ class CreateTwentyTaskFromSession:
             povtornoe_obrashchenie=repeat.is_repeat,
             parent_task_id=repeat.parent_task_id,
             istochnik=istochnik,
+            obrashchenie_kind=repeat.chain_position,
         )
 
         # 4. Загрузить файлы в Twenty и прикрепить к задаче

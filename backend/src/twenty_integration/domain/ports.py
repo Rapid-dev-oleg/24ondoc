@@ -46,6 +46,7 @@ class TwentyCRMPort(ABC):
         povtornoe_obrashchenie: bool | None = None,
         parent_task_id: str | None = None,
         istochnik: str | None = None,
+        obrashchenie_kind: str | None = None,
     ) -> TwentyTask: ...
 
     @abstractmethod
@@ -131,6 +132,17 @@ additionalPhones. Возвращает True если запись была сд�
 
         Used to attach OUTGOING CallRecord-ов (callbacks) к существующему
         тикету клиента. Skips tasks marked isOutgoingCallback=true.
+        """
+        ...
+
+    @abstractmethod
+    async def find_recent_tasks_by_caller_phone(
+        self, caller_phone: str, since: datetime, limit: int = 10,
+    ) -> list[dict[str, object]]:
+        """All recent (since→now) non-callback tasks of a given customer.
+
+        Used by DetectRepeat for chain-position counting (NEW / REPEAT /
+        SYSTEM) on the same client_phone within the 3-day window.
         """
         ...
 

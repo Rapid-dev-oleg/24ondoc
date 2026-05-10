@@ -434,11 +434,12 @@ class ATS2PollerService:
             # на этой же точке с такой же сутью? Без этого все ATS-Task
             # создавались с povtornoeObrashchenie=false → M6 в отчётах
             # был занижен. Skipping — это та же ветка, что в Telegram-flow.
-            repeat = RepeatResult(False, None, "none", 0)
+            repeat = RepeatResult()
             if self._detect_repeat is not None:
                 try:
                     repeat = await self._detect_repeat.execute(
                         location_id=location_rel_id,
+                        client_phone=client_phone,
                         new_dialogue=transcription,
                     )
                 except Exception:
@@ -476,6 +477,7 @@ class ATS2PollerService:
                 povtornoe_obrashchenie=repeat.is_repeat,
                 parent_task_id=repeat.parent_task_id,
                 istochnik="ZVONOK",
+                obrashchenie_kind=repeat.chain_position,
             )
             logger.info(
                 "ATS2 call %s → Twenty task created: %s (loc=%s)",

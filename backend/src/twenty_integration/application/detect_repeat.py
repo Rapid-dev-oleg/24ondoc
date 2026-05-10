@@ -32,9 +32,12 @@ _KEYWORD_RE = re.compile(
 )
 
 
-class _LocationPort(Protocol):
+class _RepeatPort(Protocol):
     async def find_recent_tasks_by_location_id(
-        self, location_id: str, since: datetime, limit: int = 10
+        self, location_id: str, since: datetime, limit: int = 10,
+    ) -> list[dict[str, Any]]: ...
+    async def find_recent_tasks_by_caller_phone(
+        self, caller_phone: str, since: datetime, limit: int = 10,
     ) -> list[dict[str, Any]]: ...
 
 
@@ -44,18 +47,66 @@ class _RepeatAIPort(Protocol):
     ) -> dict[str, object]: ...
 
 
+# Chain-position values used in Twenty (Task.obrashchenieKind, CallRecord.callKind)
+KIND_NEW = "NEW"
+KIND_REPEAT = "REPEAT"
+KIND_SYSTEM = "SYSTEM"
+
+
 @dataclass
 class RepeatResult:
-    is_repeat: bool
-    parent_task_id: str | None
-    match_reason: str  # "keyword" | "semantic" | "none"
-    recent_candidates: int
+    """Result of repeat detection.
+
+    chain_position: NEW (1st in chain) | REPEAT (2nd) | SYSTEM (3+).
+    is_repeat: legacy bool, derived (NEW=False, REPEAT/SYSTEM=True).
+    parent_task_id: most-recent prior task in the chain (None for NEW).
+    """
+    chain_position: str = KIND_NEW
+    is_repeat: bool = False
+    parent_task_id: str | None = None
+    match_reason: str = "none"  # "keyword" | "semantic" | "none"
+    recent_candidates: int = 0
+
+
+def _kind_from_count(prior_count: int) -> str:
+    if prior_count <= 0:
+        return KIND_NEW
+    if prior_count == 1:
+        return KIND_REPEAT
+    return KIND_SYSTEM
+
+
+def _result(chain_position: str, parent_id: str | None,
+            reason: str, count: int) -> RepeatResult:
+    return RepeatResult(
+        chain_position=chain_position,
+        is_repeat=chain_position in (KIND_REPEAT, KIND_SYSTEM),
+        parent_task_id=parent_id,
+        match_reason=reason,
+        recent_candidates=count,
+    )
 
 
 class DetectRepeat:
+    """Determine the chain position of a new ticket within a 3-day window.
+
+    Candidates set: tasks of the same client_phone + tasks of the same
+    location_id (deduped). On the candidates we run a keyword check
+    against the new dialogue (operator's «опять / то же / не работает
+    до сих пор / ещё раз») — a chain step is only valid if the new
+    dialogue actually references prior contact. Without keywords every
+    second call from the same number would falsely become REPEAT.
+
+    On a positive keyword hit, chain length = number of distinct prior
+    candidates that survived dedup (capped at 10):
+      0 → NEW (no priors at all)
+      1 → REPEAT (one prior — this is the second contact)
+      2+ → SYSTEM (problem hasn't been closed across multiple attempts).
+    """
+
     def __init__(
         self,
-        twenty_port: _LocationPort,
+        twenty_port: _RepeatPort,
         ai_port: _RepeatAIPort | None,
         window: timedelta = timedelta(days=WINDOW_DAYS),
     ) -> None:
@@ -64,30 +115,66 @@ class DetectRepeat:
         self._window = window
 
     async def execute(
-        self, *, location_id: str | None, new_dialogue: str,
+        self,
+        *,
+        location_id: str | None = None,
+        client_phone: str | None = None,
+        new_dialogue: str = "",
     ) -> RepeatResult:
-        if not location_id:
-            return RepeatResult(False, None, "none", 0)
+        if not location_id and not client_phone:
+            return _result(KIND_NEW, None, "none", 0)
 
         since = datetime.now(UTC) - self._window
-        recent = await self._twenty.find_recent_tasks_by_location_id(location_id, since, limit=10)
-        if not recent:
-            return RepeatResult(False, None, "none", 0)
+        # Pull candidates from both axes; dedupe by id.
+        candidates: dict[str, dict[str, Any]] = {}
+        if client_phone:
+            try:
+                by_phone = await self._twenty.find_recent_tasks_by_caller_phone(
+                    client_phone, since, limit=10,
+                )
+                for t in by_phone:
+                    tid = str(t.get("id") or "")
+                    if tid:
+                        candidates[tid] = t
+            except Exception:
+                logger.exception("by_caller_phone candidates failed")
+        if location_id:
+            try:
+                by_loc = await self._twenty.find_recent_tasks_by_location_id(
+                    location_id, since, limit=10,
+                )
+                for t in by_loc:
+                    tid = str(t.get("id") or "")
+                    if tid and tid not in candidates:
+                        candidates[tid] = t
+            except Exception:
+                logger.exception("by_location_id candidates failed")
 
-        # Keyword fast path — take the most recent prior task as parent
+        if not candidates:
+            return _result(KIND_NEW, None, "none", 0)
+
+        # Sort newest-first so parent = most recent prior task
+        recent = sorted(
+            candidates.values(),
+            key=lambda r: r.get("createdAt") or "",
+            reverse=True,
+        )
+
+        # Keyword fast path — operator referenced previous contact.
         if _KEYWORD_RE.search(new_dialogue or ""):
-            return RepeatResult(
-                is_repeat=True,
-                parent_task_id=str(recent[0].get("id") or "") or None,
-                match_reason="keyword",
-                recent_candidates=len(recent),
+            kind = _kind_from_count(len(recent))
+            return _result(
+                kind,
+                str(recent[0].get("id") or "") or None,
+                "keyword",
+                len(recent),
             )
 
         if self._ai is None:
-            return RepeatResult(False, None, "none", len(recent))
+            return _result(KIND_NEW, None, "none", len(recent))
 
         # Semantic path — ask the AI to match against recent candidates
-        candidates = [
+        ai_input = [
             {
                 "id": str(r.get("id") or ""),
                 "title": str(r.get("title") or ""),
@@ -96,21 +183,22 @@ class DetectRepeat:
             for r in recent
         ]
         try:
-            ai_out = await self._ai.check_repeat_status(new_dialogue or "", candidates)
+            ai_out = await self._ai.check_repeat_status(new_dialogue or "", ai_input)
         except Exception:
             logger.exception("check_repeat_status call failed")
-            return RepeatResult(False, None, "none", len(recent))
+            return _result(KIND_NEW, None, "none", len(recent))
 
         matches = list(ai_out.get("matches") or [])
         if not matches:
-            return RepeatResult(False, None, "none", len(recent))
+            return _result(KIND_NEW, None, "none", len(recent))
 
         matched_ids = {str(m) for m in matches}
         parent_id = next(
             (str(r["id"]) for r in recent if str(r.get("id") or "") in matched_ids),
             str(recent[0].get("id") or "") or None,
         )
-        return RepeatResult(True, parent_id, "semantic", len(recent))
+        kind = _kind_from_count(len(recent))
+        return _result(kind, parent_id, "semantic", len(recent))
 
 
 def _body_markdown(body: Any) -> str | None:

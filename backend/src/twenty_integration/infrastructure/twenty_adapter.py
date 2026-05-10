@@ -534,6 +534,35 @@ class TwentyRestAdapter(TwentyCRMPort):
         data = r.json().get("data", {})
         return dict(data.get("createOperator", data))
 
+    async def find_recent_tasks_by_caller_phone(
+        self, caller_phone: str, since: datetime, limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """All non-callback tasks of a given client phone since `since`."""
+        national = normalize_ru_phone(caller_phone)
+        if not national:
+            return []
+        since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            response = await self._client.get(
+                "/rest/tasks",
+                params={
+                    "filter": (
+                        f"callerPhone.primaryPhoneNumber[eq]:{national}"
+                        f",createdAt[gt]:{since_iso}"
+                    ),
+                    "order_by": "createdAt[DescNullsLast]",
+                    "limit": limit,
+                },
+            )
+            response.raise_for_status()
+            items = response.json().get("data", {}).get("tasks", []) or []
+            return [t for t in items if not t.get("isOutgoingCallback")]
+        except httpx.HTTPError:
+            logger.exception(
+                "find_recent_tasks_by_caller_phone failed phone=%s", national,
+            )
+            return []
+
     async def find_recent_task_by_caller_phone(
         self, caller_phone: str, since: datetime,
     ) -> dict[str, Any] | None:
@@ -834,6 +863,7 @@ class TwentyRestAdapter(TwentyCRMPort):
         povtornoe_obrashchenie: bool | None = None,
         parent_task_id: str | None = None,
         istochnik: str | None = None,
+        obrashchenie_kind: str | None = None,
     ) -> TwentyTask:
         """Создать задачу."""
         try:
@@ -877,6 +907,11 @@ class TwentyRestAdapter(TwentyCRMPort):
                 # SELECT options on Task.istochnikObrashcheniya:
                 # ZVONOK | POCHTA | SMS | TELEGRAM | TORGOVYY | DRUGOE
                 payload["istochnikObrashcheniya"] = istochnik
+
+            if obrashchenie_kind is not None:
+                # SELECT options on Task.obrashchenieKind:
+                # NEW | REPEAT | SYSTEM (chain length in 3-day window)
+                payload["obrashchenieKind"] = obrashchenie_kind
 
             response = await self._client.post("/rest/tasks", json=payload)
             if response.status_code >= 400:

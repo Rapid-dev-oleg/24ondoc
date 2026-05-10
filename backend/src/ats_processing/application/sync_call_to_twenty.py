@@ -116,18 +116,22 @@ class SyncCallToTwentyUseCase:
                     record.call_id, op_phone,
                 )
 
-        # Snapshot Task.povtornoeObrashchenie → CallRecord.callKind so the
-        # call card carries its own первое/повторное flag (denormalized for
-        # filtering in Twenty UI and reports).
+        # Snapshot Task.obrashchenieKind → CallRecord.callKind so the call
+        # card carries the chain-position label (NEW / REPEAT / SYSTEM)
+        # without joining back to the Task on read.
         call_kind: str | None = None
         if task_id:
             try:
                 t = await self._port.get_task(task_id)
                 if t is not None:
-                    call_kind = "REPEAT" if t.get("povtornoeObrashchenie") else "FIRST"
+                    # Prefer the new tri-state field; fall back to legacy
+                    # bool for tasks created before the refactor.
+                    call_kind = t.get("obrashchenieKind") or (
+                        "REPEAT" if t.get("povtornoeObrashchenie") else "NEW"
+                    )
             except Exception:
                 logger.exception(
-                    "Failed reading Task.povtornoeObrashchenie task=%s", task_id,
+                    "Failed reading Task.obrashchenieKind task=%s", task_id,
                 )
 
         transcript = record.get_best_transcription()
