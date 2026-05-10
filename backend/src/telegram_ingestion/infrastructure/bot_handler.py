@@ -942,20 +942,40 @@ def create_router(
         if not members:
             await callback.answer("Нет участников в Twenty", show_alert=True)
             return
+        # Restrict the assignee picker to non-admin agents — admins
+        # don't take tickets in this workflow. We intersect the Twenty
+        # workspaceMember list with our local UserProfile (role !=
+        # ADMIN, is_active=True) and only show people present in BOTH.
+        try:
+            profiles = await user_port.list_active_agents()
+        except Exception:
+            logger.exception("list_active_agents failed")
+            profiles = []
+        allowed_member_ids = {
+            p.twenty_member_id for p in profiles
+            if p.twenty_member_id and p.role != UserRole.ADMIN
+        }
+        if not allowed_member_ids:
+            await callback.answer(
+                "Нет не-админов с привязкой к Twenty.", show_alert=True,
+            )
+            return
         # Render at most 30; member id (UUID) = 36 chars, prefix
         # `asg_pick:` = 9 chars, total 45 — fits in callback_data 64-byte cap.
         kb_rows: list[list[InlineKeyboardButton]] = []
-        for m in members[:30]:
+        for m in members:
             mid = getattr(m, "id", None) or (
                 m.get("id") if isinstance(m, dict) else None
             )
+            if not mid or str(mid) not in allowed_member_ids:
+                continue
             name = getattr(m, "display_name", None) or (
                 m.get("name") if isinstance(m, dict) else None
             ) or str(mid)[:8]
-            if not mid:
-                continue
             cb = f"asg_pick:{mid}"[:64]
             kb_rows.append([InlineKeyboardButton(text=name, callback_data=cb)])
+            if len(kb_rows) >= 30:
+                break
         kb_rows.append(
             [InlineKeyboardButton(text="↩ Назад", callback_data="back_to_preview")]
         )
