@@ -40,6 +40,7 @@ from config import Settings, get_settings
 from reports.infrastructure.http_handler import router as reports_router
 from telegram_ingestion.infrastructure.stt_adapter import GroqSTTAdapter
 from telegram_ingestion.infrastructure.telegram_fastapi import router as tg_router
+from twenty_integration.application.detect_repeat import DetectRepeat
 from twenty_integration.application.resolve_location import ResolveLocation
 from twenty_integration.infrastructure.twenty_adapter import TwentyRestAdapter
 
@@ -113,6 +114,7 @@ def _create_ats2_poller(
     # rows came only from the Telegram confirm path.
     sync_call_uc: SyncCallToTwentyUseCase | None = None
     location_resolver: ResolveLocation | None = None
+    detect_repeat: DetectRepeat | None = None
     if twenty_adapter is not None and settings.twenty_api_key:
         sync_call_uc = SyncCallToTwentyUseCase(
             twenty_port=twenty_adapter,
@@ -121,6 +123,9 @@ def _create_ats2_poller(
         # Same three-stage resolver the Telegram path uses, so live ATS
         # calls get Task.locationRelId set up-front.
         location_resolver = ResolveLocation(twenty_adapter, ai_port)
+        # Same DetectRepeat the Telegram path runs — без него каждая ATS-
+        # Task создавалась с povtornoeObrashchenie=false и портила M6.
+        detect_repeat = DetectRepeat(twenty_port=twenty_adapter, ai_port=ai_port)
 
     poller = ATS2PollerService(
         ats2_client=ats2_client,
@@ -133,6 +138,7 @@ def _create_ats2_poller(
         poll_interval_sec=float(settings.ats2_poll_interval_sec),
         sync_call_uc=sync_call_uc,
         location_resolver=location_resolver,
+        detect_repeat=detect_repeat,
     )
     return poller, auth_manager, ats2_client
 

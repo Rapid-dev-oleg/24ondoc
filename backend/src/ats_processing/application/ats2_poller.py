@@ -11,6 +11,7 @@ from redis.asyncio import Redis as AsyncRedis
 
 from ai_classification.domain.repository import AIClassificationPort
 from telegram_ingestion.application.ports import STTPort
+from twenty_integration.application.detect_repeat import DetectRepeat, RepeatResult
 from twenty_integration.application.resolve_location import ResolveLocation
 from twenty_integration.domain.ports import TwentyCRMPort
 
@@ -52,6 +53,7 @@ class ATS2PollerService:
         poll_interval_sec: float = _DEFAULT_POLL_INTERVAL_SEC,
         sync_call_uc: SyncCallToTwentyUseCase | None = None,
         location_resolver: ResolveLocation | None = None,
+        detect_repeat: DetectRepeat | None = None,
     ) -> None:
         self._ats2_client = ats2_client
         self._call_repo = call_repo
@@ -63,6 +65,7 @@ class ATS2PollerService:
         self._poll_interval_sec = poll_interval_sec
         self._sync_call_uc = sync_call_uc
         self._location_resolver = location_resolver
+        self._detect_repeat = detect_repeat
         self._last_poll_timestamp: datetime | None = None
         self._running: bool = False
         self._stop_event: asyncio.Event = asyncio.Event()
@@ -427,6 +430,22 @@ class ATS2PollerService:
                         "ATS2 Poller: location resolve failed for %s", call_id,
                     )
 
+            # Detect repeat обращения: было ли недавно (3 дня) задание
+            # на этой же точке с такой же сутью? Без этого все ATS-Task
+            # создавались с povtornoeObrashchenie=false → M6 в отчётах
+            # был занижен. Skipping — это та же ветка, что в Telegram-flow.
+            repeat = RepeatResult(False, None, "none", 0)
+            if self._detect_repeat is not None:
+                try:
+                    repeat = await self._detect_repeat.execute(
+                        location_id=location_rel_id,
+                        new_dialogue=transcription,
+                    )
+                except Exception:
+                    logger.exception(
+                        "ATS2 Poller: DetectRepeat failed for %s", call_id,
+                    )
+
             task = await self._twenty_port.create_task(
                 title=f"📞 {classification.title}",
                 body="\n".join(body_parts),
@@ -436,6 +455,8 @@ class ATS2PollerService:
                 vazhnost=vazhnost_value,
                 location_rel_id=location_rel_id,
                 caller_phone=caller_phone,
+                povtornoe_obrashchenie=repeat.is_repeat,
+                parent_task_id=repeat.parent_task_id,
             )
             logger.info(
                 "ATS2 call %s → Twenty task created: %s (loc=%s)",

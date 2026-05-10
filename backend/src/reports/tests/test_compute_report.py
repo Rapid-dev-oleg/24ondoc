@@ -98,7 +98,7 @@ def test_completion_without_assignment_event_excluded() -> None:
     tasks = ({
         "id": "t2", "createdAt": _iso(t_created),
         "assigneeId": WM_NADYA, "status": "VYPOLNENO",
-        "vazhnost": "VYSOKAYA", "scriptViolations": 2,
+        "vazhnost": "VYSOKAYA", "scriptViolationsTotal": 2,
     },)
     events = (
         _tu_event("t2", t_completed, {"status": {"before": "TODO", "after": "VYPOLNENO"}}, wmid=WM_NADYA),

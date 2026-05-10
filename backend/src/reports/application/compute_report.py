@@ -191,7 +191,11 @@ def compute_report(
         bucket = acc[owner]
         if t.get("povtornoeObrashchenie"):
             bucket.repeats += 1
-        bucket.script_violations += int(t.get("scriptViolations") or 0)
+        # scriptViolationsTotal — snapshot пересчитывается из CR-ов после
+        # каждого script_check (см. SyncCallToTwentyUseCase.recompute_task_aggregates).
+        # Legacy Task.scriptViolations оставлен в схеме для backwards-compat
+        # на время миграции; по нему больше не считаем.
+        bucket.script_violations += int(t.get("scriptViolationsTotal") or 0)
 
     # --- walk first-assignment events in window for response time ---
     # Uses task.created timeline ts (real Twenty INSERT moment), not the
