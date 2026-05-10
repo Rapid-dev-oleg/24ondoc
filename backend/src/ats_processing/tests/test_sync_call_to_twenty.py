@@ -219,6 +219,31 @@ async def test_script_check_unknown_id_passes_through_verbatim() -> None:
 
 
 @pytest.mark.asyncio
+async def test_script_check_skipped_for_outgoing() -> None:
+    """OUTGOING звонки — это операторские callback'и, скрипт «приём
+    обращения» к ним не применим. Pipe их в check_script даёт ложные
+    нарушения и портит статистику."""
+    port = _port()
+    port.find_call_record_by_ats_id.return_value = _existing_call_record()
+    script_ai = MagicMock()
+    script_ai.check_script = AsyncMock(return_value={
+        "missing": ["greeting"],
+        "violations_count": 1,
+    })
+    uc = SyncCallToTwentyUseCase(twenty_port=port, script_ai=script_ai)
+
+    await uc.execute(
+        _call(transcript="оператор перезванивает"),
+        task_id="t-x",
+        direction="OUTGOING",
+    )
+
+    # AI вообще не дёргается на OUTGOING
+    script_ai.check_script.assert_not_called()
+    port.update_call_record_script_check.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_call_kind_resolved_from_task() -> None:
     port = _port()
     port.get_task = AsyncMock(return_value={"povtornoeObrashchenie": True})

@@ -206,11 +206,16 @@ class SyncCallToTwentyUseCase:
                 except Exception:
                     logger.exception("Failed updating Twenty CallRecord %s", twenty_id)
 
-        # Per-call script-check. Each CR gets its own scriptViolations /
-        # scriptMissing — the task-level total is derived afterwards.
+        # Per-call script-check — INCOMING ONLY. Скрипт «приём обращения»
+        # написан под входящие звонки клиентов (приветствие, ask_time,
+        # fixed, any_more_questions, farewell). На OUTGOING-перезвоны он
+        # не применим — оператор там сам ведёт разговор по существу
+        # уже открытого тикета. Прогонять script_check на OUTGOING =
+        # ложные «нарушения» которые искажают статистику.
         if (
             twenty_id
             and transcript
+            and direction == "INCOMING"
             and record.status in {CallStatus.CREATED, CallStatus.PREVIEW, CallStatus.PROCESSING}
             and self._script_ai is not None
         ):
