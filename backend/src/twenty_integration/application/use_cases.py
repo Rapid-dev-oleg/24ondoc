@@ -57,6 +57,7 @@ class CreateTwentyTaskFromSession:
         *,
         caller_phone: str | None = None,
         dialogue_text: str | None = None,
+        location_rel_id: str | None = None,
     ) -> TwentyTask:
         """Создать задачу в Twenty из сессии.
 
@@ -68,6 +69,11 @@ class CreateTwentyTaskFromSession:
             file_downloader: Async callback (file_id) -> (bytes, filename) | None
             kategoriya: Pre-selected kategoriya value from Twenty options
             vazhnost: Pre-selected vazhnost value from Twenty options
+            caller_phone: Phone of the person who initiated the case
+            dialogue_text: Transcript / preview text — passed to ResolveLocation
+                only when `location_rel_id` is NOT supplied.
+            location_rel_id: Operator's explicit Location pick (Telegram path).
+                When set, automatic resolve is skipped entirely.
 
         Returns:
             Созданная TwentyTask
@@ -90,13 +96,25 @@ class CreateTwentyTaskFromSession:
             except Exception:
                 logger.exception("Failed to select task fields, creating without them")
 
-        # Resolve the outlet (Location) the task belongs to. Caller's phone
-        # itself is stored on Task.callerPhone — we no longer maintain a
-        # phantom Person per number; контакты остались только для operators
-        # (Person.telegramid).
-        location_rel_id = await self._location_resolver.execute(
-            caller_phone, dialogue_text,
-        )
+        # Operator's explicit pick (Telegram path) wins over auto-resolve;
+        # otherwise we run the three-stage resolver. When the operator
+        # provided BOTH a Location and a phone, we still run the
+        # learn-by-resolve step so the catalog grows from manual picks too.
+        if location_rel_id is not None:
+            if caller_phone:
+                try:
+                    await self._port.add_phone_to_location(
+                        location_rel_id, caller_phone,
+                    )
+                except Exception:
+                    logger.exception(
+                        "manual learn-by-resolve failed loc=%s phone=%s",
+                        location_rel_id, caller_phone,
+                    )
+        else:
+            location_rel_id = await self._location_resolver.execute(
+                caller_phone, dialogue_text,
+            )
 
         # Detect repeat obrashchenie BEFORE we create the task — so the
         # Task is born with the correct povtornoeObrashchenie and

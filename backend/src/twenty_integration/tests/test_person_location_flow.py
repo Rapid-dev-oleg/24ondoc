@@ -230,6 +230,57 @@ async def test_phone_ambiguous_yields_no_location() -> None:
 
 
 @pytest.mark.asyncio
+async def test_explicit_location_override_skips_resolver() -> None:
+    """Telegram path: operator picked the Location by hand. Auto-resolve
+    must NOT run, even when dialogue_text could feed it."""
+    port = _mock_port()
+    ai = _mock_ai("should-not-be-called")
+    uc = CreateTwentyTaskFromSession(port=port, ai_port=ai)
+
+    await uc.execute(
+        session=_draft(),
+        telegram_id=42,
+        user_name="Иван",
+        caller_phone="79063567906",
+        dialogue_text="это аполо 32 беспокоит",
+        location_rel_id="loc-manual-7",
+    )
+
+    # No resolve calls anywhere
+    port.list_location_display_names.assert_not_called()
+    ai.extract_location_name.assert_not_called()
+    port.find_location_by_display_name.assert_not_called()
+    port.find_locations_by_phone.assert_not_called()
+    # Operator-supplied location lands on the Task
+    kwargs = port.create_task.call_args.kwargs
+    assert kwargs["location_rel_id"] == "loc-manual-7"
+    # Manual learn-by-resolve still runs because phone is provided
+    port.add_phone_to_location.assert_awaited_once_with(
+        "loc-manual-7", "79063567906",
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_location_without_phone_skips_learn() -> None:
+    """Operator picked a Location but didn't provide a number — nothing
+    to feed back, so add_phone_to_location must not run."""
+    port = _mock_port()
+    ai = _mock_ai("should-not-be-called")
+    uc = CreateTwentyTaskFromSession(port=port, ai_port=ai)
+
+    await uc.execute(
+        session=_draft(),
+        telegram_id=42,
+        user_name="Иван",
+        location_rel_id="loc-manual-7",
+    )
+
+    port.add_phone_to_location.assert_not_called()
+    kwargs = port.create_task.call_args.kwargs
+    assert kwargs["location_rel_id"] == "loc-manual-7"
+
+
+@pytest.mark.asyncio
 async def test_use_case_never_creates_person_or_location() -> None:
     """No client-Person, no Location creation, no phantom links."""
     port = _mock_port()
