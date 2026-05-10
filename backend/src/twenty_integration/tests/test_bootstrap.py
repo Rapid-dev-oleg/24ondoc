@@ -169,6 +169,17 @@ def _seed_with_task_and_person() -> list[dict[str, Any]]:
                 {"id": "fld-person-tg", "name": "telegramid", "type": "TEXT"},
             ],
         },
+        {
+            # Twenty's built-in WorkspaceMember — always present in real
+            # workspaces; we seed it so Operator.memberRel finds its target.
+            "nameSingular": "workspaceMember",
+            "namePlural": "workspaceMembers",
+            "id": "obj-member",
+            "labelIdentifierFieldMetadataId": "fld-member-name",
+            "fields": [
+                {"id": "fld-member-name", "name": "name", "type": "FULL_NAME"},
+            ],
+        },
     ]
 
 
@@ -178,7 +189,7 @@ async def test_bootstrap_creates_all_missing_objects_and_fields() -> None:
 
     report = await ensure_twenty_schema(adapter)
 
-    assert set(report.objects_created) == {"location", "callRecord"}
+    assert set(report.objects_created) == {"location", "callRecord", "operator"}
     assert not report.objects_existing
     assert not report.errors
 
@@ -216,7 +227,7 @@ async def test_bootstrap_is_idempotent() -> None:
     assert creates_first == creates_second, "second pass must not create anything"
     assert not report2.objects_created
     assert not report2.fields_created
-    assert set(report2.objects_existing) == {"location", "callRecord"}
+    assert set(report2.objects_existing) == {"location", "callRecord", "operator"}
     assert not report2.errors
 
 

@@ -43,6 +43,10 @@ def _port() -> Any:
     p.find_locations_by_phone = AsyncMock(return_value=[{"id": "loc-7"}])
     p.create_call_record = AsyncMock(return_value={"id": "call-twenty-7"})
     p.update_call_record = AsyncMock()
+    p.update_call_record_script_check = AsyncMock()
+    p.recompute_task_aggregates = AsyncMock()
+    p.find_operator_by_phone = AsyncMock(return_value=None)
+    p.get_task = AsyncMock(return_value=None)
     return p
 
 
@@ -175,8 +179,6 @@ def _existing_call_record() -> dict[str, Any]:
 async def test_script_check_writes_russian_phrases_not_ids() -> None:
     port = _port()
     port.find_call_record_by_ats_id.return_value = _existing_call_record()
-    port.get_task = AsyncMock(return_value={"scriptViolations": None})
-    port.update_task_script_check = AsyncMock()
     script_ai = MagicMock()
     script_ai.check_script = AsyncMock(return_value={
         "missing": ["greeting", "farewell"],
@@ -186,22 +188,23 @@ async def test_script_check_writes_russian_phrases_not_ids() -> None:
 
     await uc.execute(_call(transcript="[Оператор]: алло"), task_id="t-1")
 
-    port.update_task_script_check.assert_awaited_once()
-    args = port.update_task_script_check.call_args.args
-    assert args[0] == "t-1"
+    # Script result lands on the CallRecord (not Task) now
+    port.update_call_record_script_check.assert_awaited_once()
+    args = port.update_call_record_script_check.call_args.args
+    assert args[0] == "call-twenty-1"  # the Twenty CR id, not task id
     assert args[1] == 2
     assert args[2] == [
         "Здравствуйте, чем я вам могу помочь",
         "До свидания",
     ]
+    # And task aggregates are recomputed afterwards
+    port.recompute_task_aggregates.assert_awaited_once_with("t-1")
 
 
 @pytest.mark.asyncio
 async def test_script_check_unknown_id_passes_through_verbatim() -> None:
     port = _port()
     port.find_call_record_by_ats_id.return_value = _existing_call_record()
-    port.get_task = AsyncMock(return_value={"scriptViolations": None})
-    port.update_task_script_check = AsyncMock()
     script_ai = MagicMock()
     script_ai.check_script = AsyncMock(return_value={
         "missing": ["mystery_phrase"],
@@ -211,5 +214,33 @@ async def test_script_check_unknown_id_passes_through_verbatim() -> None:
 
     await uc.execute(_call(transcript="..."), task_id="t-2")
 
-    args = port.update_task_script_check.call_args.args
+    args = port.update_call_record_script_check.call_args.args
     assert args[2] == ["mystery_phrase"]
+
+
+@pytest.mark.asyncio
+async def test_call_kind_resolved_from_task() -> None:
+    port = _port()
+    port.get_task = AsyncMock(return_value={"povtornoeObrashchenie": True})
+    uc = SyncCallToTwentyUseCase(twenty_port=port)
+
+    await uc.execute(_call(), task_id="t-repeat",
+                     callee_phone="79049042060")
+
+    kwargs = port.create_call_record.call_args.kwargs
+    assert kwargs["call_kind"] == "REPEAT"
+
+
+@pytest.mark.asyncio
+async def test_operator_resolved_from_callee_phone() -> None:
+    port = _port()
+    port.find_operator_by_phone = AsyncMock(
+        return_value={"id": "op-42", "displayName": "Оператор Иван"}
+    )
+    uc = SyncCallToTwentyUseCase(twenty_port=port)
+
+    await uc.execute(_call(), task_id="t-1", callee_phone="79049042060")
+
+    port.find_operator_by_phone.assert_awaited_once_with("79049042060")
+    kwargs = port.create_call_record.call_args.kwargs
+    assert kwargs["operator_rel_id"] == "op-42"

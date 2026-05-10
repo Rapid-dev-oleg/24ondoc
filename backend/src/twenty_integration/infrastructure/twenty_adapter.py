@@ -281,11 +281,14 @@ class TwentyRestAdapter(TwentyCRMPort):
         audio_url: str | None = None,
         location_rel_id: str | None = None,
         task_rel_id: str | None = None,
+        operator_rel_id: str | None = None,
+        call_kind: str | None = None,
     ) -> dict[str, Any]:
         """Создать CallRecord в Twenty. Для upsert см. sync_call_record.
 
         direction: INCOMING | OUTGOING (см. bootstrap.CALL_RECORD.direction).
         call_status: ANSWERED | MISSED | ERROR.
+        call_kind:   FIRST | REPEAT (snapshot of Task.povtornoeObrashchenie).
         """
         payload: dict[str, Any] = {
             "atsCallId": ats_call_id,
@@ -314,6 +317,10 @@ class TwentyRestAdapter(TwentyCRMPort):
             payload["locationRelId"] = location_rel_id
         if task_rel_id:
             payload["taskRelId"] = task_rel_id
+        if operator_rel_id:
+            payload["operatorRelId"] = operator_rel_id
+        if call_kind:
+            payload["callKind"] = call_kind
 
         response = await self._client.post("/rest/callRecords", json=payload)
         if response.status_code >= 400:
@@ -334,6 +341,8 @@ class TwentyRestAdapter(TwentyCRMPort):
         location_rel_id: str | None = None,
         transcript: str | None = None,
         callee_phone: str | None = None,
+        operator_rel_id: str | None = None,
+        call_kind: str | None = None,
     ) -> None:
         """Патч существующей Twenty CallRecord (обычно — прикрепить task после факта)."""
         patch: dict[str, Any] = {}
@@ -347,6 +356,10 @@ class TwentyRestAdapter(TwentyCRMPort):
             national = normalize_ru_phone(callee_phone)
             if national:
                 patch["calleePhone"] = to_phones_composite(national)
+        if operator_rel_id is not None:
+            patch["operatorRelId"] = operator_rel_id
+        if call_kind is not None:
+            patch["callKind"] = call_kind
         if not patch:
             return
         response = await self._client.patch(
@@ -359,6 +372,147 @@ class TwentyRestAdapter(TwentyCRMPort):
                 response.text[:300],
             )
             response.raise_for_status()
+
+    async def update_call_record_script_check(
+        self, call_record_id: str, violations: int, missing: list[str],
+    ) -> None:
+        """Per-call script-check result. Stores `violations` (NUMBER)
+        and `missing` (joined RU phrases as TEXT) on the CallRecord."""
+        patch = {
+            "scriptViolations": int(violations),
+            "scriptMissing": ", ".join(missing) if missing else "",
+        }
+        r = await self._client.patch(
+            f"/rest/callRecords/{call_record_id}", json=patch
+        )
+        if r.status_code >= 400:
+            logger.error(
+                "update_call_record_script_check failed: %s %s",
+                r.status_code, r.text[:300],
+            )
+            r.raise_for_status()
+
+    async def recompute_task_aggregates(self, task_id: str) -> None:
+        """Snapshot Task.scriptViolationsTotal + callRecordCount from the
+        related CallRecord set. Cheap denormalisation for flat reports."""
+        if not task_id:
+            return
+        try:
+            r = await self._client.get(
+                "/rest/callRecords",
+                params={"filter": f"taskRelId[eq]:{task_id}", "limit": 100},
+            )
+            r.raise_for_status()
+            crs = r.json().get("data", {}).get("callRecords", []) or []
+        except httpx.HTTPError:
+            logger.exception("recompute_task_aggregates: GET CRs failed task=%s", task_id)
+            return
+        total = sum(int(c.get("scriptViolations") or 0) for c in crs)
+        count = len(crs)
+        # Patch task — only if values would change (skip in-vain writes
+        # so we don't burn the 100/60s write quota).
+        try:
+            t = await self._client.get(f"/rest/tasks/{task_id}")
+            t.raise_for_status()
+            cur = (t.json().get("data") or {}).get("task") or {}
+        except httpx.HTTPError:
+            cur = {}
+        patch: dict[str, Any] = {}
+        if int(cur.get("scriptViolationsTotal") or 0) != total:
+            patch["scriptViolationsTotal"] = total
+        if int(cur.get("callRecordCount") or 0) != count:
+            patch["callRecordCount"] = count
+        if not patch:
+            return
+        try:
+            r = await self._client.patch(f"/rest/tasks/{task_id}", json=patch)
+            r.raise_for_status()
+        except httpx.HTTPError:
+            logger.exception("recompute_task_aggregates: PATCH failed task=%s", task_id)
+
+    # ---- Operator ----
+
+    async def find_operator_by_phone(
+        self, work_phone: str,
+    ) -> dict[str, Any] | None:
+        national = normalize_ru_phone(work_phone)
+        if not national:
+            return None
+        try:
+            r = await self._client.get(
+                "/rest/operators",
+                params={"filter": f"workPhone.primaryPhoneNumber[eq]:{national}"},
+            )
+            r.raise_for_status()
+            items = r.json().get("data", {}).get("operators", []) or []
+            return items[0] if items else None
+        except httpx.HTTPError:
+            logger.exception("find_operator_by_phone failed phone=%s", national)
+            return None
+
+    async def find_operator_by_member(
+        self, member_id: str,
+    ) -> dict[str, Any] | None:
+        if not member_id:
+            return None
+        try:
+            r = await self._client.get(
+                "/rest/operators",
+                params={"filter": f"memberRelId[eq]:{member_id}"},
+            )
+            r.raise_for_status()
+            items = r.json().get("data", {}).get("operators", []) or []
+            return items[0] if items else None
+        except httpx.HTTPError:
+            logger.exception("find_operator_by_member failed member=%s", member_id)
+            return None
+
+    async def list_operators(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _ in range(20):
+            params: dict[str, Any] = {"limit": 100,
+                                       "order_by": "id[AscNullsFirst]"}
+            if cursor:
+                params["filter"] = f"id[gt]:{cursor}"
+            try:
+                r = await self._client.get("/rest/operators", params=params)
+                r.raise_for_status()
+                page = r.json().get("data", {}).get("operators", []) or []
+            except httpx.HTTPError:
+                logger.exception("list_operators failed")
+                break
+            if not page:
+                break
+            out.extend(page)
+            if len(page) < 100:
+                break
+            cursor = page[-1].get("id")
+            if not cursor:
+                break
+        return out
+
+    async def create_operator(
+        self,
+        display_name: str,
+        *,
+        work_phone: str | None = None,
+        member_rel_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"displayName": display_name}
+        if work_phone:
+            national = normalize_ru_phone(work_phone)
+            if national:
+                payload["workPhone"] = to_phones_composite(national)
+        if member_rel_id:
+            payload["memberRelId"] = member_rel_id
+        r = await self._client.post("/rest/operators", json=payload)
+        if r.status_code >= 400:
+            logger.error("create_operator failed: %s %s",
+                         r.status_code, r.text[:300])
+        r.raise_for_status()
+        data = r.json().get("data", {})
+        return dict(data.get("createOperator", data))
 
     async def find_recent_tasks_by_location_id(
         self, location_id: str, since: datetime, limit: int = 10

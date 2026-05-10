@@ -101,6 +101,8 @@ additionalPhones. Возвращает True если запись была сд�
         audio_url: str | None = None,
         location_rel_id: str | None = None,
         task_rel_id: str | None = None,
+        operator_rel_id: str | None = None,
+        call_kind: str | None = None,
     ) -> dict[str, object]: ...
 
     @abstractmethod
@@ -112,7 +114,48 @@ additionalPhones. Возвращает True если запись была сд�
         location_rel_id: str | None = None,
         transcript: str | None = None,
         callee_phone: str | None = None,
+        operator_rel_id: str | None = None,
+        call_kind: str | None = None,
     ) -> None: ...
+
+    @abstractmethod
+    async def update_call_record_script_check(
+        self, call_record_id: str, violations: int, missing: list[str],
+    ) -> None:
+        """Per-call script-check result. Pisses on the CallRecord, then
+        the use case re-aggregates Task.scriptViolationsTotal."""
+        ...
+
+    @abstractmethod
+    async def recompute_task_aggregates(self, task_id: str) -> None:
+        """Recompute Task.scriptViolationsTotal + callRecordCount +
+        scriptMissingLatest from this Task's CallRecord set. Cheap
+        snapshot used by reports."""
+        ...
+
+    # ---- Operator entity (callee identity) ----
+
+    @abstractmethod
+    async def find_operator_by_phone(
+        self, work_phone: str,
+    ) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def find_operator_by_member(
+        self, member_id: str,
+    ) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def list_operators(self) -> list[dict[str, object]]: ...
+
+    @abstractmethod
+    async def create_operator(
+        self,
+        display_name: str,
+        *,
+        work_phone: str | None = None,
+        member_rel_id: str | None = None,
+    ) -> dict[str, object]: ...
 
     @abstractmethod
     async def link_person_to_task(self, task_id: str, person_id: str) -> None: ...

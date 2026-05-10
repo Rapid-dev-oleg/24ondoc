@@ -149,6 +149,46 @@ CALL_RECORD = ObjectSpec(
         FieldSpec("occurredAt", "Время звонка", "DATE_TIME"),
         FieldSpec("transcript", "Транскрипт", "RICH_TEXT_V2"),
         FieldSpec("audioUrl", "Ссылка на аудио", "TEXT"),
+        # Script-check results live on the call (per-call check), with a
+        # snapshot/sum on Task for flat reporting (`scriptViolationsTotal`).
+        FieldSpec("scriptViolations", "Нарушений скрипта", "NUMBER"),
+        FieldSpec("scriptMissing", "Отсутствующие фразы", "TEXT"),
+        # Snapshot of Task.povtornoeObrashchenie at the moment this call
+        # is mirrored. Allows filtering "первое / повторное" right on the
+        # call card without joining to the Task.
+        FieldSpec(
+            "callKind", "Тип обращения", "SELECT",
+            options=(
+                {"label": "Первое обращение", "value": "FIRST", "color": "blue"},
+                {"label": "Повторное", "value": "REPEAT", "color": "orange"},
+            ),
+        ),
+    ),
+)
+
+
+# ============================================================
+# Operator — sotrudnik podderzhki (callee identity)
+# ============================================================
+
+OPERATOR = ObjectSpec(
+    name_singular="operator",
+    name_plural="operators",
+    label_singular="Оператор",
+    label_plural="Операторы",
+    description="Сотрудник техподдержки 24ondoc, принимающий звонки. Резолвится по callee-номеру в ATS-payload и связывается с WorkspaceMember для прав/ролей.",
+    icon="IconHeadset",
+    skip_name_field=True,
+    fields=(
+        FieldSpec(
+            "displayName", "Имя", "TEXT",
+            description="Человекочитаемое имя оператора, обычно ФИО.",
+            is_nullable=False,
+            is_unique=True,
+            is_label_identifier=True,
+        ),
+        FieldSpec("workPhone", "Внутренний номер", "PHONES",
+                  description="Номер на стороне 24ondoc, на который попадают звонки клиентов."),
     ),
 )
 
@@ -165,8 +205,18 @@ CALL_RECORD = ObjectSpec(
 TASK_EXTRA_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("parentTaskId", "ID родительской задачи", "TEXT",
               description="Ссылка на задачу, повтором которой является эта."),
+    # Legacy script-check fields. The source of truth migrated to CallRecord
+    # (each call gets its own scriptViolations/scriptMissing) — these stay
+    # for backwards-compatible reads; the live write path no longer touches
+    # them. Will be dropped after Reports switch to scriptViolationsTotal.
     FieldSpec("scriptViolations", "Нарушений скрипта", "NUMBER"),
     FieldSpec("scriptMissing", "Отсутствующие фразы", "TEXT"),
+    # Aggregate snapshot for flat reporting (sum + count over related CRs).
+    # Recomputed by SyncCallToTwentyUseCase after every script_check pass.
+    FieldSpec("scriptViolationsTotal", "Нарушений (сумма)", "NUMBER",
+              description="Сумма scriptViolations по всем звонкам этой задачи. Снимок для отчётов."),
+    FieldSpec("callRecordCount", "Звонков по задаче", "NUMBER",
+              description="Количество CallRecord-ов, привязанных к задаче."),
     # Телефон заявителя живёт прямо на Task — Person как «бакет для номеров»
     # больше не нужен (см. wipe_client_persons.py + use_cases.py).
     FieldSpec("callerPhone", "Телефон заявителя", "PHONES"),
@@ -193,6 +243,26 @@ CALLRECORD_RELATIONS: tuple[FieldSpec, ...] = (
     FieldSpec(
         "taskRel", "Задача", "RELATION",
         relation_target="task", reverse_label="Звонки задачи",
+    ),
+    # operatorRel ↔ Operator.callRecordsRel (auto reverse). Resolved
+    # from `calleeNumber` in the ATS payload at sync time. Null when
+    # the callee number doesn't match any operator's workPhone yet —
+    # operators get attached manually in Twenty UI for those.
+    FieldSpec(
+        "operatorRel", "Оператор", "RELATION",
+        relation_target="operator", reverse_label="Принятые звонки",
+    ),
+)
+
+OPERATOR_RELATIONS: tuple[FieldSpec, ...] = (
+    # Connection to the live Twenty user the operator is. Telegram→Operator
+    # resolution does NOT live here — it lives in our local UserProfile
+    # table (telegram_id → twenty_member_id) and reuses memberRel from
+    # there. Keeping a single source of truth for that edge.
+    FieldSpec(
+        "memberRel", "Пользователь", "RELATION",
+        relation_target="workspaceMember",
+        reverse_label="Профиль оператора",
     ),
 )
 
@@ -290,7 +360,7 @@ async def ensure_twenty_schema(adapter: Any) -> BootstrapReport:
     objects_by_name: dict[str, dict[str, Any]] = {o["nameSingular"]: o for o in objects}
 
     # ---- Step 2: create missing custom objects ----
-    for spec in (LOCATION, CALL_RECORD):
+    for spec in (LOCATION, CALL_RECORD, OPERATOR):
         if spec.name_singular in objects_by_name:
             report.objects_existing.append(spec.name_singular)
             continue
@@ -321,6 +391,7 @@ async def ensure_twenty_schema(adapter: Any) -> BootstrapReport:
     extras_plan: list[tuple[ObjectSpec | None, str, tuple[FieldSpec, ...]]] = [
         (LOCATION, LOCATION.name_singular, LOCATION.fields),
         (CALL_RECORD, CALL_RECORD.name_singular, CALL_RECORD.fields),
+        (OPERATOR, OPERATOR.name_singular, OPERATOR.fields),
         (None, "task", TASK_EXTRA_FIELDS),
     ]
 
@@ -386,6 +457,7 @@ async def ensure_twenty_schema(adapter: Any) -> BootstrapReport:
     relations_plan: list[tuple[str, tuple[FieldSpec, ...]]] = [
         ("task", TASK_RELATIONS),
         (CALL_RECORD.name_singular, CALLRECORD_RELATIONS),
+        (OPERATOR.name_singular, OPERATOR_RELATIONS),
     ]
     for obj_name, specs in relations_plan:
         obj = objects_by_name.get(obj_name)

@@ -95,6 +95,37 @@ class SyncCallToTwentyUseCase:
                     "Failed resolving location for call %s", record.call_id
                 )
 
+        # Resolve Operator from callee_phone (callee = the support agent who
+        # answered). Looked up against Operator.workPhone in Twenty. Operator
+        # entity is created manually (or via bootstrap_operators script);
+        # we don't auto-create here on miss — leave operatorRel null so an
+        # admin can attach it later in Twenty UI.
+        operator_id: str | None = None
+        if callee_phone:
+            try:
+                op = await self._port.find_operator_by_phone(callee_phone)
+                if op and op.get("id"):
+                    operator_id = str(op["id"])
+            except Exception:
+                logger.exception(
+                    "Failed resolving operator for call %s phone=%s",
+                    record.call_id, callee_phone,
+                )
+
+        # Snapshot Task.povtornoeObrashchenie → CallRecord.callKind so the
+        # call card carries its own первое/повторное flag (denormalized for
+        # filtering in Twenty UI and reports).
+        call_kind: str | None = None
+        if task_id:
+            try:
+                t = await self._port.get_task(task_id)
+                if t is not None:
+                    call_kind = "REPEAT" if t.get("povtornoeObrashchenie") else "FIRST"
+            except Exception:
+                logger.exception(
+                    "Failed reading Task.povtornoeObrashchenie task=%s", task_id,
+                )
+
         transcript = record.get_best_transcription()
         direction = "INCOMING"  # ATS2 doesn't tell us direction in current poller
         call_status = _STATUS_MAP.get(record.status, "ERROR")
@@ -114,6 +145,8 @@ class SyncCallToTwentyUseCase:
                     transcript=transcript,
                     location_rel_id=location_id,
                     task_rel_id=task_id,
+                    operator_rel_id=operator_id,
+                    call_kind=call_kind,
                 )
                 twenty_id = str(created.get("id") or "") or None
                 was_created = True
@@ -131,6 +164,8 @@ class SyncCallToTwentyUseCase:
                 task_id
                 or (transcript and not existing.get("transcript"))
                 or (callee_phone and not callee_already_set)
+                or (operator_id and not existing.get("operatorRelId"))
+                or (call_kind and not existing.get("callKind"))
             )
             if twenty_id and wants_update:
                 try:
@@ -140,24 +175,37 @@ class SyncCallToTwentyUseCase:
                         location_rel_id=location_id if not existing.get("locationRelId") else None,
                         transcript=transcript if not existing.get("transcript") else None,
                         callee_phone=callee_phone if not callee_already_set else None,
+                        operator_rel_id=operator_id if not existing.get("operatorRelId") else None,
+                        call_kind=call_kind if not existing.get("callKind") else None,
                     )
                 except Exception:
                     logger.exception("Failed updating Twenty CallRecord %s", twenty_id)
 
-        # Script check on the first answered call for this task (Stage 7).
-        # Runs on BOTH the create and update paths: a freshly-synced call
-        # (was_created=True) still needs its transcript evaluated, otherwise
-        # the first call on every new task silently skips scriptViolations.
+        # Per-call script-check. Each CR gets its own scriptViolations /
+        # scriptMissing — the task-level total is derived afterwards.
         if (
-            task_id
+            twenty_id
             and transcript
             and record.status in {CallStatus.CREATED, CallStatus.PREVIEW, CallStatus.PROCESSING}
             and self._script_ai is not None
         ):
             try:
-                await self._run_script_check(task_id, transcript)
+                await self._run_script_check(twenty_id, transcript)
             except Exception:
-                logger.exception("check_script hook failed for task %s", task_id)
+                logger.exception(
+                    "check_script hook failed for cr %s task %s",
+                    twenty_id, task_id,
+                )
+
+        # Refresh Task aggregates (scriptViolationsTotal + callRecordCount)
+        # after every sync — cheap snapshot for flat reporting.
+        if task_id:
+            try:
+                await self._port.recompute_task_aggregates(task_id)
+            except Exception:
+                logger.exception(
+                    "recompute_task_aggregates failed task=%s", task_id,
+                )
 
         return SyncResult(
             twenty_id=twenty_id,
@@ -165,17 +213,17 @@ class SyncCallToTwentyUseCase:
             linked_task=bool(task_id),
         )
 
-    async def _run_script_check(self, task_id: str, transcript: str) -> None:
+    async def _run_script_check(
+        self, call_record_id: str, transcript: str,
+    ) -> None:
+        """Write per-call script-check result on the CallRecord."""
         if self._script_ai is None:
             return
-        existing = await self._port.get_task(task_id)
-        if existing is None:
-            return
-        if existing.get("scriptViolations") is not None:
-            return  # already checked on a prior call
         result = await self._script_ai.check_script(transcript)
         violations = int(result.get("violations_count") or 0)
         missing_raw = result.get("missing") or []
         missing_ids = [str(m) for m in missing_raw if isinstance(m, str)]
         missing_phrases = [SCRIPT_PHRASES_RU.get(m, m) for m in missing_ids]
-        await self._port.update_task_script_check(task_id, violations, missing_phrases)
+        await self._port.update_call_record_script_check(
+            call_record_id, violations, missing_phrases,
+        )
