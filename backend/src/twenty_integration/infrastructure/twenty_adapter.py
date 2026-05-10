@@ -219,18 +219,24 @@ class TwentyRestAdapter(TwentyCRMPort):
             return False
 
     async def list_location_display_names(self) -> list[str]:
-        """Все displayName из Twenty Location. Используется AI-промптом как enum.
+        """Все displayName из Twenty Location. Используется AI-промптом
+        как enum + ботом для поиска точек оператором.
 
-        Возвращаем сразу до 200 (текущая база — 402 точки, REST по умолчанию
-        отдаёт страницу 60; берём страницы пока есть данные).
+        Twenty REST does NOT accept `starting_after` on /rest/locations
+        (returns 400). Cursor-paginate via `filter=id[gt]:<cursor>` +
+        `order_by=id[AscNullsFirst]` — same fix already applied in
+        offline scripts (commit 6e5104f).
         """
         names: list[str] = []
         cursor: str | None = None
-        # Hard guard: we don't expect > 5 pages of 100 in a workspace.
+        # Hard guard: we don't expect > 10 pages of 100 in a workspace.
         for _ in range(10):
-            params: dict[str, Any] = {"limit": 100}
+            params: dict[str, Any] = {
+                "limit": 100,
+                "order_by": "id[AscNullsFirst]",
+            }
             if cursor:
-                params["starting_after"] = cursor
+                params["filter"] = f"id[gt]:{cursor}"
             try:
                 response = await self._client.get("/rest/locations", params=params)
                 response.raise_for_status()
