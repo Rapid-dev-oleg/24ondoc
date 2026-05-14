@@ -425,6 +425,7 @@ function renderTable(dto) {{
   tableDiv.innerHTML = '<table><thead>' + thead + '</thead><tbody>' + body
                      + '</tbody><tfoot>' + foot + '</tfoot></table>';
   const total = dto.total_created_in_period;
+  const newly = dto.created_new;
   const done  = dto.created_completed;
   const wip   = dto.created_in_progress;
   const unasg = dto.created_unassigned;
@@ -436,13 +437,17 @@ function renderTable(dto) {{
     +     '<div class="card-label">Создано в периоде</div>'
     +     '<div class="card-value">' + fmtInt(total) + '</div>'
     +   '</div>'
-    +   '<div class="card success">'
-    +     '<div class="card-label">Выполнено</div>'
-    +     '<div class="card-value">' + fmtInt(done) + '</div>'
+    +   '<div class="card">'
+    +     '<div class="card-label">Новых</div>'
+    +     '<div class="card-value">' + fmtInt(newly) + '</div>'
     +   '</div>'
     +   '<div class="card">'
     +     '<div class="card-label">В работе</div>'
     +     '<div class="card-value">' + fmtInt(wip) + '</div>'
+    +   '</div>'
+    +   '<div class="card success">'
+    +     '<div class="card-label">Выполнено</div>'
+    +     '<div class="card-value">' + fmtInt(done) + '</div>'
     +   '</div>'
     +   '<div class="card warn">'
     +     '<div class="card-label">Не назначено</div>'
@@ -462,7 +467,7 @@ form.addEventListener('submit', async (e) => {{
     from: fd.get('from'), to: fd.get('to'),
   }});
   if (fd.get('user_id')) params.set('user_id', fd.get('user_id'));
-  const btn = form.querySelector('button');
+  const btn = form.querySelector('button[type=submit]');
   btn.disabled = true; btn.textContent = 'Загрузка…';
   try {{
     const r = await fetch('data?' + params.toString());
@@ -707,7 +712,7 @@ form.addEventListener('submit', async (e)=>{{
   loaderDiv.classList.add('show');
   const fd=new FormData(form);
   const params=new URLSearchParams({{from:fd.get('from'),to:fd.get('to')}});
-  const btn=form.querySelector('button');
+  const btn=form.querySelector('button[type=submit]');
   btn.disabled=true; btn.textContent='Загрузка…';
   try{{
     const r=await fetch('operators/data?'+params.toString());

@@ -50,12 +50,12 @@ class ReportDTO:
 
     total_created_in_period: int = 0     # tasks created in [from, to] — shown in header
     # Period breakdown of tasks created in [from, to]:
-    #   completed = status VYPOLNENO
+    #   new         = status TODO
+    #   completed   = status VYPOLNENO
     #   in_progress = status V_RABOTE
-    #   unassigned = assigneeId is None (regardless of status)
-    # These three are NOT mutually exclusive (unassigned overlaps with
-    # TODO/V_RABOTE buckets) — operators read them as «of the new
-    # intake, how many closed / actively worked / nobody picked up».
+    #   unassigned  = assigneeId is None (regardless of status)
+    # The first three are disjoint by status; unassigned cuts across them.
+    created_new: int = 0
     created_completed: int = 0
     created_in_progress: int = 0
     created_unassigned: int = 0

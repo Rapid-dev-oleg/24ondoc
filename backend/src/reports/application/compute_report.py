@@ -306,6 +306,9 @@ def compute_report(
         in_window_tasks = [t for t in data.tasks if _in_window(t)]
 
     total_created = len(in_window_tasks)
+    created_new = sum(
+        1 for t in in_window_tasks if t.get("status") == "TODO"
+    )
     created_completed = sum(
         1 for t in in_window_tasks if t.get("status") == "VYPOLNENO"
     )
@@ -324,6 +327,7 @@ def compute_report(
         rows=tuple(rows),
         totals=totals,
         total_created_in_period=total_created,
+        created_new=created_new,
         created_completed=created_completed,
         created_in_progress=created_in_progress,
         created_unassigned=created_unassigned,
