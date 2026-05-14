@@ -228,6 +228,16 @@ _REPORT_HTML = """<!doctype html>
     color: #fff; font-weight: 600; cursor: pointer; min-height: 32px;
   }}
   form button:disabled {{ opacity: .5; cursor: progress; }}
+  .actions {{
+    display: flex; gap: 8px; align-items: flex-end; margin-left: auto;
+  }}
+  .quick-range {{ display: flex; gap: 4px; }}
+  .quick-range button {{
+    padding: 6px 12px; background: var(--row-alt); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-size: 13px; font-weight: 500; cursor: pointer; min-height: 32px;
+  }}
+  .quick-range button:hover {{ background: #eee; }}
   #summary {{ color: var(--muted); font-size: 13px; margin-bottom: 8px; }}
   table {{
     width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums;
@@ -303,7 +313,14 @@ _REPORT_HTML = """<!doctype html>
   <label>Сотрудник
     <select name="user_id"><option value="">— Все сотрудники —</option></select>
   </label>
-  <button type="submit">Получить отчёт</button>
+  <div class="actions">
+    <div class="quick-range">
+      <button type="button" data-range="day">День</button>
+      <button type="button" data-range="week">Неделя</button>
+      <button type="button" data-range="month">Месяц</button>
+    </div>
+    <button type="submit">Получить отчёт</button>
+  </div>
 </form>
 
 <div id="summary"></div>
@@ -318,6 +335,27 @@ const summaryDiv = document.getElementById('summary');
 const errDiv = document.getElementById('err');
 const loaderDiv = document.getElementById('loader');
 const userSelect = form.querySelector('select[name=user_id]');
+
+function ymdLocal(d) {{
+  // YYYY-MM-DD in the browser's local timezone — matches what HTML5
+  // <input type="date"> consumes and what users see in their calendar.
+  return d.getFullYear() + '-'
+    + String(d.getMonth() + 1).padStart(2, '0') + '-'
+    + String(d.getDate()).padStart(2, '0');
+}}
+
+function setQuickRange(rangeKey) {{
+  const today = new Date();
+  let from = new Date(today);
+  if (rangeKey === 'week') {{
+    from.setDate(today.getDate() - 6);   // 7-day window incl. today
+  }} else if (rangeKey === 'month') {{
+    from.setDate(today.getDate() - 29);  // 30-day window incl. today
+  }}
+  form.querySelector('input[name=from]').value = ymdLocal(from);
+  form.querySelector('input[name=to]').value = ymdLocal(today);
+  form.requestSubmit();
+}}
 
 function fmtMSKDate(iso) {{
   // Server returns period bounds in UTC; users picked MSK (Europe/Moscow,
@@ -439,6 +477,10 @@ form.addEventListener('submit', async (e) => {{
   }}
 }});
 
+document.querySelectorAll('.quick-range button[data-range]').forEach(b => {{
+  b.addEventListener('click', () => setQuickRange(b.dataset.range));
+}});
+
 loadMembers().then(() => form.requestSubmit());
 </script>
 </body>
@@ -481,6 +523,16 @@ _OPERATORS_HTML = """<!doctype html>
     color: #fff; font-weight: 600; cursor: pointer; min-height: 32px;
   }}
   form button:disabled {{ opacity: .5; cursor: progress; }}
+  .actions {{
+    display: flex; gap: 8px; align-items: flex-end; margin-left: auto;
+  }}
+  .quick-range {{ display: flex; gap: 4px; }}
+  .quick-range button {{
+    padding: 6px 12px; background: var(--row-alt); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-size: 13px; font-weight: 500; cursor: pointer; min-height: 32px;
+  }}
+  .quick-range button:hover {{ background: #eee; }}
   #summary {{ color: var(--muted); font-size: 13px; margin-bottom: 8px; }}
   table {{ width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }}
   thead th {{
@@ -543,7 +595,14 @@ _OPERATORS_HTML = """<!doctype html>
 <form id="f">
   <label>Период с<input type="date" name="from" value="{default_from}"></label>
   <label>по<input type="date" name="to" value="{default_to}"></label>
-  <button type="submit">Получить отчёт</button>
+  <div class="actions">
+    <div class="quick-range">
+      <button type="button" data-range="day">День</button>
+      <button type="button" data-range="week">Неделя</button>
+      <button type="button" data-range="month">Месяц</button>
+    </div>
+    <button type="submit">Получить отчёт</button>
+  </div>
 </form>
 
 <div id="summary"></div>
@@ -565,6 +624,20 @@ function fmtMSKDate(iso){{
   if (isNaN(d.getTime())) return iso.slice(0, 10);
   const msk = new Date(d.getTime() + 3 * 3600 * 1000);
   return msk.toISOString().slice(0, 10);
+}}
+function ymdLocal(d){{
+  return d.getFullYear() + '-'
+    + String(d.getMonth() + 1).padStart(2, '0') + '-'
+    + String(d.getDate()).padStart(2, '0');
+}}
+function setQuickRange(rangeKey){{
+  const today = new Date();
+  let from = new Date(today);
+  if (rangeKey === 'week')  {{ from.setDate(today.getDate() - 6); }}
+  if (rangeKey === 'month') {{ from.setDate(today.getDate() - 29); }}
+  form.querySelector('input[name=from]').value = ymdLocal(from);
+  form.querySelector('input[name=to]').value = ymdLocal(today);
+  form.requestSubmit();
 }}
 function fmtSec(s){{
   if(s===null||s===undefined) return '—';
@@ -645,6 +718,10 @@ form.addEventListener('submit', async (e)=>{{
     loaderDiv.classList.remove('show');
     btn.disabled=false; btn.textContent='Получить отчёт';
   }}
+}});
+
+document.querySelectorAll('.quick-range button[data-range]').forEach(b => {{
+  b.addEventListener('click', () => setQuickRange(b.dataset.range));
 }});
 
 form.requestSubmit();
