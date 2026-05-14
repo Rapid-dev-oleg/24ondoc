@@ -265,6 +265,32 @@ _REPORT_HTML = """<!doctype html>
     animation: spin 0.8s linear infinite;
   }}
   @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  /* Summary cards — intake breakdown over the selected period. */
+  .cards {{
+    display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  }}
+  .card {{
+    flex: 1 1 140px; min-width: 140px;
+    padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px;
+    background: #fff; display: flex; flex-direction: column; gap: 4px;
+  }}
+  .card.accent {{ border-color: var(--accent); }}
+  .card.success {{ border-color: #2ecc71; }}
+  .card.warn {{ border-color: #e67e22; }}
+  .card.muted {{ border-color: var(--border); background: var(--row-alt); }}
+  .card-label {{
+    font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .04em;
+  }}
+  .card-value {{
+    font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums;
+  }}
+  .card.success .card-value {{ color: #27ae60; }}
+  .card.warn .card-value {{ color: #d35400; }}
+  .card.accent .card-value {{ color: var(--accent); }}
+  .period-line {{
+    color: var(--muted); font-size: 12px; margin-bottom: 12px;
+  }}
 </style>
 </head>
 <body>
@@ -349,13 +375,31 @@ function renderTable(dto) {{
   ) : '';
   tableDiv.innerHTML = '<table><thead>' + thead + '</thead><tbody>' + body
                      + '</tbody><tfoot>' + foot + '</tfoot></table>';
+  const total = dto.total_created_in_period;
+  const done  = dto.created_completed;
+  const wip   = dto.created_in_progress;
+  const unasg = dto.created_unassigned;
   summaryDiv.innerHTML =
-      'Создано в периоде: <b>' + fmtInt(dto.total_created_in_period) + '</b>'
-    + ' · Выполнено: <b>' + fmtInt(dto.created_completed) + '</b>'
-    + ' · В работе: <b>' + fmtInt(dto.created_in_progress) + '</b>'
-    + ' · Не назначено: <b>' + fmtInt(dto.created_unassigned) + '</b>'
-    + ' · Период: ' + dto.period_from.slice(0,10)
-    + ' — ' + dto.period_to.slice(0,10);
+      '<div class="period-line">Период: ' + dto.period_from.slice(0,10)
+      + ' — ' + dto.period_to.slice(0,10) + '</div>'
+    + '<div class="cards">'
+    +   '<div class="card accent">'
+    +     '<div class="card-label">Создано в периоде</div>'
+    +     '<div class="card-value">' + fmtInt(total) + '</div>'
+    +   '</div>'
+    +   '<div class="card success">'
+    +     '<div class="card-label">Выполнено</div>'
+    +     '<div class="card-value">' + fmtInt(done) + '</div>'
+    +   '</div>'
+    +   '<div class="card">'
+    +     '<div class="card-label">В работе</div>'
+    +     '<div class="card-value">' + fmtInt(wip) + '</div>'
+    +   '</div>'
+    +   '<div class="card warn">'
+    +     '<div class="card-label">Не назначено</div>'
+    +     '<div class="card-value">' + fmtInt(unasg) + '</div>'
+    +   '</div>'
+    + '</div>';
 }}
 
 form.addEventListener('submit', async (e) => {{
@@ -457,6 +501,28 @@ _OPERATORS_HTML = """<!doctype html>
     animation: spin 0.8s linear infinite;
   }}
   @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  .cards {{
+    display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  }}
+  .card {{
+    flex: 1 1 140px; min-width: 140px;
+    padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px;
+    background: #fff; display: flex; flex-direction: column; gap: 4px;
+  }}
+  .card.accent {{ border-color: var(--accent); }}
+  .card.warn   {{ border-color: #e67e22; }}
+  .card-label {{
+    font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .04em;
+  }}
+  .card-value {{
+    font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums;
+  }}
+  .card.accent .card-value {{ color: var(--accent); }}
+  .card.warn .card-value   {{ color: #d35400; }}
+  .period-line {{
+    color: var(--muted); font-size: 12px; margin-bottom: 12px;
+  }}
 </style>
 </head>
 <body>
@@ -526,9 +592,19 @@ function renderTable(dto){{
       + '</tr>';
   }}).join('');
   tableDiv.innerHTML='<table>'+head+'<tbody>'+rows+'</tbody></table>';
-  summaryDiv.innerHTML='Звонков всего: <b>'+fmtInt(dto.total_calls)+'</b>'
-    +' · Σ нарушений: <b>'+fmtInt(dto.total_violations)+'</b>'
-    +' · Период: '+dto.period_from.slice(0,10)+' — '+dto.period_to.slice(0,10);
+  summaryDiv.innerHTML =
+      '<div class="period-line">Период: ' + dto.period_from.slice(0,10)
+      + ' — ' + dto.period_to.slice(0,10) + '</div>'
+    + '<div class="cards">'
+    +   '<div class="card accent">'
+    +     '<div class="card-label">Звонков всего</div>'
+    +     '<div class="card-value">' + fmtInt(dto.total_calls) + '</div>'
+    +   '</div>'
+    +   '<div class="card warn">'
+    +     '<div class="card-label">Σ нарушений</div>'
+    +     '<div class="card-value">' + fmtInt(dto.total_violations) + '</div>'
+    +   '</div>'
+    + '</div>';
 }}
 
 form.addEventListener('submit', async (e)=>{{
