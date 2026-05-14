@@ -319,6 +319,17 @@ const errDiv = document.getElementById('err');
 const loaderDiv = document.getElementById('loader');
 const userSelect = form.querySelector('select[name=user_id]');
 
+function fmtMSKDate(iso) {{
+  // Server returns period bounds in UTC; users picked MSK (Europe/Moscow,
+  // UTC+3). Shift before slicing to YYYY-MM-DD so the displayed dates
+  // match what the operator chose.
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso.slice(0, 10);
+  const msk = new Date(d.getTime() + 3 * 3600 * 1000);
+  return msk.toISOString().slice(0, 10);
+}}
+
 function fmtDuration(sec) {{
   if (sec === null || sec === undefined) return '—';
   sec = Math.round(sec);
@@ -380,8 +391,8 @@ function renderTable(dto) {{
   const wip   = dto.created_in_progress;
   const unasg = dto.created_unassigned;
   summaryDiv.innerHTML =
-      '<div class="period-line">Период: ' + dto.period_from.slice(0,10)
-      + ' — ' + dto.period_to.slice(0,10) + '</div>'
+      '<div class="period-line">Период: ' + fmtMSKDate(dto.period_from)
+      + ' — ' + fmtMSKDate(dto.period_to) + '</div>'
     + '<div class="cards">'
     +   '<div class="card accent">'
     +     '<div class="card-label">Создано в периоде</div>'
@@ -547,6 +558,14 @@ const summaryDiv=document.getElementById('summary');
 const errDiv=document.getElementById('err');
 const loaderDiv=document.getElementById('loader');
 
+function fmtMSKDate(iso){{
+  // Same UTC→MSK shift as on /reports — show the day the operator picked.
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso.slice(0, 10);
+  const msk = new Date(d.getTime() + 3 * 3600 * 1000);
+  return msk.toISOString().slice(0, 10);
+}}
 function fmtSec(s){{
   if(s===null||s===undefined) return '—';
   s=Math.round(s);
@@ -593,8 +612,8 @@ function renderTable(dto){{
   }}).join('');
   tableDiv.innerHTML='<table>'+head+'<tbody>'+rows+'</tbody></table>';
   summaryDiv.innerHTML =
-      '<div class="period-line">Период: ' + dto.period_from.slice(0,10)
-      + ' — ' + dto.period_to.slice(0,10) + '</div>'
+      '<div class="period-line">Период: ' + fmtMSKDate(dto.period_from)
+      + ' — ' + fmtMSKDate(dto.period_to) + '</div>'
     + '<div class="cards">'
     +   '<div class="card accent">'
     +     '<div class="card-label">Звонков всего</div>'
