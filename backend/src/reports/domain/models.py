@@ -49,6 +49,16 @@ class ReportDTO:
     totals: EmployeeRow | None = None    # footer — weighted aggregate, not avg of row averages
 
     total_created_in_period: int = 0     # tasks created in [from, to] — shown in header
+    # Period breakdown of tasks created in [from, to]:
+    #   completed = status VYPOLNENO
+    #   in_progress = status V_RABOTE
+    #   unassigned = assigneeId is None (regardless of status)
+    # These three are NOT mutually exclusive (unassigned overlaps with
+    # TODO/V_RABOTE buckets) — operators read them as «of the new
+    # intake, how many closed / actively worked / nobody picked up».
+    created_completed: int = 0
+    created_in_progress: int = 0
+    created_unassigned: int = 0
 
 
 @dataclass(frozen=True)

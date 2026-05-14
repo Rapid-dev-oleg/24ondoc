@@ -258,10 +258,11 @@ def compute_report(
     # Filter rows by scope
     if scope in (ReportScope.SELF, ReportScope.EMPLOYEE) and user_id:
         rows = [r for r in rows if r.user_id == user_id]
-    # Overall view: sort by completed desc, but pin the "— не назначено"
-    # bucket to the top so its intake (pending + script violations)
-    # is immediately visible.
-    rows.sort(key=lambda r: (r.user_id is not None, -r.completed))
+    # «— не назначено» больше не плодит отдельную строку в таблице —
+    # эта метрика теперь видна в summary над таблицей (created_unassigned).
+    # Оставляем строку только для конкретных WM-ов.
+    rows = [r for r in rows if r.user_id is not None]
+    rows.sort(key=lambda r: -r.completed)
 
     # --- totals row (weighted, not mean-of-means) ---
     all_durs: list[float] = []
@@ -297,12 +298,23 @@ def compute_report(
         return ts is not None and from_ts <= ts <= to_ts
 
     if scope in (ReportScope.SELF, ReportScope.EMPLOYEE) and user_id:
-        total_created = sum(
-            1 for t in data.tasks
+        in_window_tasks = [
+            t for t in data.tasks
             if _in_window(t) and t.get("assigneeId") == user_id
-        )
+        ]
     else:
-        total_created = sum(1 for t in data.tasks if _in_window(t))
+        in_window_tasks = [t for t in data.tasks if _in_window(t)]
+
+    total_created = len(in_window_tasks)
+    created_completed = sum(
+        1 for t in in_window_tasks if t.get("status") == "VYPOLNENO"
+    )
+    created_in_progress = sum(
+        1 for t in in_window_tasks if t.get("status") == "V_RABOTE"
+    )
+    created_unassigned = sum(
+        1 for t in in_window_tasks if not t.get("assigneeId")
+    )
 
     return ReportDTO(
         scope=scope,
@@ -312,4 +324,7 @@ def compute_report(
         rows=tuple(rows),
         totals=totals,
         total_created_in_period=total_created,
+        created_completed=created_completed,
+        created_in_progress=created_in_progress,
+        created_unassigned=created_unassigned,
     )

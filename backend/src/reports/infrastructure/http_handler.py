@@ -349,9 +349,13 @@ function renderTable(dto) {{
   ) : '';
   tableDiv.innerHTML = '<table><thead>' + thead + '</thead><tbody>' + body
                      + '</tbody><tfoot>' + foot + '</tfoot></table>';
-  summaryDiv.innerHTML = 'Создано задач в периоде: <b>' + dto.total_created_in_period
-                      + '</b> · Период: ' + dto.period_from.slice(0,10)
-                      + ' — ' + dto.period_to.slice(0,10);
+  summaryDiv.innerHTML =
+      'Создано в периоде: <b>' + fmtInt(dto.total_created_in_period) + '</b>'
+    + ' · Выполнено: <b>' + fmtInt(dto.created_completed) + '</b>'
+    + ' · В работе: <b>' + fmtInt(dto.created_in_progress) + '</b>'
+    + ' · Не назначено: <b>' + fmtInt(dto.created_unassigned) + '</b>'
+    + ' · Период: ' + dto.period_from.slice(0,10)
+    + ' — ' + dto.period_to.slice(0,10);
 }}
 
 form.addEventListener('submit', async (e) => {{
