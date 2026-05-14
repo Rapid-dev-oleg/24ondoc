@@ -114,6 +114,10 @@ def _dto_to_json(dto: ReportDTO) -> str:
         "rows": [row_to_dict(r) for r in dto.rows],
         "totals": row_to_dict(dto.totals),
         "total_created_in_period": dto.total_created_in_period,
+        "created_new": dto.created_new,
+        "created_completed": dto.created_completed,
+        "created_in_progress": dto.created_in_progress,
+        "created_unassigned": dto.created_unassigned,
     }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -134,4 +138,8 @@ def _dto_from_json(s: str) -> ReportDTO:
         rows=tuple(row_from_dict(r) for r in d.get("rows", []) if r is not None),
         totals=row_from_dict(d.get("totals")),
         total_created_in_period=int(d.get("total_created_in_period", 0)),
+        created_new=int(d.get("created_new", 0)),
+        created_completed=int(d.get("created_completed", 0)),
+        created_in_progress=int(d.get("created_in_progress", 0)),
+        created_unassigned=int(d.get("created_unassigned", 0)),
     )
