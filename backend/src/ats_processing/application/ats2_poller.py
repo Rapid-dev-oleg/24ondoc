@@ -477,7 +477,7 @@ class ATS2PollerService:
                 try:
                     repeat = await self._detect_repeat.execute(
                         location_id=location_rel_id,
-                        client_phone=client_phone,
+                        client_phone=caller_phone,
                         new_dialogue=transcription,
                     )
                 except Exception:
