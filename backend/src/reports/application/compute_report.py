@@ -242,10 +242,13 @@ def compute_report(
             continue
         acc[assignee_after].response_times.append(delta)
 
-    # --- pending snapshot (per current assignee) ---
+    # --- «Активных» = задачи именно В РАБОТЕ сейчас (снимок) ---
+    # Только статус V_RABOTE: «активное» = то, над чем оператор реально
+    # работает. Новые (TODO, ещё не взяты) и приостановленные
+    # (PRIOSTANOVLENO) сюда НЕ входят — они не «в работе».
     pending_by_owner: dict[str | None, int] = defaultdict(int)
     for t in data.tasks:
-        if t.get("status") in TERMINAL_STATUSES:
+        if t.get("status") != "V_RABOTE":
             continue
         pending_by_owner[t.get("assigneeId") or None] += 1
     # Ensure pending-only owners surface as rows too:

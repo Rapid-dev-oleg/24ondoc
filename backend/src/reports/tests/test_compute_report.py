@@ -297,22 +297,24 @@ def test_completion_outside_window_excluded() -> None:
     assert dto.totals.completed == 0
 
 
-def test_pending_snapshot_counts_current_assignees() -> None:
-    # Pending is not window-scoped: we just count tasks whose status is not terminal.
+def test_pending_snapshot_counts_only_in_work() -> None:
+    # «Активных» = снимок задач именно В РАБОТЕ (V_RABOTE), не window-scoped.
+    # TODO (не взята) и VYPOLNENO (закрыта) не считаются.
     from_ts = datetime(2026, 4, 1, tzinfo=UTC)
     to_ts = datetime(2026, 4, 30, tzinfo=UTC)
     tasks = (
         {"id": "a", "createdAt": _iso(from_ts), "assigneeId": WM_VOVA, "status": "V_RABOTE"},
         {"id": "b", "createdAt": _iso(from_ts), "assigneeId": WM_NADYA, "status": "TODO"},
         {"id": "c", "createdAt": _iso(from_ts), "assigneeId": WM_NADYA, "status": "VYPOLNENO"},
+        {"id": "d", "createdAt": _iso(from_ts), "assigneeId": WM_NADYA, "status": "PRIOSTANOVLENO"},
     )
     data = TimelineData((), tasks, members_by_id={WM_VOVA: "V", WM_NADYA: "N"})
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
     by_user = {r.user_id: r.pending_count for r in dto.rows}
-    assert by_user[WM_VOVA] == 1
-    assert by_user[WM_NADYA] == 1  # only the non-terminal one
+    assert by_user[WM_VOVA] == 1            # V_RABOTE
+    assert by_user[WM_NADYA] == 0           # TODO/VYPOLNENO/PRIOSTANOVLENO не в работе
     assert dto.totals is not None
-    assert dto.totals.pending_count == 2
+    assert dto.totals.pending_count == 1
 
 
 def test_scope_self_filters_rows() -> None:
@@ -482,10 +484,11 @@ def test_reopened_task_drops_out_of_completed() -> None:
                         created_events=created)
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
     row = next((r for r in dto.rows if r.user_id == WM_VOVA), None)
-    # Vova has no completed (task reverted), pending_count=1 instead
+    # Vova has no completed (task reverted). pending=0: задача снова TODO,
+    # а «Активных» считает только V_RABOTE.
     assert row is not None
     assert row.completed == 0
-    assert row.pending_count == 1
+    assert row.pending_count == 0
     assert dto.totals is not None
     assert dto.totals.completed == 0
 
