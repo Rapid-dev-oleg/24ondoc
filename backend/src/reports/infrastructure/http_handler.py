@@ -406,7 +406,8 @@ function renderTable(dto) {{
     // Нарушения скрипта НЕ показываем у сотрудников: они считаются по
     // оператору-приёмщику звонка, а это поле — assignee (технарь).
     // Эта статистика живёт на /reports/operators.
-    ['Активных',  r => fmtInt(r.pending_count),                   'pending'],
+    // «Открыто сейчас» (pending) НЕ в таблице периода — это снимок на
+    // текущий момент, не зависит от выбранных дат; вынесен в плашку ниже.
     ['Ср.реаг.',  r => fmtDuration(r.avg_response_time_seconds),  'other'],
   ];
   const thead = '<tr>' + cols.map(c => '<th>' + c[0] + '</th>').join('') + '</tr>';
@@ -428,7 +429,11 @@ function renderTable(dto) {{
   const newly = dto.created_new;
   const done  = dto.created_completed;
   const wip   = dto.created_in_progress;
+  const other = dto.created_other;
   const unasg = dto.created_unassigned;
+  // «Открыто сейчас» = сумма по показанным строкам (корректно и для «Все»,
+  // и для одного сотрудника); totals в employee-разрезе общий по фирме.
+  const openNow = (dto.rows || []).reduce((s, r) => s + (Number(r.pending_count) || 0), 0);
   summaryDiv.innerHTML =
       '<div class="period-line">Период: ' + fmtMSKDate(dto.period_from)
       + ' — ' + fmtMSKDate(dto.period_to) + '</div>'
@@ -449,9 +454,23 @@ function renderTable(dto) {{
     +     '<div class="card-label">Выполнено</div>'
     +     '<div class="card-value">' + fmtInt(done) + '</div>'
     +   '</div>'
+    +   '<div class="card">'
+    +     '<div class="card-label">Прочее</div>'
+    +     '<div class="card-value">' + fmtInt(other) + '</div>'
+    +   '</div>'
     +   '<div class="card warn">'
     +     '<div class="card-label">Не назначено</div>'
     +     '<div class="card-value">' + fmtInt(unasg) + '</div>'
+    +   '</div>'
+    + '</div>'
+    + '<div class="period-line" style="margin-top:6px">Новых + В работе + '
+    + 'Выполнено + Прочее = Создано (' + fmtInt(newly+wip+done+other)
+    + ' = ' + fmtInt(total) + '). «Не назначено» — срез, не слагаемое.</div>'
+    + '<div class="cards" style="margin-top:8px">'
+    +   '<div class="card">'
+    +     '<div class="card-label">Открыто сейчас (не завершено)</div>'
+    +     '<div class="card-value">' + fmtInt(openNow) + '</div>'
+    +     '<div class="card-label">снимок на текущий момент, не зависит от периода</div>'
     +   '</div>'
     + '</div>';
 }}

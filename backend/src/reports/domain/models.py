@@ -29,7 +29,7 @@ class EmployeeRow:
     total_duration_seconds: int               # Σ (completion − received_at)
     avg_duration_seconds: float | None
 
-    complex_count: int                         # subset: vazhnost ∈ {high, critical}
+    complex_count: int                         # subset: kategoriya ∈ COMPLEX_CATEGORIES
     avg_complex_duration_seconds: float | None
 
     repeats_count: int                         # closed in period + povtornoeObrashchenie
@@ -53,11 +53,14 @@ class ReportDTO:
     #   new         = status TODO
     #   completed   = status VYPOLNENO
     #   in_progress = status V_RABOTE
+    #   other       = всё остальное (DONE, корзина, приостановлено …)
     #   unassigned  = assigneeId is None (regardless of status)
-    # The first three are disjoint by status; unassigned cuts across them.
+    # new + in_progress + completed + other == total_created_in_period
+    # (disjoint by status). `unassigned` cuts across them (отдельный срез).
     created_new: int = 0
     created_completed: int = 0
     created_in_progress: int = 0
+    created_other: int = 0
     created_unassigned: int = 0
 
 

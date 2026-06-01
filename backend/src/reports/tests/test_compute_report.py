@@ -61,6 +61,7 @@ def test_single_completion_with_reassignment() -> None:
     },)
     events = (
         _tu_event("t1", t_received, {"assigneeId": {"before": None, "after": WM_VOVA}}),
+        _tu_event("t1", t_received, {"status": {"before": "TODO", "after": "V_RABOTE"}}, wmid=WM_VOVA),
         _tu_event("t1", t_completed, {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}, wmid=WM_VOVA),
     )
     data = TimelineData(
@@ -71,8 +72,8 @@ def test_single_completion_with_reassignment() -> None:
 
     assert dto.totals is not None
     assert dto.totals.completed == 1
+    # 1h spent in V_RABOTE (12:00→13:00), not wall-clock from creation
     assert dto.totals.total_duration_seconds == 3600
-    # Should attribute to Vova, with 1h duration from received (NOT creation)
     rows = {r.user_id: r for r in dto.rows}
     assert WM_VOVA in rows
     assert rows[WM_VOVA].completed == 1
@@ -80,20 +81,100 @@ def test_single_completion_with_reassignment() -> None:
     assert rows[WM_VOVA].display_name == "Вова Петров"
 
 
-def test_completion_without_assignment_event_excluded() -> None:
-    """No assignment event in timeline → task excluded from duration metrics.
+def test_complex_counts_by_category_not_importance() -> None:
+    """«Сложные» определяются по КАТЕГОРИИ, не по важности (vazhnost).
 
-    task.createdAt is NOT used as a fallback: our backend backfills it to
-    the ATS call time (hours/days before the real Twenty INSERT), so if
-    we trusted it we'd report multi-hour durations for batch-closed tasks
-    that took zero real work. Script-violations still count — they come
-    from the task snapshot, not the timeline.
+    tA: kategoriya=INVENTARIZACIYA, низкая важность → сложная.
+    tB: kategoriya=EGAIS, важность KRITICHNO → НЕ сложная.
+    Доказывает, что метрика переехала с vazhnost на kategoriya.
+    """
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+
+    received = datetime(2026, 4, 11, 12, 0, tzinfo=UTC)
+    a_done = datetime(2026, 4, 11, 13, 0, tzinfo=UTC)   # 1h — сложная
+    b_done = datetime(2026, 4, 11, 12, 30, tzinfo=UTC)  # 30m — не сложная
+
+    tasks = (
+        {
+            "id": "tA", "createdAt": _iso(received),
+            "assigneeId": WM_VOVA, "status": "VYPOLNENO",
+            "kategoriya": "INVENTARIZACIYA", "vazhnost": "NIZKAYA",
+        },
+        {
+            "id": "tB", "createdAt": _iso(received),
+            "assigneeId": WM_VOVA, "status": "VYPOLNENO",
+            "kategoriya": "EGAIS", "vazhnost": "KRITICHNO",
+        },
+    )
+    events = (
+        _tu_event("tA", received, {"assigneeId": {"before": None, "after": WM_VOVA}}),
+        _tu_event("tA", received, {"status": {"before": "TODO", "after": "V_RABOTE"}}, wmid=WM_VOVA),
+        _tu_event("tA", a_done, {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}, wmid=WM_VOVA),
+        _tu_event("tB", received, {"assigneeId": {"before": None, "after": WM_VOVA}}),
+        _tu_event("tB", received, {"status": {"before": "TODO", "after": "V_RABOTE"}}, wmid=WM_VOVA),
+        _tu_event("tB", b_done, {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}, wmid=WM_VOVA),
+    )
+    data = TimelineData(
+        updated_events=events, tasks=tasks,
+        members_by_id={WM_VOVA: "Вова Петров"},
+    )
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+
+    row = next(r for r in dto.rows if r.user_id == WM_VOVA)
+    assert row.completed == 2
+    assert row.complex_count == 1                      # только INVENTARIZACIYA
+    assert row.avg_complex_duration_seconds == 3600    # длительность tA, не tB
+    assert dto.totals is not None
+    assert dto.totals.complex_count == 1
+
+
+def test_totals_pending_excludes_unassigned() -> None:
+    """«Активных» в «Итого» считает только назначенные — как в таблице.
+
+    Неназначенные открытые задачи в таблицу по сотрудникам не попадают,
+    поэтому и в итог не суммируются (иначе 14 ≠ 1+2). Они видны отдельно
+    как created_unassigned в summary.
+    """
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    created = datetime(2026, 4, 10, 9, 0, tzinfo=UTC)
+
+    tasks = (
+        {"id": "tp1", "createdAt": _iso(created),
+         "assigneeId": WM_VOVA, "status": "V_RABOTE"},          # назначена, открыта
+        {"id": "tp2", "createdAt": _iso(created),
+         "assigneeId": None, "status": "TODO"},                 # НЕ назначена, открыта
+        {"id": "tp3", "createdAt": _iso(created),
+         "assigneeId": None, "status": "TODO"},                 # ещё одна неназначенная
+    )
+    data = TimelineData(
+        updated_events=(), tasks=tasks, members_by_id={WM_VOVA: "Вова Петров"},
+    )
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+
+    # В таблице нет строки «не назначено»
+    assert all(r.user_id is not None for r in dto.rows)
+    # «Итого: Активных» = только назначенные (1), не 3
+    assert dto.totals is not None
+    assert dto.totals.pending_count == 1
+    # Неназначенные за период видны отдельной метрикой
+    assert dto.created_unassigned == 2
+
+
+def test_atomic_close_counts_as_work_floor() -> None:
+    """Закрытие БЕЗ «В работе» (TODO→Выполнено напрямую) = WORK_FLOOR (5 мин).
+
+    Раньше такую задачу молча выкидывали (нет события назначения → skip),
+    из-за чего «Завершил» не сходился с «Выполнено». Теперь она считается:
+    оператор решил прямо на звонке → засчитываем 5 минут (звонок + клик),
+    а не время её лежания в бэклоге.
     """
     from_ts = datetime(2026, 4, 1, tzinfo=UTC)
     to_ts = datetime(2026, 4, 30, tzinfo=UTC)
 
     t_created = datetime(2026, 4, 5, 9, 0, tzinfo=UTC)
-    t_completed = datetime(2026, 4, 5, 10, 30, tzinfo=UTC)
+    t_completed = datetime(2026, 4, 5, 10, 30, tzinfo=UTC)  # 1.5h wall-clock
 
     tasks = ({
         "id": "t2", "createdAt": _iso(t_created),
@@ -107,12 +188,39 @@ def test_completion_without_assignment_event_excluded() -> None:
 
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
     row = next(r for r in dto.rows if r.user_id == WM_NADYA)
-    assert row.completed == 0
-    assert row.total_duration_seconds == 0
-    assert row.avg_duration_seconds is None
-    assert row.complex_count == 0
-    # M7 (intake-side metric) still counts from the task snapshot.
+    assert row.completed == 1
+    assert row.total_duration_seconds == 300        # 5-мин флор, не 1.5ч wall-clock
+    assert row.avg_duration_seconds == 300
+    assert row.complex_count == 0                   # vazhnost не влияет, kategoriya пустая
     assert row.script_violations == 2
+
+
+def test_work_duration_sums_only_v_rabote_excluding_pause() -> None:
+    """Длительность = сумма интервалов «В работе», паузы не считаются."""
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+
+    t0 = datetime(2026, 4, 10, 10, 0, tzinfo=UTC)
+    in_work = datetime(2026, 4, 10, 10, 0, tzinfo=UTC)   # → В работе
+    pause = datetime(2026, 4, 10, 10, 30, tzinfo=UTC)    # 30м работы → пауза
+    resume = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)    # 1.5ч паузы → снова в работу
+    done = datetime(2026, 4, 10, 12, 20, tzinfo=UTC)     # +20м → Выполнено
+
+    tasks = ({
+        "id": "tw", "createdAt": _iso(t0),
+        "assigneeId": WM_VOVA, "status": "VYPOLNENO",
+    },)
+    events = (
+        _tu_event("tw", in_work, {"status": {"before": "TODO", "after": "V_RABOTE"}}, wmid=WM_VOVA),
+        _tu_event("tw", pause, {"status": {"before": "V_RABOTE", "after": "PRIOSTANOVLENO"}}, wmid=WM_VOVA),
+        _tu_event("tw", resume, {"status": {"before": "PRIOSTANOVLENO", "after": "V_RABOTE"}}, wmid=WM_VOVA),
+        _tu_event("tw", done, {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}, wmid=WM_VOVA),
+    )
+    data = TimelineData(events, tasks, members_by_id={WM_VOVA: "Вова"})
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    row = next(r for r in dto.rows if r.user_id == WM_VOVA)
+    # 30м + 20м = 50м работы; 1.5ч паузы НЕ считаются
+    assert row.total_duration_seconds == 50 * 60
 
 
 def test_completion_without_status_event_excluded() -> None:
@@ -146,8 +254,8 @@ def test_totals_are_weighted_not_mean_of_means() -> None:
     to_ts = datetime(2026, 4, 30, tzinfo=UTC)
     base = datetime(2026, 4, 10, 9, 0, tzinfo=UTC)
 
-    # Each task: assignment at `base`, completion N seconds later.
-    # Vova: 1 task × 60s; Nadya: 3 × 1200s → total 3660s; weighted avg = 915.
+    # Each task: → В работе at `base`, → Выполнено N seconds later.
+    # Vova: 1 task × 60s in-work; Nadya: 3 × 1200s → total 3660s; weighted avg = 915.
     tasks = (
         {"id": "v", "createdAt": _iso(base), "assigneeId": WM_VOVA, "status": "VYPOLNENO"},
         {"id": "n1", "createdAt": _iso(base), "assigneeId": WM_NADYA, "status": "VYPOLNENO"},
@@ -155,14 +263,14 @@ def test_totals_are_weighted_not_mean_of_means() -> None:
         {"id": "n3", "createdAt": _iso(base), "assigneeId": WM_NADYA, "status": "VYPOLNENO"},
     )
     events = (
-        _tu_event("v",  base, {"assigneeId": {"before": None, "after": WM_VOVA}}),
-        _tu_event("n1", base, {"assigneeId": {"before": None, "after": WM_NADYA}}),
-        _tu_event("n2", base, {"assigneeId": {"before": None, "after": WM_NADYA}}),
-        _tu_event("n3", base, {"assigneeId": {"before": None, "after": WM_NADYA}}),
-        _tu_event("v",  base + timedelta(seconds=60),   {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
-        _tu_event("n1", base + timedelta(seconds=1200), {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
-        _tu_event("n2", base + timedelta(seconds=1200), {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
-        _tu_event("n3", base + timedelta(seconds=1200), {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+        _tu_event("v",  base, {"status": {"before": "TODO", "after": "V_RABOTE"}}),
+        _tu_event("n1", base, {"status": {"before": "TODO", "after": "V_RABOTE"}}),
+        _tu_event("n2", base, {"status": {"before": "TODO", "after": "V_RABOTE"}}),
+        _tu_event("n3", base, {"status": {"before": "TODO", "after": "V_RABOTE"}}),
+        _tu_event("v",  base + timedelta(seconds=60),   {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}),
+        _tu_event("n1", base + timedelta(seconds=1200), {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}),
+        _tu_event("n2", base + timedelta(seconds=1200), {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}),
+        _tu_event("n3", base + timedelta(seconds=1200), {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}),
     )
     data = TimelineData(events, tasks, members_by_id={WM_VOVA: "Vova", WM_NADYA: "Nadya"})
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
@@ -283,11 +391,11 @@ def test_response_time_task_without_created_event_skipped() -> None:
     assert row.avg_response_time_seconds is None
 
 
-def test_atomic_save_falls_back_to_task_created_event() -> None:
-    """«Назначить себе + выполнено» в одном save → Twenty пишет ОДНО событие
-    с обоими diff на одном happensAt. Строгое правило assignment→completion
-    даст 0 секунд; fallback на task.created даёт реальное время жизни задачи
-    в CRM (от появления до закрытия).
+def test_atomic_save_does_not_use_task_lifetime() -> None:
+    """«Назначить себе + выполнено» в одном save (без «В работе») НЕ должно
+    давать время жизни задачи в CRM. Раньше fallback на task.created считал
+    8.5 минут (от вставки до закрытия) — а при бэклоге это были бы дни.
+    Теперь такое закрытие = WORK_FLOOR (5 мин), независимо от возраста задачи.
     """
     from_ts = datetime(2026, 4, 1, tzinfo=UTC)
     to_ts = datetime(2026, 4, 30, tzinfo=UTC)
@@ -299,8 +407,6 @@ def test_atomic_save_falls_back_to_task_created_event() -> None:
         "id": "atom", "createdAt": _iso(real_insert),
         "assigneeId": WM_VOVA, "status": "VYPOLNENO",
     },)
-    # Single task.updated carrying BOTH status and assignee diffs (Twenty's
-    # behaviour when two form fields change in one save).
     updated = (_tu_event("atom", atomic_close, {
         "status": {"before": "TODO", "after": "VYPOLNENO"},
         "assigneeId": {"before": None, "after": WM_VOVA},
@@ -312,7 +418,7 @@ def test_atomic_save_falls_back_to_task_created_event() -> None:
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
     row = next(r for r in dto.rows if r.user_id == WM_VOVA)
     assert row.completed == 1
-    assert row.total_duration_seconds == 8 * 60 + 30
+    assert row.total_duration_seconds == 300  # 5-мин флор, НЕ 8.5 мин жизни
 
 
 def test_duration_uses_latest_completion_not_first() -> None:
@@ -330,23 +436,25 @@ def test_duration_uses_latest_completion_not_first() -> None:
     },)
     updated = (
         _tu_event("rc", base + timedelta(minutes=1),
-                  {"assigneeId": {"before": None, "after": WM_VOVA}}),
+                  {"status": {"before": "TODO", "after": "V_RABOTE"}}),
         _tu_event("rc", base + timedelta(minutes=5),
-                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+                  {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}),   # 1-я закрытие: 4м работы
         _tu_event("rc", base + timedelta(minutes=10),
-                  {"status": {"before": "VYPOLNENO", "after": "TODO"}}),
+                  {"status": {"before": "VYPOLNENO", "after": "TODO"}}),       # переоткрыли
+        _tu_event("rc", base + timedelta(minutes=20),
+                  {"status": {"before": "TODO", "after": "V_RABOTE"}}),
         _tu_event("rc", base + timedelta(minutes=30),
-                  {"status": {"before": "TODO", "after": "VYPOLNENO"}}),
+                  {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}),   # 2-я закрытие: +10м работы
     )
     created = (_tc_event("rc", base),)
     data = TimelineData(updated, tasks, members_by_id={WM_VOVA: "V"},
                         created_events=created)
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts)
     row = next(r for r in dto.rows if r.user_id == WM_VOVA)
-    # Duration = last VYPOLNENO (t+30m) − assignment (t+1m) = 29 min.
-    # NOT 4 min (the first VYPOLNENO that got reverted).
+    # Берём ПОСЛЕДНЕЕ закрытие (t+30m) → суммарное время в работе =
+    # 4м (первый заход) + 10м (второй) = 14 минут.
     assert row.completed == 1
-    assert row.total_duration_seconds == 29 * 60
+    assert row.total_duration_seconds == 14 * 60
 
 
 def test_reopened_task_drops_out_of_completed() -> None:
@@ -440,3 +548,45 @@ def test_outgoing_callback_tasks_excluded_from_metrics() -> None:
     rows = [r for r in dto.rows if r.user_id == WM_VOVA]
     assert len(rows) == 1
     assert rows[0].completed == 1, "callback task must not count as completed"
+
+
+def test_created_breakdown_sums_to_total() -> None:
+    """Новые + В работе + Выполнено + Прочее == Создано (карточки сходятся)."""
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    c = datetime(2026, 4, 10, 9, 0, tzinfo=UTC)
+    tasks = (
+        {"id": "s1", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "TODO"},
+        {"id": "s2", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "V_RABOTE"},
+        {"id": "s3", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "VYPOLNENO"},
+        {"id": "s4", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "KORZINA"},
+        {"id": "s5", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "PRIOSTANOVLENO"},
+    )
+    data = TimelineData((), tasks, members_by_id={WM_VOVA: "V"})
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    assert dto.total_created_in_period == 5
+    assert dto.created_new == 1
+    assert dto.created_in_progress == 1
+    assert dto.created_completed == 1
+    assert dto.created_other == 2   # KORZINA + PRIOSTANOVLENO
+    assert (dto.created_new + dto.created_in_progress
+            + dto.created_completed + dto.created_other) == dto.total_created_in_period
+
+
+def test_created_window_uses_task_created_event_not_column() -> None:
+    """«Создано в периоде» по реальному task.created, а не по backfill-колонке.
+
+    Колонка createdAt = время ATS-звонка (вне окна), а реальная вставка в
+    Twenty (task.created) — внутри окна. Задача должна попасть в период.
+    """
+    from_ts = datetime(2026, 5, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 5, 31, tzinfo=UTC)
+    col_outside = datetime(2026, 4, 28, 12, 0, tzinfo=UTC)   # backfilled ATS time — вне окна
+    insert_inside = datetime(2026, 5, 2, 9, 0, tzinfo=UTC)   # реальная вставка — в окне
+    tasks = ({"id": "drift", "createdAt": _iso(col_outside),
+              "assigneeId": WM_VOVA, "status": "TODO"},)
+    created = (_tc_event("drift", insert_inside),)
+    data = TimelineData((), tasks, members_by_id={WM_VOVA: "V"}, created_events=created)
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    assert dto.total_created_in_period == 1   # посчитана по task.created, не по колонке
+    assert dto.created_new == 1
