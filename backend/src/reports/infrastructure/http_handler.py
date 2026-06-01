@@ -430,7 +430,6 @@ function renderTable(dto) {{
   const newly = dto.created_new;
   const done  = dto.created_completed;
   const wip   = dto.created_in_progress;
-  const other = dto.created_other;
   const unasg = dto.created_unassigned;
   summaryDiv.innerHTML =
       '<div class="period-line">Период: ' + fmtMSKDate(dto.period_from)
@@ -452,20 +451,11 @@ function renderTable(dto) {{
     +     '<div class="card-label">Выполнено</div>'
     +     '<div class="card-value">' + fmtInt(done) + '</div>'
     +   '</div>'
-    +   '<div class="card">'
-    +     '<div class="card-label">Прочее</div>'
-    +     '<div class="card-value">' + fmtInt(other) + '</div>'
-    +   '</div>'
     +   '<div class="card warn">'
     +     '<div class="card-label">Не назначено</div>'
     +     '<div class="card-value">' + fmtInt(unasg) + '</div>'
     +   '</div>'
-    + '</div>'
-    + '<div class="period-line" style="margin-top:6px">Новых + В работе + '
-    + 'Выполнено + Прочее = Создано (' + fmtInt(newly+wip+done+other)
-    + ' = ' + fmtInt(total) + '). «Не назначено» — срез, не слагаемое. '
-    + '«Активных» в таблице — снимок на сейчас (назначено и не завершено), '
-    + 'не зависит от периода.</div>';
+    + '</div>';
 }}
 
 form.addEventListener('submit', async (e) => {{
