@@ -590,3 +590,57 @@ def test_created_window_uses_task_created_event_not_column() -> None:
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
     assert dto.total_created_in_period == 1   # посчитана по task.created, не по колонке
     assert dto.created_new == 1
+
+
+def test_work_duration_clipped_to_period() -> None:
+    """«Время в работе» обрезается по периоду — за неделю не может быть 13 дней.
+
+    Задача в «В работе» с 20.04 (до окна), закрыта 03.05 (в окне).
+    Окно — весь май. Считается только май-часть: 01.05→03.05 = 2 дня.
+    """
+    from_ts = datetime(2026, 5, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 5, 31, tzinfo=UTC)
+    in_work = datetime(2026, 4, 20, 10, 0, tzinfo=UTC)   # до окна
+    done = datetime(2026, 5, 3, 0, 0, tzinfo=UTC)        # в окне (01.05→03.05 = 2д)
+    tasks = ({"id": "clip", "createdAt": _iso(in_work),
+              "assigneeId": WM_VOVA, "status": "VYPOLNENO"},)
+    events = (
+        _tu_event("clip", in_work, {"status": {"before": "TODO", "after": "V_RABOTE"}}, wmid=WM_VOVA),
+        _tu_event("clip", done, {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}, wmid=WM_VOVA),
+    )
+    data = TimelineData(events, tasks, members_by_id={WM_VOVA: "V"})
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    row = next(r for r in dto.rows if r.user_id == WM_VOVA)
+    assert row.total_duration_seconds == 2 * 86400   # только 01.05→03.05, не 13 дней
+
+
+def test_response_time_only_for_tasks_created_in_window() -> None:
+    """«Ср.реаг» — только по задачам, созданным в периоде.
+
+    Старый бэклог (создан до окна, назначен в окне) НЕ должен давать
+    выброс «31 день». Считается только свежий поток.
+    """
+    from_ts = datetime(2026, 5, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 5, 31, tzinfo=UTC)
+    tasks = (
+        {"id": "old", "createdAt": _iso(datetime(2026, 4, 15, tzinfo=UTC)),
+         "assigneeId": WM_VOVA, "status": "TODO"},
+        {"id": "fresh", "createdAt": _iso(datetime(2026, 5, 2, tzinfo=UTC)),
+         "assigneeId": WM_VOVA, "status": "TODO"},
+    )
+    created = (
+        _tc_event("old", datetime(2026, 4, 15, 9, 0, tzinfo=UTC)),     # до окна
+        _tc_event("fresh", datetime(2026, 5, 2, 9, 0, tzinfo=UTC)),    # в окне
+    )
+    updated = (
+        # old: назначен в окне (но создан до окна) → НЕ в реакции
+        _tu_event("old", datetime(2026, 5, 5, 9, 0, tzinfo=UTC),
+                  {"assigneeId": {"before": None, "after": WM_VOVA}}),
+        # fresh: назначен через 1ч после создания → реакция 1ч
+        _tu_event("fresh", datetime(2026, 5, 2, 10, 0, tzinfo=UTC),
+                  {"assigneeId": {"before": None, "after": WM_VOVA}}),
+    )
+    data = TimelineData(updated, tasks, members_by_id={WM_VOVA: "V"}, created_events=created)
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    row = next(r for r in dto.rows if r.user_id == WM_VOVA)
+    assert row.avg_response_time_seconds == 3600   # только fresh (1ч), old (20 дней) исключён

@@ -127,13 +127,24 @@ def compute_report(
     # Паузы (PRIOSTANOVLENO) и время в TODO/бэклоге не считаются — только
     # отрезки, когда задача была именно V_RABOTE.
     #
+    # ВАЖНО: отрезки обрезаются по границам периода [from_ts, to_ts] — в
+    # отчёте за неделю не может быть «32 дня работы». Учитывается только
+    # работа, попавшая в выбранные даты.
+    #
     # Задачи, закрытые БЕЗ перехода в «В работе» (решены прямо на звонке →
     # сразу «Выполнено»), не имеют трекнутого времени работы; считаем их
     # за WORK_FLOOR_SEC (звонок + прочитать + нажать).
     WORK_FLOOR_SEC = 300.0  # 5 минут
 
+    def _clip(a: datetime, b: datetime) -> float:
+        """Длина пересечения [a, b] с окном [from_ts, to_ts], в секундах."""
+        lo = a if a > from_ts else from_ts
+        hi = b if b < to_ts else to_ts
+        return max(0.0, (hi - lo).total_seconds())
+
     def _work_duration(tid: str, completion_ts: datetime) -> float:
         total = 0.0
+        ever_in_work = False
         cur_status: str | None = None
         seg_start: datetime | None = None
         for e in events_per_task.get(tid, []):
@@ -145,12 +156,16 @@ def compute_report(
             if ts is None or ts > completion_ts:
                 continue
             if cur_status == "V_RABOTE" and seg_start is not None:
-                total += (ts - seg_start).total_seconds()
+                total += _clip(seg_start, ts)
             cur_status = after
             seg_start = ts
+            if after == "V_RABOTE":
+                ever_in_work = True
         if cur_status == "V_RABOTE" and seg_start is not None:
-            total += (completion_ts - seg_start).total_seconds()
-        return total if total > 0 else WORK_FLOOR_SEC
+            total += _clip(seg_start, completion_ts)
+        # Реально побывала «В работе» → её время внутри периода (может быть 0,
+        # если вся работа была до from_ts). Атомарное закрытие → 5-мин флор.
+        return total if ever_in_work else WORK_FLOOR_SEC
 
     # Per-owner accumulation.
     # Each bucket collects the raw numbers; we convert to EmployeeRow at the end.
@@ -201,21 +216,22 @@ def compute_report(
         # на время миграции; по нему больше не считаем.
         bucket.script_violations += int(t.get("scriptViolationsTotal") or 0)
 
-    # --- walk first-assignment events in window for response time ---
-    # Uses task.created timeline ts (real Twenty INSERT moment), not the
-    # backfilled task.createdAt column. Tasks with no task.created event
-    # in timeline are skipped entirely — we can't compute a meaningful
-    # response time without a trustworthy "task appeared" anchor. Tasks
-    # that no longer exist (deleted in UI) are also skipped so the metric
-    # doesn't linger on ghost rows after cleanup.
+    # --- response time: для задач, СОЗДАННЫХ в периоде ---
+    # Раньше фильтровали по дате назначения в окне — и старый бэклог,
+    # назначенный на этой неделе, давал «реакцию» в 31–42 дня (больше
+    # периода). Теперь меряем только задачи, появившиеся в Twenty в
+    # выбранные даты (task.created в окне): сколько прошло до первого
+    # назначения. Так значение не вылезает за период и отражает реакцию
+    # именно на свежий поток. Якорь — task.created событие (не backfill-
+    # колонка); без него считать нечего.
     for tid, e in first_assignment_event.items():
         if tid not in tasks_by_id:
             continue
-        ts = _parse_iso(_event_ts(e))
-        if ts is None or not (from_ts <= ts <= to_ts):
-            continue
         created_ts = task_created_ts.get(tid)
-        if created_ts is None:
+        if created_ts is None or not (from_ts <= created_ts <= to_ts):
+            continue
+        ts = _parse_iso(_event_ts(e))
+        if ts is None:
             continue
         diff = (e.get("properties") or {}).get("diff") or {}
         assignee_after = (diff.get("assigneeId") or {}).get("after")
