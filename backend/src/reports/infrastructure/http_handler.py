@@ -427,6 +427,7 @@ function renderTable(dto) {{
   tableDiv.innerHTML = '<table><thead>' + thead + '</thead><tbody>' + body
                      + '</tbody><tfoot>' + foot + '</tfoot></table>';
   const total  = dto.total_created_in_period;
+  const newly  = dto.created_new;
   const done   = dto.created_completed;
   const wip    = dto.created_in_progress;
   const paused = dto.created_paused;
@@ -439,6 +440,10 @@ function renderTable(dto) {{
     +   '<div class="card accent">'
     +     '<div class="card-label">Создано в периоде</div>'
     +     '<div class="card-value">' + fmtInt(total) + '</div>'
+    +   '</div>'
+    +   '<div class="card">'
+    +     '<div class="card-label">Новых</div>'
+    +     '<div class="card-value">' + fmtInt(newly) + '</div>'
     +   '</div>'
     +   '<div class="card">'
     +     '<div class="card-label">В работе</div>'
