@@ -117,6 +117,8 @@ def _dto_to_json(dto: ReportDTO) -> str:
         "created_new": dto.created_new,
         "created_completed": dto.created_completed,
         "created_in_progress": dto.created_in_progress,
+        "created_paused": dto.created_paused,
+        "created_trashed": dto.created_trashed,
         "created_other": dto.created_other,
         "created_unassigned": dto.created_unassigned,
     }
@@ -142,6 +144,8 @@ def _dto_from_json(s: str) -> ReportDTO:
         created_new=int(d.get("created_new", 0)),
         created_completed=int(d.get("created_completed", 0)),
         created_in_progress=int(d.get("created_in_progress", 0)),
+        created_paused=int(d.get("created_paused", 0)),
+        created_trashed=int(d.get("created_trashed", 0)),
         created_other=int(d.get("created_other", 0)),
         created_unassigned=int(d.get("created_unassigned", 0)),
     )

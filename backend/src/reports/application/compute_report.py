@@ -331,21 +331,21 @@ def compute_report(
     else:
         in_window_tasks = [t for t in data.tasks if _in_window(t)]
 
+    # Явная разбивка по статусу — каждая задача в своей корзине, чтобы
+    # Новые + В работе + Выполнено + Приостановлено + В корзине = Создано
+    # и ничего не пряталось (см. «где ещё одна»).
     total_created = len(in_window_tasks)
-    created_new = sum(
-        1 for t in in_window_tasks if t.get("status") == "TODO"
-    )
-    created_completed = sum(
-        1 for t in in_window_tasks if t.get("status") == "VYPOLNENO"
-    )
-    created_in_progress = sum(
-        1 for t in in_window_tasks if t.get("status") == "V_RABOTE"
-    )
-    # Остаток: всё, что не TODO/V_RABOTE/VYPOLNENO (DONE, корзина,
-    # приостановлено и т.п.). Нужен, чтобы Новые+В работе+Выполнено+Прочее
-    # давало ровно «Создано» — иначе карточки не сходятся (609 ≠ 4+1+603).
+    _statuses = [t.get("status") for t in in_window_tasks]
+    created_new = _statuses.count("TODO")
+    created_in_progress = _statuses.count("V_RABOTE") + _statuses.count("IN_PROGRESS")
+    created_completed = _statuses.count("VYPOLNENO") + _statuses.count("DONE")
+    created_paused = _statuses.count("PRIOSTANOVLENO")
+    created_trashed = _statuses.count("KORZINA")
+    # Остаток на случай неизвестного статуса (обычно 0) — чтобы сумма всё
+    # равно сходилась с «Создано».
     created_other = (
-        total_created - created_new - created_completed - created_in_progress
+        total_created - created_new - created_in_progress - created_completed
+        - created_paused - created_trashed
     )
     created_unassigned = sum(
         1 for t in in_window_tasks if not t.get("assigneeId")
@@ -362,6 +362,8 @@ def compute_report(
         created_new=created_new,
         created_completed=created_completed,
         created_in_progress=created_in_progress,
+        created_paused=created_paused,
+        created_trashed=created_trashed,
         created_other=created_other,
         created_unassigned=created_unassigned,
     )

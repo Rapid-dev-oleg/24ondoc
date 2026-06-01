@@ -426,11 +426,12 @@ function renderTable(dto) {{
   ) : '';
   tableDiv.innerHTML = '<table><thead>' + thead + '</thead><tbody>' + body
                      + '</tbody><tfoot>' + foot + '</tfoot></table>';
-  const total = dto.total_created_in_period;
-  const newly = dto.created_new;
-  const done  = dto.created_completed;
-  const wip   = dto.created_in_progress;
-  const unasg = dto.created_unassigned;
+  const total  = dto.total_created_in_period;
+  const done   = dto.created_completed;
+  const wip    = dto.created_in_progress;
+  const paused = dto.created_paused;
+  const trash  = dto.created_trashed;
+  const unasg  = dto.created_unassigned;
   summaryDiv.innerHTML =
       '<div class="period-line">Период: ' + fmtMSKDate(dto.period_from)
       + ' — ' + fmtMSKDate(dto.period_to) + '</div>'
@@ -440,16 +441,20 @@ function renderTable(dto) {{
     +     '<div class="card-value">' + fmtInt(total) + '</div>'
     +   '</div>'
     +   '<div class="card">'
-    +     '<div class="card-label">Новых</div>'
-    +     '<div class="card-value">' + fmtInt(newly) + '</div>'
-    +   '</div>'
-    +   '<div class="card">'
     +     '<div class="card-label">В работе</div>'
     +     '<div class="card-value">' + fmtInt(wip) + '</div>'
     +   '</div>'
     +   '<div class="card success">'
     +     '<div class="card-label">Выполнено</div>'
     +     '<div class="card-value">' + fmtInt(done) + '</div>'
+    +   '</div>'
+    +   '<div class="card">'
+    +     '<div class="card-label">Приостановлено</div>'
+    +     '<div class="card-value">' + fmtInt(paused) + '</div>'
+    +   '</div>'
+    +   '<div class="card">'
+    +     '<div class="card-label">В корзине</div>'
+    +     '<div class="card-value">' + fmtInt(trash) + '</div>'
     +   '</div>'
     +   '<div class="card warn">'
     +     '<div class="card-label">Не назначено</div>'

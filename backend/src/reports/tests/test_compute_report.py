@@ -551,7 +551,7 @@ def test_outgoing_callback_tasks_excluded_from_metrics() -> None:
 
 
 def test_created_breakdown_sums_to_total() -> None:
-    """Новые + В работе + Выполнено + Прочее == Создано (карточки сходятся)."""
+    """Новые+Вработе+Выполнено+Приостановлено+Вкорзине+Прочее == Создано."""
     from_ts = datetime(2026, 4, 1, tzinfo=UTC)
     to_ts = datetime(2026, 4, 30, tzinfo=UTC)
     c = datetime(2026, 4, 10, 9, 0, tzinfo=UTC)
@@ -559,18 +559,22 @@ def test_created_breakdown_sums_to_total() -> None:
         {"id": "s1", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "TODO"},
         {"id": "s2", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "V_RABOTE"},
         {"id": "s3", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "VYPOLNENO"},
+        {"id": "s3b", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "DONE"},
         {"id": "s4", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "KORZINA"},
         {"id": "s5", "createdAt": _iso(c), "assigneeId": WM_VOVA, "status": "PRIOSTANOVLENO"},
     )
     data = TimelineData((), tasks, members_by_id={WM_VOVA: "V"})
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
-    assert dto.total_created_in_period == 5
+    assert dto.total_created_in_period == 6
     assert dto.created_new == 1
     assert dto.created_in_progress == 1
-    assert dto.created_completed == 1
-    assert dto.created_other == 2   # KORZINA + PRIOSTANOVLENO
-    assert (dto.created_new + dto.created_in_progress
-            + dto.created_completed + dto.created_other) == dto.total_created_in_period
+    assert dto.created_completed == 2   # VYPOLNENO + DONE
+    assert dto.created_paused == 1      # PRIOSTANOVLENO
+    assert dto.created_trashed == 1     # KORZINA
+    assert dto.created_other == 0
+    assert (dto.created_new + dto.created_in_progress + dto.created_completed
+            + dto.created_paused + dto.created_trashed
+            + dto.created_other) == dto.total_created_in_period
 
 
 def test_created_window_uses_task_created_event_not_column() -> None:

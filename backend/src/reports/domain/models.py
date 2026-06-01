@@ -51,15 +51,19 @@ class ReportDTO:
     total_created_in_period: int = 0     # tasks created in [from, to] — shown in header
     # Period breakdown of tasks created in [from, to]:
     #   new         = status TODO
-    #   completed   = status VYPOLNENO
-    #   in_progress = status V_RABOTE
-    #   other       = всё остальное (DONE, корзина, приостановлено …)
+    #   in_progress = status V_RABOTE (+ IN_PROGRESS)
+    #   completed   = status VYPOLNENO (+ DONE)
+    #   paused      = status PRIOSTANOVLENO
+    #   trashed     = status KORZINA
+    #   other       = неизвестный статус (обычно 0)
     #   unassigned  = assigneeId is None (regardless of status)
-    # new + in_progress + completed + other == total_created_in_period
+    # new + in_progress + completed + paused + trashed + other == total
     # (disjoint by status). `unassigned` cuts across them (отдельный срез).
     created_new: int = 0
     created_completed: int = 0
     created_in_progress: int = 0
+    created_paused: int = 0
+    created_trashed: int = 0
     created_other: int = 0
     created_unassigned: int = 0
 
