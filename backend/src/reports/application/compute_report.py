@@ -98,6 +98,10 @@ def compute_report(
     completion_in_window: dict[str, dict[str, Any]] = {}  # tid -> event
     # First assignment to a given wm for response-time metric.
     first_assignment_event: dict[str, dict[str, Any]] = {}  # tid -> event
+    # Tasks that have ANY status→terminal transition event (anywhere, not
+    # just in window). Used to detect event-less closures: задачи,
+    # импортированные бэкфиллом сразу в «Выполнено», такого события не имеют.
+    closed_by_event: set[str] = set()
     for tid, evs in events_per_task.items():
         for e in evs:
             diff = (e.get("properties") or {}).get("diff") or {}
@@ -106,6 +110,7 @@ def compute_report(
             ts = _parse_iso(_event_ts(e))
             if st and st.get("after") in TERMINAL_STATUSES and \
                     st.get("before") not in TERMINAL_STATUSES:
+                closed_by_event.add(tid)
                 # Take the LAST in-window terminal transition, not the first:
                 # tasks that were closed → reopened → closed again must count
                 # from the final closure, otherwise duration reflects a stale
@@ -193,6 +198,30 @@ def compute_report(
         if owner is None:
             continue  # unassigned completed task — skip from per-operator metrics
         duration = _work_duration(tid, completion_ts)
+        bucket = acc[owner]
+        bucket.completed_durations.append(duration)
+        if t.get("kategoriya") in COMPLEX_CATEGORIES:
+            bucket.complex_durations.append(duration)
+
+    # --- fallback: задачи, закрытые БЕЗ события (импорт/правка в БД) ---
+    # Статус терминальный, но события перехода в «Выполнено» нет (задача
+    # импортирована бэкфиллом уже закрытой). Момент закрытия = updatedAt —
+    # лучшее доступное. Считаем только если он в периоде и есть исполнитель.
+    # `closed_by_event` гарантирует, что задачи с настоящим событием сюда
+    # НЕ попадут (без двойного счёта и без закрытых вне периода).
+    for t in data.tasks:
+        tid = t.get("id")
+        if not tid or tid in closed_by_event:
+            continue
+        if t.get("status") not in TERMINAL_STATUSES:
+            continue
+        owner = t.get("assigneeId") or None
+        if owner is None:
+            continue
+        closed_ts = _parse_iso(t.get("updatedAt"))
+        if closed_ts is None or not (from_ts <= closed_ts <= to_ts):
+            continue
+        duration = _work_duration(tid, closed_ts)
         bucket = acc[owner]
         bucket.completed_durations.append(duration)
         if t.get("kategoriya") in COMPLEX_CATEGORIES:

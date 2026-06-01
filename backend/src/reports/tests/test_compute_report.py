@@ -651,3 +651,59 @@ def test_response_time_only_for_tasks_created_in_window() -> None:
     dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
     row = next(r for r in dto.rows if r.user_id == WM_VOVA)
     assert row.avg_response_time_seconds == 3600   # только fresh (1ч), old (20 дней) исключён
+
+
+def test_eventless_closure_counted_via_updatedat() -> None:
+    """Задача закрыта БЕЗ события (импорт уже в «Выполнено») → считается
+    по updatedAt, время = 5-мин флор (нет интервалов «В работе»)."""
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    tasks = ({
+        "id": "imp", "createdAt": _iso(datetime(2026, 4, 10, tzinfo=UTC)),
+        "updatedAt": _iso(datetime(2026, 4, 15, 9, 0, tzinfo=UTC)),  # в окне
+        "assigneeId": WM_VOVA, "status": "VYPOLNENO",
+        "kategoriya": "INVENTARIZACIYA",
+    },)
+    data = TimelineData((), tasks, members_by_id={WM_VOVA: "V"})  # НЕТ updated_events
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    row = next(r for r in dto.rows if r.user_id == WM_VOVA)
+    assert row.completed == 1
+    assert row.total_duration_seconds == 300   # 5-мин флор
+    assert row.complex_count == 1              # INVENTARIZACIYA
+
+
+def test_eventless_closure_outside_window_not_counted() -> None:
+    """Event-less задача с updatedAt ВНЕ периода — не считается."""
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    tasks = ({
+        "id": "imp", "createdAt": _iso(datetime(2026, 3, 1, tzinfo=UTC)),
+        "updatedAt": _iso(datetime(2026, 3, 15, tzinfo=UTC)),  # до окна
+        "assigneeId": WM_VOVA, "status": "VYPOLNENO",
+    },)
+    data = TimelineData((), tasks, members_by_id={WM_VOVA: "V"})
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    assert dto.totals is not None
+    assert dto.totals.completed == 0
+
+
+def test_event_closure_not_double_counted_by_fallback() -> None:
+    """Задача с настоящим событием закрытия + updatedAt в окне считается ОДИН раз."""
+    from_ts = datetime(2026, 4, 1, tzinfo=UTC)
+    to_ts = datetime(2026, 4, 30, tzinfo=UTC)
+    base = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+    tasks = ({
+        "id": "ev", "createdAt": _iso(base),
+        "updatedAt": _iso(base + timedelta(minutes=20)),  # тоже в окне
+        "assigneeId": WM_VOVA, "status": "VYPOLNENO",
+    },)
+    updated = (
+        _tu_event("ev", base, {"status": {"before": "TODO", "after": "V_RABOTE"}}, wmid=WM_VOVA),
+        _tu_event("ev", base + timedelta(minutes=10),
+                  {"status": {"before": "V_RABOTE", "after": "VYPOLNENO"}}, wmid=WM_VOVA),
+    )
+    data = TimelineData(updated, tasks, members_by_id={WM_VOVA: "V"})
+    dto = compute_report(data, from_ts=from_ts, to_ts=to_ts, scope=ReportScope.OVERALL)
+    row = next(r for r in dto.rows if r.user_id == WM_VOVA)
+    assert row.completed == 1                       # один раз, не два
+    assert row.total_duration_seconds == 10 * 60    # 10 мин по событию, не флор
