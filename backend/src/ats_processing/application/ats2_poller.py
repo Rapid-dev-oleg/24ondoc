@@ -184,10 +184,11 @@ class ATS2PollerService:
                 pass
 
         # Map ATS callType → our 2-state direction + role assignment.
-        # OUTGOING/CRM_OUTGOING are callbacks: caller is OUR operator,
-        # callee is the customer. INCOMING (single/multi-channel): caller
-        # is the customer, callee is the line they reached.
-        is_outgoing = call_type in ("OUTGOING", "CRM_OUTGOING")
+        # OUTGOING/CRM_OUTGOING/CALLBACK are operator→customer: caller is OUR
+        # operator, callee is the customer — these must NOT spawn a Task.
+        # INCOMING (single/multi-channel): caller is the customer, callee is
+        # the line they reached.
+        is_outgoing = call_type in ("OUTGOING", "CRM_OUTGOING", "CALLBACK")
         direction_value = "OUTGOING" if is_outgoing else "INCOMING"
         if is_outgoing:
             client_phone = raw_callee
