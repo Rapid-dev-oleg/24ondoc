@@ -25,6 +25,11 @@ from twenty_integration.domain.ports import TwentyCRMPort
 
 logger = logging.getLogger(__name__)
 
+# Короткие звонки не оцениваем скриптом: «привет, всё ок», недозвоны и
+# прочая мелочь < 15с — это не полноценный приём обращения, скрипт-чек на
+# них даёт ложные «нарушения».
+_SCRIPT_MIN_DURATION_SEC = 15
+
 
 class _CheckScriptPort(Protocol):
     async def check_script(self, dialogue_text: str) -> dict[str, Any]: ...
@@ -66,6 +71,7 @@ class SyncCallToTwentyUseCase:
         client_phone: str | None = None,
         agent_phone: str | None = None,
         direction: str | None = None,
+        not_answered: bool = False,
     ) -> SyncResult:
         # Prefer the locally persisted twenty_task_id (set by
         # CreateTwentyTaskFromSession) so the backfill also links calls
@@ -160,6 +166,7 @@ class SyncCallToTwentyUseCase:
                     task_rel_id=task_id,
                     operator_rel_id=operator_id,
                     call_kind=call_kind,
+                    not_answered=not_answered,
                 )
                 twenty_id = str(created.get("id") or "") or None
                 was_created = True
@@ -192,6 +199,7 @@ class SyncCallToTwentyUseCase:
                 or (direction and existing.get("direction") != direction)
                 or (operator_id and not existing.get("operatorRelId"))
                 or (call_kind and not existing.get("callKind"))
+                or (not_answered and not existing.get("notAnswered"))
             )
             if twenty_id and wants_update:
                 try:
@@ -206,6 +214,11 @@ class SyncCallToTwentyUseCase:
                         direction=direction if existing.get("direction") != direction else None,
                         operator_rel_id=operator_id if not existing.get("operatorRelId") else None,
                         call_kind=call_kind if not existing.get("callKind") else None,
+                        not_answered=(
+                            True
+                            if not_answered and not existing.get("notAnswered")
+                            else None
+                        ),
                     )
                 except Exception:
                     logger.exception("Failed updating Twenty CallRecord %s", twenty_id)
@@ -216,11 +229,16 @@ class SyncCallToTwentyUseCase:
         # не применим — оператор там сам ведёт разговор по существу
         # уже открытого тикета. Прогонять script_check на OUTGOING =
         # ложные «нарушения» которые искажают статистику.
+        # Оцениваем ТОЛЬКО после того, как по звонку завели задачу
+        # (status CREATED/PREVIEW/PROCESSING = обращение было). «Привет,
+        # всё ок» → NO_ACTION → задачи нет → сюда не попадаем. И пропускаем
+        # короткие звонки (< 15с) — там оценивать нечего.
         if (
             twenty_id
             and transcript
             and direction == "INCOMING"
             and record.status in {CallStatus.CREATED, CallStatus.PREVIEW, CallStatus.PROCESSING}
+            and (record.duration or 0) >= _SCRIPT_MIN_DURATION_SEC
             and self._script_ai is not None
         ):
             try:

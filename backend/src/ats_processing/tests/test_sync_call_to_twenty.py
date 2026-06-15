@@ -219,6 +219,42 @@ async def test_script_check_unknown_id_passes_through_verbatim() -> None:
 
 
 @pytest.mark.asyncio
+async def test_script_check_skipped_for_short_calls() -> None:
+    """Звонки < 15 сек не оцениваем скриптом — «привет, всё ок» и мелочь."""
+    port = _port()
+    port.find_call_record_by_ats_id.return_value = _existing_call_record()
+    script_ai = MagicMock()
+    script_ai.check_script = AsyncMock(return_value={
+        "missing": ["greeting"], "violations_count": 1,
+    })
+    uc = SyncCallToTwentyUseCase(twenty_port=port, script_ai=script_ai)
+
+    short = _call(transcript="[Оператор]: алло. [Клиент]: всё ок")
+    short.duration = 8
+    await uc.execute(short, task_id="t-short")
+
+    script_ai.check_script.assert_not_called()
+    port.update_call_record_script_check.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_script_check_runs_for_calls_at_least_15s() -> None:
+    port = _port()
+    port.find_call_record_by_ats_id.return_value = _existing_call_record()
+    script_ai = MagicMock()
+    script_ai.check_script = AsyncMock(return_value={
+        "missing": ["greeting"], "violations_count": 1,
+    })
+    uc = SyncCallToTwentyUseCase(twenty_port=port, script_ai=script_ai)
+
+    long_call = _call(transcript="[Оператор]: алло")
+    long_call.duration = 20
+    await uc.execute(long_call, task_id="t-long")
+
+    script_ai.check_script.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_script_check_skipped_for_outgoing() -> None:
     """OUTGOING звонки — это операторские callback'и, скрипт «приём
     обращения» к ним не применим. Pipe их в check_script даёт ложные

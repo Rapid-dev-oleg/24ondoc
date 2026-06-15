@@ -47,6 +47,7 @@ class TwentyCRMPort(ABC):
         parent_task_id: str | None = None,
         istochnik: str | None = None,
         obrashchenie_kind: str | None = None,
+        is_missed_callback: bool = False,
     ) -> TwentyTask: ...
 
     @abstractmethod
@@ -116,6 +117,7 @@ additionalPhones. Возвращает True если запись была сд�
         task_rel_id: str | None = None,
         operator_rel_id: str | None = None,
         call_kind: str | None = None,
+        not_answered: bool = False,
     ) -> dict[str, object]: ...
 
     @abstractmethod
@@ -132,7 +134,17 @@ additionalPhones. Возвращает True если запись была сд�
         direction: str | None = None,
         operator_rel_id: str | None = None,
         call_kind: str | None = None,
+        not_answered: bool | None = None,
     ) -> None: ...
+
+    @abstractmethod
+    async def find_open_callback_task_by_phone(
+        self, caller_phone: str,
+    ) -> dict[str, object] | None:
+        """Open «Перезвонить» task (isMissedCallback=true, status TODO) for
+        this client phone — dedup key for serial missed calls. None if no
+        open one exists."""
+        ...
 
     @abstractmethod
     async def find_recent_task_by_caller_phone(
@@ -208,6 +220,15 @@ additionalPhones. Возвращает True если запись была сд�
 
     @abstractmethod
     async def update_task_body(self, task_id: str, body: str) -> None: ...
+
+    @abstractmethod
+    async def update_task_status(self, task_id: str, status: str) -> None: ...
+
+    @abstractmethod
+    async def update_task_parent(self, task_id: str, parent_task_id: str) -> None:
+        """Set Task.parentTaskId — links the closed «Перезвонить» stub to the
+        заявка spun from a successful callback."""
+        ...
 
     @abstractmethod
     async def get_task(self, task_id: str) -> dict[str, object] | None: ...

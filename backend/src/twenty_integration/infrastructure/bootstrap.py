@@ -171,6 +171,13 @@ CALL_RECORD = ObjectSpec(
                 {"label": "Системная", "value": "SYSTEM", "color": "red"},
             ),
         ),
+        # True only for a GENUINE telephony miss (ATS NOT_ANSWERED_COMMON):
+        # client called, nobody picked up. Distinct from the legacy
+        # callStatus=MISSED mislabel ("no task created"), which also fires
+        # on answered-but-no-action calls. Reports on пропущенные must read
+        # THIS flag, not callStatus. See project_missed_calls_semantics.
+        FieldSpec("notAnswered", "Не дозвонился", "BOOLEAN",
+                  description="Настоящий пропущенный: клиент звонил, никто не взял трубку (ATS NOT_ANSWERED)."),
     ),
 )
 
@@ -243,6 +250,13 @@ TASK_EXTRA_FIELDS: tuple[FieldSpec, ...] = (
     # NOT create a Task at all, so this flag is set only via backfill.
     FieldSpec("isOutgoingCallback", "Только обратные звонки", "BOOLEAN",
               description="Task создавалась из OUTGOING-звонка (исторический мусор). Исключать в отчётах."),
+    # Marks the "Перезвонить" task auto-created from a genuine missed
+    # incoming call. Used as the dedup key: while such a task is open
+    # (status TODO) all further misses from the same number attach to it
+    # instead of spawning duplicates. NOT excluded from reports (unlike
+    # isOutgoingCallback) — these are real follow-up work items.
+    FieldSpec("isMissedCallback", "Перезвонить по пропущенному", "BOOLEAN",
+              description="Задача-перезвонить, заведённая по пропущенному входящему. Дедуп по номеру в статусе TODO."),
 )
 
 # Relation specs — added AFTER both target & source objects are present.

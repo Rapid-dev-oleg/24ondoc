@@ -191,11 +191,17 @@ class ATS2RestClient(ATS2CallSourcePort):
         date_from: datetime,
         date_to: datetime,
     ) -> list[dict[str, object]]:
-        """GET /call-records/info with date filtering."""
+        """GET /call-records/info with date filtering.
+
+        NB: `is_recorded` is intentionally NOT sent. With it set to "true"
+        ATS2 returns only recorded (=answered) calls, so genuine missed
+        calls (NOT_ANSWERED_COMMON, no recording) never reach us. We need
+        them for the «Перезвонить» lifecycle. Answered calls are unaffected
+        (they still carry recordFileName → transcription gated on it).
+        """
         params: dict[str, Any] = {
             "start": date_from.isoformat(),
             "end": date_to.isoformat(),
-            "is_recorded": "true",
             "size": "50",
             "sort": "date,DESC",
         }

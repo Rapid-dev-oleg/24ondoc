@@ -290,6 +290,7 @@ class TwentyRestAdapter(TwentyCRMPort):
         task_rel_id: str | None = None,
         operator_rel_id: str | None = None,
         call_kind: str | None = None,
+        not_answered: bool = False,
     ) -> dict[str, Any]:
         """Создать CallRecord в Twenty. Для upsert см. sync_call_record.
 
@@ -352,6 +353,8 @@ class TwentyRestAdapter(TwentyCRMPort):
             payload["operatorRelId"] = operator_rel_id
         if call_kind:
             payload["callKind"] = call_kind
+        if not_answered:
+            payload["notAnswered"] = True
 
         response = await self._client.post("/rest/callRecords", json=payload)
         if response.status_code >= 400:
@@ -377,6 +380,7 @@ class TwentyRestAdapter(TwentyCRMPort):
         direction: str | None = None,
         operator_rel_id: str | None = None,
         call_kind: str | None = None,
+        not_answered: bool | None = None,
     ) -> None:
         """Патч существующей Twenty CallRecord (обычно — прикрепить task после факта)."""
         patch: dict[str, Any] = {}
@@ -404,6 +408,8 @@ class TwentyRestAdapter(TwentyCRMPort):
             patch["operatorRelId"] = operator_rel_id
         if call_kind is not None:
             patch["callKind"] = call_kind
+        if not_answered is not None:
+            patch["notAnswered"] = not_answered
         if not patch:
             return
         response = await self._client.patch(
@@ -604,7 +610,10 @@ class TwentyRestAdapter(TwentyCRMPort):
             )
             response.raise_for_status()
             items = response.json().get("data", {}).get("tasks", []) or []
-            return [t for t in items if not t.get("isOutgoingCallback")]
+            return [
+                t for t in items
+                if not t.get("isOutgoingCallback") and not t.get("isMissedCallback")
+            ]
         except httpx.HTTPError:
             logger.exception(
                 "find_recent_tasks_by_caller_phone failed phone=%s", national,
@@ -641,12 +650,47 @@ class TwentyRestAdapter(TwentyCRMPort):
             response.raise_for_status()
             items = response.json().get("data", {}).get("tasks", []) or []
             for t in items:
-                if not t.get("isOutgoingCallback"):
+                if not t.get("isOutgoingCallback") and not t.get("isMissedCallback"):
                     return t
             return None
         except httpx.HTTPError:
             logger.exception(
                 "find_recent_task_by_caller_phone failed phone=%s", national,
+            )
+            return None
+
+    async def find_open_callback_task_by_phone(
+        self, caller_phone: str,
+    ) -> dict[str, Any] | None:
+        """Open «Перезвонить» task (isMissedCallback=true, status TODO) for
+        this client phone — the dedup key for serial missed calls.
+
+        While such a task is still open, every further miss from the same
+        number attaches to it instead of spawning a duplicate. Once it
+        leaves TODO (taken into work / closed), the next miss creates a
+        fresh one.
+        """
+        national = normalize_ru_phone(caller_phone)
+        if not national:
+            return None
+        try:
+            response = await self._client.get(
+                "/rest/tasks",
+                params={
+                    "filter": f"callerPhone.primaryPhoneNumber[eq]:{national}",
+                    "order_by": "createdAt[DescNullsLast]",
+                    "limit": 10,
+                },
+            )
+            response.raise_for_status()
+            items = response.json().get("data", {}).get("tasks", []) or []
+            for t in items:
+                if t.get("isMissedCallback") and t.get("status") == "TODO":
+                    return t
+            return None
+        except httpx.HTTPError:
+            logger.exception(
+                "find_open_callback_task_by_phone failed phone=%s", national,
             )
             return None
 
@@ -912,6 +956,7 @@ class TwentyRestAdapter(TwentyCRMPort):
         parent_task_id: str | None = None,
         istochnik: str | None = None,
         obrashchenie_kind: str | None = None,
+        is_missed_callback: bool = False,
     ) -> TwentyTask:
         """Создать задачу."""
         try:
@@ -960,6 +1005,9 @@ class TwentyRestAdapter(TwentyCRMPort):
                 # SELECT options on Task.obrashchenieKind:
                 # NEW | REPEAT | SYSTEM (chain length in 3-day window)
                 payload["obrashchenieKind"] = obrashchenie_kind
+
+            if is_missed_callback:
+                payload["isMissedCallback"] = True
 
             response = await self._client.post("/rest/tasks", json=payload)
             if response.status_code >= 400:
@@ -1117,6 +1165,13 @@ class TwentyRestAdapter(TwentyCRMPort):
     async def update_task_status(self, task_id: str, status: str) -> None:
         """Update task status in Twenty CRM."""
         payload = {"status": status}
+        response = await self._client.patch(f"/rest/tasks/{task_id}", json=payload)
+        response.raise_for_status()
+
+    async def update_task_parent(self, task_id: str, parent_task_id: str) -> None:
+        """Set Task.parentTaskId. Used to link the closed «Перезвонить»
+        stub to the real заявка spun from a successful callback."""
+        payload = {"parentTaskId": parent_task_id}
         response = await self._client.patch(f"/rest/tasks/{task_id}", json=payload)
         response.raise_for_status()
 
