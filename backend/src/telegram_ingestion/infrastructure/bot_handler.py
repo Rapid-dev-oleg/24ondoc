@@ -21,7 +21,9 @@ from aiogram.types import (
 )
 
 from ai_classification.domain.repository import AIClassificationPort
+from twenty_integration.application.location_match import fold as _fold_loc_name
 from twenty_integration.application.use_cases import CreateTwentyTaskFromSession
+from twenty_integration.infrastructure.phone import normalize_ru_phone
 
 from ..application.ports import UserProfilePort
 from ..application.registration_use_cases import (
@@ -62,6 +64,10 @@ class TelegramFSMStates(StatesGroup):
     collecting = State()
     analyzing = State()
     preview = State()
+    choosing_location = State()
+    entering_phone = State()
+    choosing_kategoriya = State()
+    choosing_assignee = State()
     tasks_list = State()
     task_detail = State()
     adding_comment = State()
@@ -103,10 +109,53 @@ def _collect_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _preview_keyboard() -> InlineKeyboardMarkup:
+def _preview_keyboard(
+    location_label: str | None = None,
+    caller_phone_pretty: str | None = None,
+    kategoriya_label: str | None = None,
+    assignee_label: str | None = None,
+) -> InlineKeyboardMarkup:
+    """Preview keyboard. Each picker row toggles between "set" and "clear"
+    depending on whether the operator already picked a value."""
+    if location_label:
+        loc_row = [InlineKeyboardButton(
+            text=f"🏷 {location_label} ✕", callback_data="clear_location",
+        )]
+    else:
+        loc_row = [InlineKeyboardButton(
+            text="🏷 Указать точку", callback_data="pick_location",
+        )]
+    if caller_phone_pretty:
+        phone_row = [InlineKeyboardButton(
+            text=f"📞 {caller_phone_pretty} ✕", callback_data="clear_phone",
+        )]
+    else:
+        phone_row = [InlineKeyboardButton(
+            text="📞 Указать номер", callback_data="pick_phone",
+        )]
+    if kategoriya_label:
+        kat_row = [InlineKeyboardButton(
+            text=f"📂 {kategoriya_label} ✕", callback_data="clear_kategoriya",
+        )]
+    else:
+        kat_row = [InlineKeyboardButton(
+            text="📂 Категория", callback_data="pick_kategoriya",
+        )]
+    if assignee_label:
+        asg_row = [InlineKeyboardButton(
+            text=f"👤 {assignee_label} ✕", callback_data="clear_assignee",
+        )]
+    else:
+        asg_row = [InlineKeyboardButton(
+            text="👤 Ответственный", callback_data="pick_assignee",
+        )]
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="▶ Создать задачу", callback_data="create_crm")],
+            loc_row,
+            phone_row,
+            kat_row,
+            asg_row,
             [
                 InlineKeyboardButton(text="＋ Дополнить", callback_data="edit_session"),
                 InlineKeyboardButton(text="⟳ Заново", callback_data="reanalyze"),
@@ -116,10 +165,21 @@ def _preview_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _format_pretty_phone(national: str | None) -> str | None:
+    """10-digit national → '+7 905 555-12-34'. None for invalid."""
+    if not national or len(national) != 10:
+        return None
+    return f"+7 {national[0:3]} {national[3:6]}-{national[6:8]}-{national[8:10]}"
+
+
 def _format_preview(
     session: DraftSession,
     kategoriya_label: str | None = None,
     vazhnost_label: str | None = None,
+    *,
+    location_label: str | None = None,
+    caller_phone_pretty: str | None = None,
+    assignee_label: str | None = None,
 ) -> str:
     r = session.ai_result
     if r is None:
@@ -131,6 +191,9 @@ def _format_preview(
         f"<b>Описание:</b> {r.description}",
         f"<b>Категория:</b> {kategoriya_label or '—'}",
         f"<b>Важность:</b> {vazhnost_label or '—'}",
+        f"<b>Точка:</b> {location_label or '—'}",
+        f"<b>Номер заявителя:</b> {caller_phone_pretty or '—'}",
+        f"<b>Ответственный:</b> {assignee_label or '—'}",
     ]
     if r.deadline:
         lines.append(f"<b>Дедлайн:</b> {r.deadline}")
@@ -387,9 +450,21 @@ def create_router(
 
             await state.set_state(TelegramFSMStates.preview)
             if isinstance(callback.message, Message):
+                # New preview is fresh — no operator-set location/phone yet
+                phone_pretty = _format_pretty_phone(
+                    (await state.get_data()).get("twenty_caller_phone")
+                )
+                location_label = (await state.get_data()).get("twenty_location_label")
                 await callback.message.edit_text(
-                    _format_preview(updated, kategoriya_label, vazhnost_label),
-                    reply_markup=_preview_keyboard(),
+                    _format_preview(
+                        updated, kategoriya_label, vazhnost_label,
+                        location_label=location_label,
+                        caller_phone_pretty=phone_pretty,
+                    ),
+                    reply_markup=_preview_keyboard(
+                        location_label=location_label,
+                        caller_phone_pretty=phone_pretty,
+                    ),
                 )
         except Exception:
             logger.exception("AI analysis failed")
@@ -498,9 +573,16 @@ def create_router(
                 await callback.answer("❌ Сессия не найдена.", show_alert=True)
                 return
 
-            # Determine assignee from user profile
-            profile = await user_port.get_profile(callback.from_user.id)
-            assignee_id = profile.twenty_member_id if profile else None
+            # Operator's manual pick (preview UI) wins over the default
+            # «assign to me» fallback. Without a manual pick we keep the
+            # historical behaviour: assignee = the Telegram user creating
+            # the task.
+            manual_assignee = data.get("twenty_assignee_id")
+            if manual_assignee:
+                assignee_id = manual_assignee
+            else:
+                profile = await user_port.get_profile(callback.from_user.id)
+                assignee_id = profile.twenty_member_id if profile else None
 
             # File downloader: downloads from Telegram, returns (bytes, filename, content_type)
             async def _download_tg_file(file_id: str) -> tuple[bytes, str, str] | None:
@@ -520,6 +602,18 @@ def create_router(
                 content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
                 return raw.read(), filename, content_type
 
+            # Build dialogue_text for ResolveLocation: AI-distilled
+            # title + description gives the resolver clean text to fold
+            # against displayName / locationAddress. When operator manually
+            # picked a Location (twenty_location_rel_id set), execute()
+            # skips the resolver entirely — dialogue_text is harmless then.
+            ai = fetched.ai_result
+            dialogue_text: str | None = None
+            if ai is not None:
+                parts = [s for s in (ai.title, ai.description) if s]
+                if parts:
+                    dialogue_text = "\n".join(parts)
+
             task = await create_twenty_task.execute(
                 fetched,
                 telegram_id=callback.from_user.id,
@@ -528,7 +622,27 @@ def create_router(
                 file_downloader=_download_tg_file,
                 kategoriya=data.get("twenty_kategoriya"),
                 vazhnost=data.get("twenty_vazhnost"),
+                caller_phone=data.get("twenty_caller_phone"),
+                dialogue_text=dialogue_text,
+                # When location_rel_id is provided, the use case skips the
+                # auto-resolver entirely; if both are provided it still runs
+                # learn-by-resolve so the catalog grows from manual picks.
+                location_rel_id=data.get("twenty_location_rel_id"),
             )
+
+            # If this draft came from an ATS2 call, remember the Twenty Task
+            # id on the call record so CallRecord.taskRelId can be filled
+            # later (live sync + backfill both read this column).
+            if call_repo is not None and task.twenty_id:
+                try:
+                    await call_repo.set_twenty_task_by_session(
+                        fetched.session_id, task.twenty_id
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to link call to twenty_task_id=%s session=%s",
+                        task.twenty_id, fetched.session_id, exc_info=True,
+                    )
 
             await cancel_session.execute(callback.from_user.id)
             await state.clear()
@@ -540,6 +654,409 @@ def create_router(
         except Exception:
             logger.exception("Failed to create CRM task for user %s", callback.from_user.id)
             await callback.answer("❌ Ошибка создания задачи.", show_alert=True)
+
+    # ---------- preview: manual location & caller-phone pickers ----------
+
+    async def _rerender_preview(
+        callback: CallbackQuery, state: FSMContext,
+    ) -> None:
+        """Re-render the preview screen using whatever the operator stored
+        in state.data (kategoriya, vazhnost, location, phone, session)."""
+        if not isinstance(callback.message, Message):
+            return
+        data = await state.get_data()
+        session_id_str = data.get("session_id")
+        if session_id_str is None or draft_repo is None:
+            return
+        try:
+            fetched = await draft_repo.get_by_id(uuid.UUID(session_id_str))
+        except Exception:
+            return
+        if fetched is None:
+            return
+        location_label = data.get("twenty_location_label")
+        phone_pretty = _format_pretty_phone(data.get("twenty_caller_phone"))
+        kategoriya_label = data.get("twenty_kategoriya_label")
+        assignee_label = data.get("twenty_assignee_label")
+        await state.set_state(TelegramFSMStates.preview)
+        await callback.message.edit_text(
+            _format_preview(
+                fetched,
+                kategoriya_label=kategoriya_label,
+                vazhnost_label=data.get("twenty_vazhnost_label"),
+                location_label=location_label,
+                caller_phone_pretty=phone_pretty,
+                assignee_label=assignee_label,
+            ),
+            reply_markup=_preview_keyboard(
+                location_label=location_label,
+                caller_phone_pretty=phone_pretty,
+                kategoriya_label=kategoriya_label,
+                assignee_label=assignee_label,
+            ),
+        )
+
+    @router.callback_query(TelegramFSMStates.preview, F.data == "pick_location")
+    async def callback_pick_location(callback: CallbackQuery, state: FSMContext) -> None:
+        await callback.answer()
+        await state.set_state(TelegramFSMStates.choosing_location)
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                "🏷 <b>Выбор точки</b>\n\n"
+                "Введите часть названия (например, <code>аполо 32</code> или просто "
+                "<code>32</code>). Я найду совпадения в каталоге.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="↩ Назад", callback_data="back_to_preview")],
+                ]),
+            )
+
+    @router.callback_query(TelegramFSMStates.preview, F.data == "clear_location")
+    async def callback_clear_location(callback: CallbackQuery, state: FSMContext) -> None:
+        await callback.answer("🏷 Точка снята")
+        await state.update_data(twenty_location_rel_id=None,
+                                twenty_location_label=None)
+        await _rerender_preview(callback, state)
+
+    @router.callback_query(TelegramFSMStates.preview, F.data == "pick_phone")
+    async def callback_pick_phone(callback: CallbackQuery, state: FSMContext) -> None:
+        await callback.answer()
+        await state.set_state(TelegramFSMStates.entering_phone)
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                "📞 <b>Номер заявителя</b>\n\n"
+                "Пришлите номер в любом формате (<code>+7 905 555-12-34</code>, "
+                "<code>89055551234</code>, и т.д.) — я нормализую.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="↩ Назад", callback_data="back_to_preview")],
+                ]),
+            )
+
+    @router.callback_query(TelegramFSMStates.preview, F.data == "clear_phone")
+    async def callback_clear_phone(callback: CallbackQuery, state: FSMContext) -> None:
+        await callback.answer("📞 Номер снят")
+        await state.update_data(twenty_caller_phone=None)
+        await _rerender_preview(callback, state)
+
+    @router.callback_query(
+        F.data == "back_to_preview",
+        TelegramFSMStates.choosing_location,
+    )
+    @router.callback_query(
+        F.data == "back_to_preview",
+        TelegramFSMStates.entering_phone,
+    )
+    @router.callback_query(
+        F.data == "back_to_preview",
+        TelegramFSMStates.choosing_kategoriya,
+    )
+    @router.callback_query(
+        F.data == "back_to_preview",
+        TelegramFSMStates.choosing_assignee,
+    )
+    async def callback_back_to_preview(
+        callback: CallbackQuery, state: FSMContext,
+    ) -> None:
+        await callback.answer()
+        await _rerender_preview(callback, state)
+
+    @router.message(TelegramFSMStates.choosing_location)
+    async def handle_location_query(message: Message, state: FSMContext) -> None:
+        if twenty_crm_port is None:
+            await message.answer("❌ Интеграция с Twenty недоступна.")
+            return
+        query = (message.text or "").strip()
+        if not query:
+            await message.answer("Введите хотя бы пару символов.")
+            return
+        try:
+            catalog = await twenty_crm_port.list_location_display_names()
+        except Exception:
+            logger.exception("list_location_display_names failed")
+            await message.answer("❌ Не удалось получить каталог точек.")
+            return
+
+        # Same fold (latin↔cyr + zero-strip) as the cheap resolver, so
+        # operator typing "аполо 6" finds catalog "Аполо 06".
+        q_fold = _fold_loc_name(query)
+        hits: list[str] = []
+        for name in catalog:
+            if not name:
+                continue
+            if q_fold in _fold_loc_name(name):
+                hits.append(name)
+        hits.sort()
+
+        if not hits:
+            await message.answer(
+                "Не нашёл. Попробуйте другой запрос.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="↩ Назад", callback_data="back_to_preview")],
+                ]),
+            )
+            return
+        # Cap at 10 — anything beyond is "уточните"
+        max_show = 10
+        kb_rows: list[list[InlineKeyboardButton]] = []
+        for name in hits[:max_show]:
+            # Telegram callback_data limit = 64 bytes. displayName is short
+            # enough in practice (catalog has 4-12 char names), but cap to
+            # be safe; we re-fetch by exact name when the operator clicks.
+            cb = f"loc_pick:{name}"[:64]
+            kb_rows.append(
+                [InlineKeyboardButton(text=name, callback_data=cb)]
+            )
+        kb_rows.append(
+            [InlineKeyboardButton(text="↩ Назад", callback_data="back_to_preview")]
+        )
+        suffix = (
+            f"\n\n…и ещё {len(hits) - max_show}. Уточните запрос для остальных."
+            if len(hits) > max_show else ""
+        )
+        await message.answer(
+            f"Нашёл {len(hits)} точек, выберите:{suffix}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+        )
+
+    @router.callback_query(
+        TelegramFSMStates.choosing_location,
+        F.data.startswith("loc_pick:"),
+    )
+    async def callback_select_location(
+        callback: CallbackQuery, state: FSMContext,
+    ) -> None:
+        if twenty_crm_port is None or callback.data is None:
+            await callback.answer()
+            return
+        display_name = callback.data.split(":", 1)[1]
+        try:
+            loc = await twenty_crm_port.find_location_by_display_name(display_name)
+        except Exception:
+            logger.exception("find_location_by_display_name failed")
+            loc = None
+        if not loc or not loc.get("id"):
+            await callback.answer("Точка не найдена в каталоге.", show_alert=True)
+            return
+        await state.update_data(
+            twenty_location_rel_id=str(loc["id"]),
+            twenty_location_label=display_name,
+        )
+        await callback.answer(f"🏷 {display_name}")
+        await _rerender_preview(callback, state)
+
+    # ---------- preview: kategoriya picker ----------
+
+    @router.callback_query(TelegramFSMStates.preview, F.data == "pick_kategoriya")
+    async def callback_pick_kategoriya(
+        callback: CallbackQuery, state: FSMContext,
+    ) -> None:
+        if twenty_crm_port is None:
+            await callback.answer("CRM недоступна", show_alert=True)
+            return
+        try:
+            options = await twenty_crm_port.fetch_task_field_options()
+        except Exception:
+            logger.exception("fetch_task_field_options failed")
+            await callback.answer("❌ Не удалось получить категории", show_alert=True)
+            return
+        kats = options.get("kategoriya", []) or []
+        if not kats:
+            await callback.answer("Нет доступных категорий", show_alert=True)
+            return
+        # callback_data limit = 64 bytes; value strings are ≤30 chars in
+        # the current schema, so prefix `kat_pick:` fits comfortably.
+        kb_rows: list[list[InlineKeyboardButton]] = []
+        for opt in kats:
+            value = str(opt.get("value") or "")
+            label = str(opt.get("label") or value)
+            if not value:
+                continue
+            cb = f"kat_pick:{value}"[:64]
+            kb_rows.append([InlineKeyboardButton(text=label, callback_data=cb)])
+        kb_rows.append(
+            [InlineKeyboardButton(text="↩ Назад", callback_data="back_to_preview")]
+        )
+        await callback.answer()
+        await state.set_state(TelegramFSMStates.choosing_kategoriya)
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                "📂 <b>Категория</b>\n\nВыберите из списка:",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+            )
+
+    @router.callback_query(TelegramFSMStates.preview, F.data == "clear_kategoriya")
+    async def callback_clear_kategoriya(
+        callback: CallbackQuery, state: FSMContext,
+    ) -> None:
+        await callback.answer("📂 Категория снята")
+        await state.update_data(
+            twenty_kategoriya=None, twenty_kategoriya_label=None,
+        )
+        await _rerender_preview(callback, state)
+
+    @router.callback_query(
+        TelegramFSMStates.choosing_kategoriya,
+        F.data.startswith("kat_pick:"),
+    )
+    async def callback_select_kategoriya(
+        callback: CallbackQuery, state: FSMContext,
+    ) -> None:
+        if twenty_crm_port is None or callback.data is None:
+            await callback.answer()
+            return
+        value = callback.data.split(":", 1)[1]
+        # Re-fetch options to find the matching label for display.
+        try:
+            options = await twenty_crm_port.fetch_task_field_options()
+        except Exception:
+            logger.exception("fetch_task_field_options failed during pick")
+            options = {}
+        label = value
+        for opt in options.get("kategoriya", []) or []:
+            if str(opt.get("value") or "") == value:
+                label = str(opt.get("label") or value)
+                break
+        await state.update_data(
+            twenty_kategoriya=value, twenty_kategoriya_label=label,
+        )
+        await callback.answer(f"📂 {label}")
+        await _rerender_preview(callback, state)
+
+    # ---------- preview: assignee picker ----------
+
+    @router.callback_query(TelegramFSMStates.preview, F.data == "pick_assignee")
+    async def callback_pick_assignee(
+        callback: CallbackQuery, state: FSMContext,
+    ) -> None:
+        if twenty_crm_port is None:
+            await callback.answer("CRM недоступна", show_alert=True)
+            return
+        try:
+            members = await twenty_crm_port.list_workspace_members()
+        except Exception:
+            logger.exception("list_workspace_members failed")
+            await callback.answer("❌ Не удалось получить список", show_alert=True)
+            return
+        if not members:
+            await callback.answer("Нет участников в Twenty", show_alert=True)
+            return
+        # Twenty Task.assignee is a relation to workspaceMember — show the
+        # raw workspaceMember list, same set you'd see in Twenty UI when
+        # picking an assignee. Member id (UUID) = 36 chars + `asg_pick:` =
+        # 9 chars, total 45 — fits in callback_data 64-byte cap.
+        kb_rows: list[list[InlineKeyboardButton]] = []
+        for m in members[:30]:
+            mid = getattr(m, "id", None) or (
+                m.get("id") if isinstance(m, dict) else None
+            )
+            if not mid:
+                continue
+            name = getattr(m, "display_name", None) or (
+                m.get("name") if isinstance(m, dict) else None
+            ) or str(mid)[:8]
+            cb = f"asg_pick:{mid}"[:64]
+            kb_rows.append([InlineKeyboardButton(text=name, callback_data=cb)])
+        kb_rows.append(
+            [InlineKeyboardButton(text="↩ Назад", callback_data="back_to_preview")]
+        )
+        await callback.answer()
+        await state.set_state(TelegramFSMStates.choosing_assignee)
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                "👤 <b>Ответственный</b>\n\nКого назначить?",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+            )
+
+    @router.callback_query(TelegramFSMStates.preview, F.data == "clear_assignee")
+    async def callback_clear_assignee(
+        callback: CallbackQuery, state: FSMContext,
+    ) -> None:
+        await callback.answer("👤 Ответственный снят")
+        await state.update_data(
+            twenty_assignee_id=None, twenty_assignee_label=None,
+        )
+        await _rerender_preview(callback, state)
+
+    @router.callback_query(
+        TelegramFSMStates.choosing_assignee,
+        F.data.startswith("asg_pick:"),
+    )
+    async def callback_select_assignee(
+        callback: CallbackQuery, state: FSMContext,
+    ) -> None:
+        if twenty_crm_port is None or callback.data is None:
+            await callback.answer()
+            return
+        member_id = callback.data.split(":", 1)[1]
+        try:
+            members = await twenty_crm_port.list_workspace_members()
+        except Exception:
+            logger.exception("list_workspace_members failed during pick")
+            members = []
+        label = member_id[:8]
+        for m in members:
+            mid = getattr(m, "id", None) or (
+                m.get("id") if isinstance(m, dict) else None
+            )
+            if str(mid) == member_id:
+                label = (
+                    getattr(m, "display_name", None)
+                    or (m.get("name") if isinstance(m, dict) else None)
+                    or member_id[:8]
+                )
+                break
+        await state.update_data(
+            twenty_assignee_id=member_id, twenty_assignee_label=label,
+        )
+        await callback.answer(f"👤 {label}")
+        await _rerender_preview(callback, state)
+
+    @router.message(TelegramFSMStates.entering_phone)
+    async def handle_phone_input(message: Message, state: FSMContext) -> None:
+        national = normalize_ru_phone(message.text or "")
+        if not national:
+            await message.answer(
+                "Не понял номер. Пришлите в формате <code>+7 905 555-12-34</code> "
+                "или похожем.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="↩ Назад", callback_data="back_to_preview")],
+                ]),
+            )
+            return
+        await state.update_data(twenty_caller_phone=national)
+        # Acknowledge and re-render preview directly via a fresh message
+        pretty = _format_pretty_phone(national) or national
+        await message.answer(f"✅ Номер сохранён: {pretty}")
+        # Re-render preview as a NEW message — we don't have the original
+        # callback message handle here.
+        data = await state.get_data()
+        session_id_str = data.get("session_id")
+        if session_id_str and draft_repo is not None:
+            try:
+                fetched = await draft_repo.get_by_id(uuid.UUID(session_id_str))
+            except Exception:
+                fetched = None
+            if fetched is not None:
+                await state.set_state(TelegramFSMStates.preview)
+                await message.answer(
+                    _format_preview(
+                        fetched,
+                        kategoriya_label=data.get("twenty_kategoriya_label"),
+                        vazhnost_label=data.get("twenty_vazhnost_label"),
+                        location_label=data.get("twenty_location_label"),
+                        caller_phone_pretty=_format_pretty_phone(national),
+                        assignee_label=data.get("twenty_assignee_label"),
+                    ),
+                    reply_markup=_preview_keyboard(
+                        location_label=data.get("twenty_location_label"),
+                        caller_phone_pretty=_format_pretty_phone(national),
+                        kategoriya_label=data.get("twenty_kategoriya_label"),
+                        assignee_label=data.get("twenty_assignee_label"),
+                    ),
+                )
 
     # ---------- /operators command (DEV-122) ----------
 
@@ -1108,7 +1625,23 @@ def create_tasks_router(
     user_port: UserProfilePort,
 ) -> Router:
     """Создаёт роутер для /my_tasks flow."""
+    from ..domain.models import UserRole
+
     router = Router(name="tasks")
+
+    async def _ensure_admin(callback: CallbackQuery) -> bool:
+        if callback.from_user is None:
+            await callback.answer()
+            return False
+        profile = await user_port.get_profile(callback.from_user.id)
+        if profile is None or profile.role != UserRole.ADMIN:
+            await callback.answer(
+                "🔒 Действие доступно только администратору. "
+                "Работа с задачами ведётся в Twenty CRM.",
+                show_alert=True,
+            )
+            return False
+        return True
 
     @router.message(Command("my_tasks"))
     async def cmd_my_tasks(message: Message, state: FSMContext) -> None:
@@ -1190,8 +1723,7 @@ def create_tasks_router(
 
     @router.callback_query(F.data == "task_resolve")
     async def callback_task_resolve(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
+        if not await _ensure_admin(callback):
             return
         data = await state.get_data()
         task_id = data.get("current_task_id")
@@ -1213,8 +1745,7 @@ def create_tasks_router(
 
     @router.callback_query(F.data == "task_reopen")
     async def callback_task_reopen(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
+        if not await _ensure_admin(callback):
             return
         data = await state.get_data()
         task_id = data.get("current_task_id")
@@ -1236,8 +1767,7 @@ def create_tasks_router(
 
     @router.callback_query(F.data.startswith("task_reassign_list:"))
     async def callback_reassign_list(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
+        if not await _ensure_admin(callback):
             return
         task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
         agents = await user_port.list_active_agents()
@@ -1251,8 +1781,7 @@ def create_tasks_router(
 
     @router.callback_query(F.data.startswith("reassign_to:"))
     async def callback_reassign_to(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
+        if not await _ensure_admin(callback):
             return
         parts = callback.data.split(":")  # type: ignore[union-attr]
         task_id = int(parts[1])
@@ -1272,8 +1801,7 @@ def create_tasks_router(
 
     @router.callback_query(F.data.startswith("task_comment:"))
     async def callback_task_comment(callback: CallbackQuery, state: FSMContext) -> None:
-        if callback.from_user is None:
-            await callback.answer()
+        if not await _ensure_admin(callback):
             return
         task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
         await state.set_state(TelegramFSMStates.adding_comment)

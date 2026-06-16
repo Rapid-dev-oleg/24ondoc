@@ -37,6 +37,7 @@ class CallRecord(BaseModel):
     voice_match_score: float | None = None
     status: CallStatus = CallStatus.NEW
     session_id: uuid.UUID | None = None
+    twenty_task_id: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def start_processing(self) -> None:

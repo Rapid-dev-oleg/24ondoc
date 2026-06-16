@@ -1,0 +1,401 @@
+"""Pure function: TimelineData + window → ReportDTO.
+
+All formulas from the agreed per-operator report spec live here. No I/O,
+no database — so it's fully deterministic and unit-testable.
+
+Terminology (matches Twenty's real data, see earlier inspection):
+- task.updated events carry a structured diff in `properties.diff`:
+    {field: {before, after}}.
+- `targetTaskId` on the event is the only reliable link back to the task
+  (linkedRecordId is NULL on system-emitted events).
+- `workspaceMemberId` on the event is the actor; may also be None for
+  system/background changes.
+"""
+from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import replace
+from datetime import datetime
+from typing import Any
+
+from ..domain.models import EmployeeRow, ReportDTO, ReportScope
+from ..infrastructure.twenty_timeline_reader import TimelineData
+
+TERMINAL_STATUSES = {"VYPOLNENO", "DONE"}
+# «Сложные» определяются по КАТЕГОРИИ задачи, а не по важности (vazhnost).
+# По требованию клиента сложными считаются только инвентаризация и настройка
+# новой торговой точки — это трудоёмкие работы. Важность (vazhnost) остаётся
+# независимым полем приоритета и на эту метрику больше не влияет.
+COMPLEX_CATEGORIES = {"INVENTARIZACIYA", "NASTROYKA_NOVOY_TORGOVOY_TOCHKI"}
+
+
+def _parse_iso(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _event_ts(e: dict[str, Any]) -> str | None:
+    return e.get("happensAt") or e.get("createdAt")
+
+
+def _avg(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def compute_report(
+    data: TimelineData,
+    *,
+    from_ts: datetime,
+    to_ts: datetime,
+    scope: ReportScope = ReportScope.OVERALL,
+    user_id: str | None = None,
+) -> ReportDTO:
+    """Build the per-operator report + totals footer for [from_ts, to_ts]."""
+    # Filter out OUTGOING-only callback tasks. These were historically
+    # created by the poller for every operator-перезвонил-клиенту call;
+    # they don't represent real customer обращения and should never appear
+    # in metrics. New OUTGOING calls don't spawn tasks at all (see
+    # ats2_poller.py callType branching), so this set only ever grows
+    # from the historical backfill.
+    data = replace(
+        data,
+        tasks=[t for t in data.tasks if not t.get("isOutgoingCallback")],
+    )
+    tasks_by_id = {t["id"]: t for t in data.tasks}
+
+    # Real Twenty INSERT timestamp per task, from task.created events.
+    # We prefer this over task.createdAt column because our backend
+    # overwrites the column with the ATS call time during task creation,
+    # so the column drifts from the actual CRM-appearance moment.
+    task_created_ts: dict[str, datetime] = {}
+    for e in data.created_events:
+        tid = e.get("targetTaskId")
+        ts = _parse_iso(_event_ts(e))
+        if tid and ts and tid not in task_created_ts:
+            task_created_ts[tid] = ts
+
+    # «Когда задача реально появилась в CRM» — единый якорь времени создания
+    # для ВСЕХ оконных фильтров (приход, повторные). Берём task.created
+    # событие; если его нет (совсем старые задачи) — фолбэк на колонку
+    # createdAt, чтобы не потерять строку.
+    def _created_at(t: dict[str, Any]) -> datetime | None:
+        return task_created_ts.get(t.get("id") or "") or _parse_iso(t.get("createdAt"))
+
+    # Index events by task: sorted ascending by happensAt.
+    events_per_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for e in data.updated_events:
+        tid = e.get("targetTaskId")
+        if tid:
+            events_per_task[tid].append(e)
+    for lst in events_per_task.values():
+        lst.sort(key=lambda x: _event_ts(x) or "")
+
+    # First terminal transition per task, if it lands in the window.
+    completion_in_window: dict[str, dict[str, Any]] = {}  # tid -> event
+    # First assignment to a given wm for response-time metric.
+    first_assignment_event: dict[str, dict[str, Any]] = {}  # tid -> event
+    # Tasks that have ANY status→terminal transition event (anywhere, not
+    # just in window). Used to detect event-less closures: задачи,
+    # импортированные бэкфиллом сразу в «Выполнено», такого события не имеют.
+    closed_by_event: set[str] = set()
+    for tid, evs in events_per_task.items():
+        for e in evs:
+            diff = (e.get("properties") or {}).get("diff") or {}
+            st = diff.get("status")
+            asg = diff.get("assigneeId")
+            ts = _parse_iso(_event_ts(e))
+            if st and st.get("after") in TERMINAL_STATUSES and \
+                    st.get("before") not in TERMINAL_STATUSES:
+                closed_by_event.add(tid)
+                # Take the LAST in-window terminal transition, not the first:
+                # tasks that were closed → reopened → closed again must count
+                # from the final closure, otherwise duration reflects a stale
+                # first attempt. Events are sorted ascending so simple overwrite
+                # wins. M8 uses first_assignment_event, not this map, so it's
+                # unaffected.
+                if ts and from_ts <= ts <= to_ts:
+                    completion_in_window[tid] = e
+            if asg and asg.get("after") and not asg.get("before"):
+                if tid not in first_assignment_event:
+                    first_assignment_event[tid] = e
+
+    # Длительность задачи в отчёте = время, реально проведённое В РАБОТЕ,
+    # т.е. сумма интервалов в статусе V_RABOTE до момента закрытия. НЕ
+    # wall-clock от создания до закрытия — он включал время лежания в
+    # бэклоге и раздувал метрику до десятков дней (задача, висевшая 28
+    # дней и закрытая в один клик, показывала «28 дней работы»).
+    #
+    # Паузы (PRIOSTANOVLENO) и время в TODO/бэклоге не считаются — только
+    # отрезки, когда задача была именно V_RABOTE.
+    #
+    # ВАЖНО: отрезки обрезаются по границам периода [from_ts, to_ts] — в
+    # отчёте за неделю не может быть «32 дня работы». Учитывается только
+    # работа, попавшая в выбранные даты.
+    #
+    # Задачи, закрытые БЕЗ перехода в «В работе» (решены прямо на звонке →
+    # сразу «Выполнено»), не имеют трекнутого времени работы; считаем их
+    # за WORK_FLOOR_SEC (звонок + прочитать + нажать).
+    WORK_FLOOR_SEC = 300.0  # 5 минут
+
+    def _clip(a: datetime, b: datetime) -> float:
+        """Длина пересечения [a, b] с окном [from_ts, to_ts], в секундах."""
+        lo = a if a > from_ts else from_ts
+        hi = b if b < to_ts else to_ts
+        return max(0.0, (hi - lo).total_seconds())
+
+    def _work_duration(tid: str, completion_ts: datetime) -> float:
+        total = 0.0
+        ever_in_work = False
+        cur_status: str | None = None
+        seg_start: datetime | None = None
+        for e in events_per_task.get(tid, []):
+            st = ((e.get("properties") or {}).get("diff") or {}).get("status") or {}
+            after = st.get("after")
+            if not after:
+                continue
+            ts = _parse_iso(_event_ts(e))
+            if ts is None or ts > completion_ts:
+                continue
+            if cur_status == "V_RABOTE" and seg_start is not None:
+                total += _clip(seg_start, ts)
+            cur_status = after
+            seg_start = ts
+            if after == "V_RABOTE":
+                ever_in_work = True
+        if cur_status == "V_RABOTE" and seg_start is not None:
+            total += _clip(seg_start, completion_ts)
+        # Реально побывала «В работе» → её время внутри периода (может быть 0,
+        # если вся работа была до from_ts). Атомарное закрытие → 5-мин флор.
+        return total if ever_in_work else WORK_FLOOR_SEC
+
+    # Per-owner accumulation.
+    # Each bucket collects the raw numbers; we convert to EmployeeRow at the end.
+    class _Acc:
+        def __init__(self) -> None:
+            self.completed_durations: list[float] = []
+            self.complex_durations: list[float] = []
+            self.repeats = 0
+            self.script_violations = 0
+            self.response_times: list[float] = []
+
+    acc: dict[str | None, _Acc] = defaultdict(_Acc)
+
+    # --- walk completed tasks ---
+    for tid, comp_event in completion_in_window.items():
+        if tid not in tasks_by_id:
+            continue  # task was deleted — ignore its leftover events
+        t = tasks_by_id[tid]
+        if t.get("status") not in TERMINAL_STATUSES:
+            continue  # closed in window but reopened afterwards — not "done"
+        owner = t.get("assigneeId") or None  # may be None if unassigned when closed
+        completion_ts = _parse_iso(_event_ts(comp_event))
+        if completion_ts is None:
+            continue
+        if owner is None:
+            continue  # unassigned completed task — skip from per-operator metrics
+        duration = _work_duration(tid, completion_ts)
+        bucket = acc[owner]
+        bucket.completed_durations.append(duration)
+        if t.get("kategoriya") in COMPLEX_CATEGORIES:
+            bucket.complex_durations.append(duration)
+
+    # --- fallback: задачи, закрытые БЕЗ события (импорт/правка в БД) ---
+    # Статус терминальный, но события перехода в «Выполнено» нет (задача
+    # импортирована бэкфиллом уже закрытой). Момент закрытия = updatedAt —
+    # лучшее доступное. Считаем только если он в периоде и есть исполнитель.
+    # `closed_by_event` гарантирует, что задачи с настоящим событием сюда
+    # НЕ попадут (без двойного счёта и без закрытых вне периода).
+    for t in data.tasks:
+        tid = t.get("id")
+        if not tid or tid in closed_by_event:
+            continue
+        if t.get("status") not in TERMINAL_STATUSES:
+            continue
+        owner = t.get("assigneeId") or None
+        if owner is None:
+            continue
+        closed_ts = _parse_iso(t.get("updatedAt"))
+        if closed_ts is None or not (from_ts <= closed_ts <= to_ts):
+            continue
+        duration = _work_duration(tid, closed_ts)
+        bucket = acc[owner]
+        bucket.completed_durations.append(duration)
+        if t.get("kategoriya") in COMPLEX_CATEGORIES:
+            bucket.complex_durations.append(duration)
+
+    # --- walk tasks created in window (for repeats + script violations) ---
+    # M6/M7 are about the intake side of the period (what came in + quality
+    # of the first call), NOT the closure side, so we iterate created-in-
+    # window independent of completion status.
+    for t in data.tasks:
+        created_ts = _created_at(t)
+        if created_ts is None or not (from_ts <= created_ts <= to_ts):
+            continue
+        owner = t.get("assigneeId") or None
+        bucket = acc[owner]
+        if t.get("povtornoeObrashchenie"):
+            bucket.repeats += 1
+        # scriptViolationsTotal — snapshot пересчитывается из CR-ов после
+        # каждого script_check (см. SyncCallToTwentyUseCase.recompute_task_aggregates).
+        # Legacy Task.scriptViolations оставлен в схеме для backwards-compat
+        # на время миграции; по нему больше не считаем.
+        bucket.script_violations += int(t.get("scriptViolationsTotal") or 0)
+
+    # --- response time: для задач, СОЗДАННЫХ в периоде ---
+    # Раньше фильтровали по дате назначения в окне — и старый бэклог,
+    # назначенный на этой неделе, давал «реакцию» в 31–42 дня (больше
+    # периода). Теперь меряем только задачи, появившиеся в Twenty в
+    # выбранные даты (task.created в окне): сколько прошло до первого
+    # назначения. Так значение не вылезает за период и отражает реакцию
+    # именно на свежий поток. Якорь — task.created событие (не backfill-
+    # колонка); без него считать нечего.
+    for tid, e in first_assignment_event.items():
+        if tid not in tasks_by_id:
+            continue
+        created_ts = task_created_ts.get(tid)
+        if created_ts is None or not (from_ts <= created_ts <= to_ts):
+            continue
+        ts = _parse_iso(_event_ts(e))
+        if ts is None:
+            continue
+        diff = (e.get("properties") or {}).get("diff") or {}
+        assignee_after = (diff.get("assigneeId") or {}).get("after")
+        if not assignee_after:
+            continue
+        delta = (ts - created_ts).total_seconds()
+        if delta < 0:
+            continue
+        acc[assignee_after].response_times.append(delta)
+
+    # --- «Активных» = задачи именно В РАБОТЕ сейчас (снимок) ---
+    # Только статус V_RABOTE: «активное» = то, над чем оператор реально
+    # работает. Новые (TODO, ещё не взяты) и приостановленные
+    # (PRIOSTANOVLENO) сюда НЕ входят — они не «в работе».
+    pending_by_owner: dict[str | None, int] = defaultdict(int)
+    for t in data.tasks:
+        if t.get("status") != "V_RABOTE":
+            continue
+        pending_by_owner[t.get("assigneeId") or None] += 1
+    # Ensure pending-only owners surface as rows too:
+    for owner in pending_by_owner:
+        acc.setdefault(owner, _Acc())
+
+    # --- build rows ---
+    rows: list[EmployeeRow] = []
+    for owner, a in acc.items():
+        completed_n = len(a.completed_durations)
+        total_dur = int(sum(a.completed_durations))
+        avg_dur = _avg(a.completed_durations)
+        complex_n = len(a.complex_durations)
+        avg_cx = _avg(a.complex_durations)
+        avg_resp = _avg(a.response_times)
+        rows.append(EmployeeRow(
+            user_id=owner,
+            display_name=data.members_by_id.get(owner or "", "— не назначено" if owner is None else owner[:8]),
+            completed=completed_n,
+            total_duration_seconds=total_dur,
+            avg_duration_seconds=avg_dur,
+            complex_count=complex_n,
+            avg_complex_duration_seconds=avg_cx,
+            repeats_count=a.repeats,
+            script_violations=a.script_violations,
+            pending_count=pending_by_owner.get(owner, 0),
+            avg_response_time_seconds=avg_resp,
+        ))
+
+    # Filter rows by scope
+    if scope in (ReportScope.SELF, ReportScope.EMPLOYEE) and user_id:
+        rows = [r for r in rows if r.user_id == user_id]
+    # «— не назначено» больше не плодит отдельную строку в таблице —
+    # эта метрика теперь видна в summary над таблицей (created_unassigned).
+    # Оставляем строку только для конкретных WM-ов.
+    rows = [r for r in rows if r.user_id is not None]
+    rows.sort(key=lambda r: -r.completed)
+
+    # --- totals row (weighted, not mean-of-means) ---
+    all_durs: list[float] = []
+    all_cx: list[float] = []
+    all_resp: list[float] = []
+    repeats_total = 0
+    script_total = 0
+    for a in acc.values():
+        all_durs.extend(a.completed_durations)
+        all_cx.extend(a.complex_durations)
+        all_resp.extend(a.response_times)
+        repeats_total += a.repeats
+        script_total += a.script_violations
+    # «Активных» — нагрузка по сотрудникам. Неназначенные открытые задачи
+    # в таблицу не попадают (строка «— не назначено» убрана), поэтому и в
+    # «Итого» их НЕ суммируем — иначе итог не сходится со строками таблицы.
+    # Неназначенные за период видны отдельно в summary (created_unassigned).
+    total_pending = sum(
+        n for owner, n in pending_by_owner.items() if owner is not None
+    )
+    totals = EmployeeRow(
+        user_id=None,
+        display_name="Итого",
+        completed=len(all_durs),
+        total_duration_seconds=int(sum(all_durs)),
+        avg_duration_seconds=_avg(all_durs),
+        complex_count=len(all_cx),
+        avg_complex_duration_seconds=_avg(all_cx),
+        repeats_count=repeats_total,
+        script_violations=script_total,
+        pending_count=total_pending,
+        avg_response_time_seconds=_avg(all_resp),
+    )
+
+    # When scoped to one employee, count only their created-in-window
+    # tasks — org-wide 156 is meaningless in a per-operator view.
+    def _in_window(t: dict[str, Any]) -> bool:
+        ts = _created_at(t)
+        return ts is not None and from_ts <= ts <= to_ts
+
+    if scope in (ReportScope.SELF, ReportScope.EMPLOYEE) and user_id:
+        in_window_tasks = [
+            t for t in data.tasks
+            if _in_window(t) and t.get("assigneeId") == user_id
+        ]
+    else:
+        in_window_tasks = [t for t in data.tasks if _in_window(t)]
+
+    # Явная разбивка по статусу — каждая задача в своей корзине, чтобы
+    # Новые + В работе + Выполнено + Приостановлено + В корзине = Создано
+    # и ничего не пряталось (см. «где ещё одна»).
+    total_created = len(in_window_tasks)
+    _statuses = [t.get("status") for t in in_window_tasks]
+    created_new = _statuses.count("TODO")
+    created_in_progress = _statuses.count("V_RABOTE") + _statuses.count("IN_PROGRESS")
+    created_completed = _statuses.count("VYPOLNENO") + _statuses.count("DONE")
+    created_paused = _statuses.count("PRIOSTANOVLENO")
+    created_trashed = _statuses.count("KORZINA")
+    # Остаток на случай неизвестного статуса (обычно 0) — чтобы сумма всё
+    # равно сходилась с «Создано».
+    created_other = (
+        total_created - created_new - created_in_progress - created_completed
+        - created_paused - created_trashed
+    )
+    created_unassigned = sum(
+        1 for t in in_window_tasks if not t.get("assigneeId")
+    )
+
+    return ReportDTO(
+        scope=scope,
+        period_from=from_ts,
+        period_to=to_ts,
+        user_id=user_id,
+        rows=tuple(rows),
+        totals=totals,
+        total_created_in_period=total_created,
+        created_new=created_new,
+        created_completed=created_completed,
+        created_in_progress=created_in_progress,
+        created_paused=created_paused,
+        created_trashed=created_trashed,
+        created_other=created_other,
+        created_unassigned=created_unassigned,
+    )

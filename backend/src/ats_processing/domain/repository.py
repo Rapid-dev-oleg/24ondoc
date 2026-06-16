@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from abc import ABC, abstractmethod
 
 from .models import CallRecord, SourceType
@@ -24,6 +25,18 @@ class CallRecordRepository(ABC):
 
     @abstractmethod
     async def get_recent(self, limit: int = 10) -> list[CallRecord]: ...
+
+    @abstractmethod
+    async def set_twenty_task_by_session(
+        self, session_id: uuid.UUID, twenty_task_id: str
+    ) -> bool:
+        """Attach a freshly-created Twenty Task to the call that produced the draft.
+
+        Returns True if a matching ats_call_records row was updated, False if
+        no call is linked to this draft (i.e. task was created outside the
+        call flow — manual Telegram /new_task).
+        """
+        ...
 
 
 class AgentVoiceSampleRepository(ABC):

@@ -39,7 +39,173 @@ class TwentyCRMPort(ABC):
         assignee_id: str | None,
         kategoriya: str | None = None,
         vazhnost: str | None = None,
+        *,
+        location_rel_id: str | None = None,
+        caller_phone: str | None = None,
+        call_record_rel_id: str | None = None,
+        povtornoe_obrashchenie: bool | None = None,
+        parent_task_id: str | None = None,
+        istochnik: str | None = None,
+        obrashchenie_kind: str | None = None,
+        is_missed_callback: bool = False,
     ) -> TwentyTask: ...
+
+    @abstractmethod
+    async def find_locations_by_phone(self, phone: str) -> list[dict[str, object]]:
+        """Все Точки, у которых данный номер совпадает с primary или additional.
+
+        Возвращает список (может быть пуст или содержать несколько точек —
+        один номер легально привязан к нескольким точкам, например выездной
+        менеджер). Никогда не создаёт.
+        """
+        ...
+
+    @abstractmethod
+    async def find_location_by_display_name(
+        self, display_name: str
+    ) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def list_location_display_names(self) -> list[str]:
+        """Каталог имён точек для AI-extract. Возвращает все displayName."""
+        ...
+
+    @abstractmethod
+    async def add_phone_to_location(
+        self, location_id: str, phone: str
+    ) -> bool:
+        """Learn-by-resolve: дописать `phone` в Location.phone, если его \
+там ещё нет. Если primary пустой — кладём в primary; иначе — в \
+additionalPhones. Возвращает True если запись была сделана, False если \
+номер уже был у точки или phone не нормализуется.
+        """
+        ...
+
+    @abstractmethod
+    async def find_recent_tasks_by_location_id(
+        self, location_id: str, since: datetime, limit: int = 10
+    ) -> list[dict[str, object]]: ...
+
+    @abstractmethod
+    async def find_call_record_by_ats_id(self, ats_call_id: str) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def find_call_records_by_task_id(
+        self, task_id: str, *, direction: str | None = None,
+    ) -> list[dict[str, object]]:
+        """All CallRecord rows attached to this Task. Optional direction
+        filter ("INCOMING" | "OUTGOING") to grab only one side of the
+        conversation. Used by DetectRepeat to feed prior transcripts to
+        the AI."""
+        ...
+
+    @abstractmethod
+    async def create_call_record(
+        self,
+        ats_call_id: str,
+        *,
+        caller_phone: str | None = None,
+        callee_phone: str | None = None,
+        client_phone: str | None = None,
+        agent_phone: str | None = None,
+        direction: str = "INCOMING",
+        duration: int | None = None,
+        call_status: str = "ANSWERED",
+        occurred_at: datetime | None = None,
+        transcript: str | None = None,
+        location_rel_id: str | None = None,
+        task_rel_id: str | None = None,
+        operator_rel_id: str | None = None,
+        call_kind: str | None = None,
+        not_answered: bool = False,
+    ) -> dict[str, object]: ...
+
+    @abstractmethod
+    async def update_call_record(
+        self,
+        call_record_id: str,
+        *,
+        task_rel_id: str | None = None,
+        location_rel_id: str | None = None,
+        transcript: str | None = None,
+        callee_phone: str | None = None,
+        client_phone: str | None = None,
+        agent_phone: str | None = None,
+        direction: str | None = None,
+        operator_rel_id: str | None = None,
+        call_kind: str | None = None,
+        not_answered: bool | None = None,
+    ) -> None: ...
+
+    @abstractmethod
+    async def find_open_callback_task_by_phone(
+        self, caller_phone: str,
+    ) -> dict[str, object] | None:
+        """Open «Перезвонить» task (isMissedCallback=true, status TODO) for
+        this client phone — dedup key for serial missed calls. None if no
+        open one exists."""
+        ...
+
+    @abstractmethod
+    async def find_recent_task_by_caller_phone(
+        self, caller_phone: str, since: datetime,
+    ) -> dict[str, object] | None:
+        """Find a recent INCOMING-derived Task whose Task.callerPhone matches.
+
+        Used to attach OUTGOING CallRecord-ов (callbacks) к существующему
+        тикету клиента. Skips tasks marked isOutgoingCallback=true.
+        """
+        ...
+
+    @abstractmethod
+    async def find_recent_tasks_by_caller_phone(
+        self, caller_phone: str, since: datetime, limit: int = 10,
+    ) -> list[dict[str, object]]:
+        """All recent (since→now) non-callback tasks of a given customer.
+
+        Used by DetectRepeat for chain-position counting (NEW / REPEAT /
+        SYSTEM) on the same client_phone within the 3-day window.
+        """
+        ...
+
+    @abstractmethod
+    async def update_call_record_script_check(
+        self, call_record_id: str, violations: int, missing: list[str],
+    ) -> None:
+        """Per-call script-check result. Pisses on the CallRecord, then
+        the use case re-aggregates Task.scriptViolationsTotal."""
+        ...
+
+    @abstractmethod
+    async def recompute_task_aggregates(self, task_id: str) -> None:
+        """Recompute Task.scriptViolationsTotal + callRecordCount +
+        scriptMissingLatest from this Task's CallRecord set. Cheap
+        snapshot used by reports."""
+        ...
+
+    # ---- Operator entity (callee identity) ----
+
+    @abstractmethod
+    async def find_operator_by_phone(
+        self, work_phone: str,
+    ) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def find_operator_by_member(
+        self, member_id: str,
+    ) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def list_operators(self) -> list[dict[str, object]]: ...
+
+    @abstractmethod
+    async def create_operator(
+        self,
+        display_name: str,
+        *,
+        work_phone: str | None = None,
+        member_rel_id: str | None = None,
+    ) -> dict[str, object]: ...
 
     @abstractmethod
     async def link_person_to_task(self, task_id: str, person_id: str) -> None: ...
@@ -54,3 +220,20 @@ class TwentyCRMPort(ABC):
 
     @abstractmethod
     async def update_task_body(self, task_id: str, body: str) -> None: ...
+
+    @abstractmethod
+    async def update_task_status(self, task_id: str, status: str) -> None: ...
+
+    @abstractmethod
+    async def update_task_parent(self, task_id: str, parent_task_id: str) -> None:
+        """Set Task.parentTaskId — links the closed «Перезвонить» stub to the
+        заявка spun from a successful callback."""
+        ...
+
+    @abstractmethod
+    async def get_task(self, task_id: str) -> dict[str, object] | None: ...
+
+    @abstractmethod
+    async def update_task_script_check(
+        self, task_id: str, violations: int, missing: list[str]
+    ) -> None: ...

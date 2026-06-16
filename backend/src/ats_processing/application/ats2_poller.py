@@ -11,14 +11,35 @@ from redis.asyncio import Redis as AsyncRedis
 
 from ai_classification.domain.repository import AIClassificationPort
 from telegram_ingestion.application.ports import STTPort
+from twenty_integration.application.classify_call_intent import (
+    KIND_NO_ACTION,
+    ClassifyCallIntent,
+    IntentResult,
+)
+from twenty_integration.application.detect_repeat import DetectRepeat, RepeatResult
+from twenty_integration.application.resolve_location import ResolveLocation
 from twenty_integration.domain.ports import TwentyCRMPort
+from twenty_integration.infrastructure.phone import normalize_ru_phone
 
 from ..domain.models import CallRecord, SourceType
 from ..domain.repository import CallRecordRepository
 from .ats2_transcription_mapper import ATS2TranscriptionMapper, ATS2Word
 from .ports import ATS2CallSourcePort
+from .sync_call_to_twenty import SyncCallToTwentyUseCase
 
 _REDIS_LAST_POLL_KEY = "ats2_poller:last_poll_timestamp"
+
+# ATS publishes a call only AFTER the conversation ends (plus some delay).
+# Without an overlap, calls that started in cycle N-1 but became visible
+# only in cycle N fall out of every window (date filter uses call start).
+# 15 min covers the longest calls we observe; duplicates are filtered by
+# `existing is not None: continue` in poll_once.
+_POLL_OVERLAP_MIN = 15
+
+# Raw ATS callStatus values that mean "nobody picked up". Only these spawn
+# the «Перезвонить» lifecycle. Busy/cancelled/blacklisted are deliberately
+# NOT here — they aren't a client waiting for a callback.
+_MISSED_STATUSES = {"NOT_ANSWERED_COMMON"}
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +62,10 @@ class ATS2PollerService:
         stt_port: STTPort | None = None,
         redis: AsyncRedis | None = None,
         poll_interval_sec: float = _DEFAULT_POLL_INTERVAL_SEC,
+        sync_call_uc: SyncCallToTwentyUseCase | None = None,
+        location_resolver: ResolveLocation | None = None,
+        detect_repeat: DetectRepeat | None = None,
+        classify_intent: ClassifyCallIntent | None = None,
     ) -> None:
         self._ats2_client = ats2_client
         self._call_repo = call_repo
@@ -50,9 +75,17 @@ class ATS2PollerService:
         self._stt_port = stt_port
         self._redis = redis
         self._poll_interval_sec = poll_interval_sec
+        self._sync_call_uc = sync_call_uc
+        self._location_resolver = location_resolver
+        self._detect_repeat = detect_repeat
+        self._classify_intent = classify_intent
         self._last_poll_timestamp: datetime | None = None
         self._running: bool = False
         self._stop_event: asyncio.Event = asyncio.Event()
+        # Per-cycle dedup of «Перезвонить» tasks: national phone → task id.
+        # Reset each poll_once. Guards against serial redials in one batch
+        # racing the Twenty filter index and spawning duplicate tasks.
+        self._callback_task_cache: dict[str, str] = {}
 
     async def _load_last_poll_timestamp(self) -> datetime:
         """Load from Redis or fallback to 1 hour ago."""
@@ -99,9 +132,17 @@ class ATS2PollerService:
     async def poll_once(self) -> None:
         """Один цикл опроса."""
         now = datetime.now(UTC)
+        # Fresh per-cycle callback-task dedup map.
+        self._callback_task_cache = {}
+        # Widen `date_from` by _POLL_OVERLAP_MIN so late-published calls
+        # (ATS publishes only after conversation ends; for long calls
+        # the publish moment lands 1-2 cycles after the start time,
+        # and the start-time filter drops them permanently).
+        cursor = self._last_poll_timestamp  # type: ignore[assignment]
+        date_from = cursor - timedelta(minutes=_POLL_OVERLAP_MIN) if cursor else now
         try:
             raw_calls = await self._ats2_client.get_call_records(
-                date_from=self._last_poll_timestamp,  # type: ignore[arg-type]
+                date_from=date_from,
                 date_to=now,
             )
         except Exception:
@@ -128,10 +169,19 @@ class ATS2PollerService:
         await self._save_last_poll_timestamp(now)
 
     async def _process_new_call(self, raw_call: dict[str, object], call_id: str) -> None:
-        """Обработать новый звонок: сохранить → транскрипция → AI → задача."""
+        """Обработать новый звонок: сохранить → транскрипция → AI → задача.
+
+        Branches on callType:
+          - SINGLE_CHANNEL / MULTI_CHANNEL → INCOMING: client=caller, agent=callee.
+            Whisper + AI classify → create Task → mirror CallRecord.
+          - OUTGOING / CRM_OUTGOING → OUTGOING (callback): client=callee,
+            agent=caller. Whisper + mirror CallRecord BUT no Task. Try to
+            attach to a recent INCOMING Task of this client; orphan if not.
+        Other types are saved + logged but otherwise skipped.
+        """
         filename = str(raw_call.get("recordFileName", ""))
-        caller_phone = str(raw_call.get("callerNumber", "")) or None
-        callee_phone = str(raw_call.get("calleeNumber", "")) or None
+        raw_caller = str(raw_call.get("callerNumber", "")) or None
+        raw_callee = str(raw_call.get("calleeNumber", "")) or None
         caller_name = str(raw_call.get("callerName", "")) or None
         callee_name = str(raw_call.get("calleeName", "")) or None
         call_date = str(raw_call.get("date", "")) or None
@@ -145,21 +195,33 @@ class ATS2PollerService:
             except (ValueError, TypeError):
                 pass
 
-        # Получить транскрипцию: ATS2 STT → fallback Whisper
+        # Map ATS callType → our 2-state direction + role assignment.
+        # OUTGOING/CRM_OUTGOING/CALLBACK are operator→customer: caller is OUR
+        # operator, callee is the customer — these must NOT spawn a Task.
+        # INCOMING (single/multi-channel): caller is the customer, callee is
+        # the line they reached.
+        is_outgoing = call_type in ("OUTGOING", "CRM_OUTGOING", "CALLBACK")
+        direction_value = "OUTGOING" if is_outgoing else "INCOMING"
+        if is_outgoing:
+            client_phone = raw_callee
+            agent_phone = raw_caller
+        else:
+            client_phone = raw_caller
+            agent_phone = raw_callee
+        # caller_phone here keeps the SEMANTIC client identity — used for
+        # Location resolve, Task.callerPhone, and (later) recent-task lookup.
+        caller_phone = client_phone
+
+        # Получить транскрипцию: Whisper (Groq) → fallback ATS2 STT.
+        # Comparing both on the same call (см. /tmp/compare_stt.py) showed
+        # Whisper resolves time- and address-words noticeably better; ATS2
+        # STT mangles key fragments ("Мы до пяти не успели" → "надо пить
+        # и не успели"). We keep ATS2 STT as a safety net for когда
+        # Groq падает или upload не доходит.
         transcription_text: str | None = None
         if filename:
-            # Попытка 1: ATS2 STT
-            try:
-                raw_transcription = await self._ats2_client.get_transcription(filename)
-                raw_words: Any = raw_transcription.get("words", [])
-                if isinstance(raw_words, list) and raw_words:
-                    words = [ATS2Word(**w) for w in raw_words]
-                    transcription_text = self._mapper.map_to_dialogue(words)
-            except Exception:
-                pass
-
-            # Попытка 2: скачать аудио + Whisper
-            if not transcription_text and self._stt_port is not None:
+            # Попытка 1: Whisper по аудио
+            if self._stt_port is not None:
                 try:
                     audio_bytes = await self._ats2_client.download_recording(filename)
                     transcription_text = await self._stt_port.transcribe(audio_bytes)
@@ -168,6 +230,21 @@ class ATS2PollerService:
                         call_id,
                         len(audio_bytes),
                     )
+                except Exception:
+                    logger.warning("ATS2 Poller: Whisper не смог для %s — пробую ATS2 STT", call_id)
+
+            # Попытка 2 (fallback): ATS2 STT
+            if not transcription_text:
+                try:
+                    raw_transcription = await self._ats2_client.get_transcription(filename)
+                    raw_words: Any = raw_transcription.get("words", [])
+                    if isinstance(raw_words, list) and raw_words:
+                        words = [ATS2Word(**w) for w in raw_words]
+                        transcription_text = self._mapper.map_to_dialogue(words)
+                        logger.info(
+                            "ATS2 Poller: fallback ATS2 STT для %s",
+                            call_id,
+                        )
                 except Exception:
                     logger.warning("ATS2 Poller: транскрипция недоступна для %s", call_id)
 
@@ -190,26 +267,349 @@ class ATS2PollerService:
             bool(transcription_text),
         )
 
-        # AI-анализ + создание задачи в Twenty
-        if transcription_text and self._ai_port and self._twenty_port:
-            success = await self._create_task_from_call(
+        # ── Missed-call lifecycle ───────────────────────────────────────
+        # `call_status` here is the RAW ATS status (not our derived one).
+        # A genuine miss = client dialed in and nobody answered.
+        if call_status in _MISSED_STATUSES:
+            if is_outgoing:
+                # Operator's own unanswered outbound dial → pure noise.
+                # Don't mirror to Twenty, don't task it.
+                logger.info(
+                    "ATS2 call %s — outgoing not-answered, skipped", call_id,
+                )
+                return
+            await self._handle_missed_incoming(
+                record, client_phone=client_phone, agent_phone=agent_phone,
+            )
+            return
+
+        # AI-анализ + создание задачи в Twenty (только INCOMING).
+        #
+        # Stage 1 — binary intent gate: создаём Task только если в звонке
+        # реально есть запрос/проблема. NO_ACTION (мусор/недозвон/ack) —
+        # CR всё равно попадает в Twenty (зеркалится ниже без taskRel),
+        # но Task не плодится. На сомнении всегда создаём — потеря
+        # настоящей заявки дороже пустышки.
+        task_id: str | None = None
+        intent: IntentResult | None = None
+        if (not is_outgoing
+                and transcription_text
+                and self._ai_port
+                and self._twenty_port):
+            if self._classify_intent is not None:
+                try:
+                    intent = await self._classify_intent.execute(
+                        transcript=transcription_text,
+                        duration_sec=duration,
+                    )
+                    logger.info(
+                        "ATS2 intent for %s: kind=%s conf=%.2f reason=%s",
+                        call_id, intent.kind,
+                        intent.confidence, intent.reason,
+                    )
+                except Exception:
+                    logger.exception(
+                        "ATS2 Poller: intent classify failed for %s — "
+                        "defaulting to NEW_TASK", call_id,
+                    )
+                    intent = None
+
+            if intent is not None and intent.kind == KIND_NO_ACTION:
+                logger.info(
+                    "ATS2 call %s — NO_ACTION (%s) — skipping Task creation",
+                    call_id, intent.reason,
+                )
+            else:
+                task_id = await self._create_task_from_call(
+                    call_id=call_id,
+                    transcription=transcription_text,
+                    caller_phone=client_phone,
+                    caller_name=caller_name,
+                    callee_name=callee_name,
+                    callee_phone=agent_phone,
+                    duration=duration,
+                    call_date=call_date,
+                    call_type=call_type,
+                    call_status=call_status,
+                    destination=destination,
+                )
+                if task_id:
+                    record.twenty_task_id = task_id
+                    record.mark_created()
+                else:
+                    record.mark_error()
+            await self._call_repo.save(record)
+
+        # OUTGOING answered: первым делом — закрывает ли этот перезвон
+        # открытую задачу «Перезвонить»? Если да — закрываем её и, если в
+        # разговоре всплыла заявка, заводим полноценную задачу «как
+        # входящий». Иначе fallback: прицепить к недавнему тикету клиента
+        # (OUT-звонок сам тикет не порождает).
+        if (is_outgoing
+                and self._twenty_port is not None
+                and client_phone):
+            attach_to = await self._handle_answered_callback(
+                record,
                 call_id=call_id,
                 transcription=transcription_text,
-                caller_phone=caller_phone,
+                client_phone=client_phone,
+                agent_phone=agent_phone,
                 caller_name=caller_name,
                 callee_name=callee_name,
-                callee_phone=callee_phone,
                 duration=duration,
                 call_date=call_date,
                 call_type=call_type,
                 call_status=call_status,
                 destination=destination,
             )
-            if success:
+            if attach_to is not None:
+                task_id = attach_to
+                record.twenty_task_id = task_id
                 record.mark_created()
+                await self._call_repo.save(record)
             else:
-                record.mark_error()
+                try:
+                    since = datetime.now(UTC) - timedelta(days=30)
+                    parent = await self._twenty_port.find_recent_task_by_caller_phone(
+                        client_phone, since,
+                    )
+                    if parent and parent.get("id"):
+                        task_id = str(parent["id"])
+                        record.twenty_task_id = task_id
+                        record.mark_created()
+                        await self._call_repo.save(record)
+                except Exception:
+                    logger.exception(
+                        "ATS2 Poller: failed attaching OUTGOING %s to existing Task",
+                        call_id,
+                    )
+
+        # Mirror the call into Twenty CallRecord (всегда — и INCOMING, и
+        # OUTGOING). taskRel populated when we have a task to attach.
+        if (transcription_text or is_outgoing) and self._sync_call_uc is not None:
+            try:
+                await self._sync_call_uc.execute(
+                    record,
+                    task_id=task_id,
+                    callee_phone=agent_phone,  # legacy raw callee
+                    client_phone=client_phone,
+                    agent_phone=agent_phone,
+                    direction=direction_value,
+                )
+            except Exception:
+                logger.exception(
+                    "ATS2 Poller: sync_call_uc failed for call %s task %s",
+                    call_id, task_id,
+                )
+
+    async def _handle_missed_incoming(
+        self,
+        record: CallRecord,
+        *,
+        client_phone: str | None,
+        agent_phone: str | None,
+    ) -> None:
+        """Пропущенный входящий → задача «Перезвонить» + привязка звонка.
+
+        Одна открытая (статус TODO) задача на номер: пока она открыта, все
+        новые пропущенные с этого номера прикрепляются к ней, дубль не
+        создаётся. Ушла из TODO (взяли/закрыли) — следующий пропущенный
+        заведёт новую. CallRecord зеркалится с notAnswered=true (честный
+        «не дозвонился»); статус оставляем NEW → callStatus=MISSED.
+        """
+        if self._twenty_port is None or self._sync_call_uc is None:
+            return
+
+        national = normalize_ru_phone(client_phone) if client_phone else None
+        if not national:
+            # Нет номера клиента — задачу «перезвонить» строить не на что,
+            # просто зеркалим пропущенный для полноты картины в CRM.
+            logger.info(
+                "ATS2 missed %s — no client phone, mirror only", record.call_id,
+            )
+            try:
+                await self._sync_call_uc.execute(
+                    record,
+                    client_phone=client_phone,
+                    agent_phone=agent_phone,
+                    callee_phone=agent_phone,
+                    direction="INCOMING",
+                    not_answered=True,
+                )
+            except Exception:
+                logger.exception("ATS2 missed %s — mirror failed", record.call_id)
+            return
+
+        # Дедуп: сперва внутри текущего цикла (фильтр Twenty может отставать
+        # на пачке быстрых перезвонов), затем — спросить Twenty.
+        task_id: str | None = self._callback_task_cache.get(national)
+        if task_id is None:
+            try:
+                existing = await self._twenty_port.find_open_callback_task_by_phone(
+                    national,
+                )
+                if existing and existing.get("id"):
+                    task_id = str(existing["id"])
+            except Exception:
+                logger.exception(
+                    "ATS2 missed %s — find callback task failed", record.call_id,
+                )
+
+        if task_id is None:
+            # Точка по телефону (last-resort): берём только однозначную.
+            location_id: str | None = None
+            try:
+                cands = await self._twenty_port.find_locations_by_phone(national)
+                if len(cands) == 1:
+                    location_id = str(cands[0].get("id") or "") or None
+            except Exception:
+                logger.exception(
+                    "ATS2 missed %s — location resolve failed", record.call_id,
+                )
+            try:
+                task = await self._twenty_port.create_task(
+                    title=f"📞 Перезвонить: +7{national}",
+                    body=(
+                        f"Пропущенный входящий звонок с +7{national}. "
+                        "Никто не взял трубку — перезвоните клиенту."
+                    ),
+                    due_at=None,
+                    assignee_id=None,
+                    location_rel_id=location_id,
+                    caller_phone=national,
+                    istochnik="ZVONOK",
+                    is_missed_callback=True,
+                )
+                task_id = task.twenty_id or None
+                logger.info(
+                    "ATS2 missed %s → callback task created: %s (loc=%s)",
+                    record.call_id, task_id, location_id or "—",
+                )
+            except Exception:
+                logger.exception(
+                    "ATS2 missed %s — create callback task failed", record.call_id,
+                )
+        else:
+            logger.info(
+                "ATS2 missed %s → attached to open callback task %s",
+                record.call_id, task_id,
+            )
+
+        if task_id:
+            self._callback_task_cache[national] = task_id
+            record.twenty_task_id = task_id
             await self._call_repo.save(record)
+
+        try:
+            await self._sync_call_uc.execute(
+                record,
+                task_id=task_id,
+                client_phone=client_phone,
+                agent_phone=agent_phone,
+                callee_phone=agent_phone,
+                direction="INCOMING",
+                not_answered=True,
+            )
+        except Exception:
+            logger.exception("ATS2 missed %s — sync failed", record.call_id)
+
+    async def _handle_answered_callback(
+        self,
+        record: CallRecord,
+        *,
+        call_id: str,
+        transcription: str | None,
+        client_phone: str | None,
+        agent_phone: str | None,
+        caller_name: str | None,
+        callee_name: str | None,
+        duration: int | None,
+        call_date: str | None,
+        call_type: str | None,
+        call_status: str | None,
+        destination: str | None,
+    ) -> str | None:
+        """Отвеченный исходящий, закрывающий открытую «Перезвонить».
+
+        Закрывает задачу-перезвонить (оператор дозвонился) и, если в
+        разговоре всплыла заявка (интент-гейт по транскрипту), заводит
+        полноценную задачу «как входящий» и связывает «Перезвонить» с ней
+        через parentTaskId.
+
+        Returns: id задачи, к которой привязать удачный звонок — заявка,
+        если создана, иначе закрытая «Перезвонить». None — если открытой
+        «Перезвонить» по этому номеру не было (тогда работает обычная
+        логика прицепки к недавнему тикету).
+        """
+        assert self._twenty_port is not None
+        national = normalize_ru_phone(client_phone) if client_phone else None
+        if not national:
+            return None
+        try:
+            cb = await self._twenty_port.find_open_callback_task_by_phone(national)
+        except Exception:
+            logger.exception(
+                "ATS2 callback %s — find open callback failed", call_id,
+            )
+            return None
+        if not (cb and cb.get("id")):
+            return None
+        cb_id = str(cb["id"])
+
+        # Оператор дозвонился → закрываем «Перезвонить».
+        try:
+            await self._twenty_port.update_task_status(cb_id, "VYPOLNENO")
+            logger.info(
+                "ATS2 callback %s — closed callback task %s", call_id, cb_id,
+            )
+        except Exception:
+            logger.exception(
+                "ATS2 callback %s — close callback task failed", call_id,
+            )
+
+        # Всплыла ли заявка? Интент-гейт по транскрипту перезвона.
+        zayavka_id: str | None = None
+        if (transcription
+                and self._ai_port is not None
+                and self._classify_intent is not None):
+            intent: IntentResult | None = None
+            try:
+                intent = await self._classify_intent.execute(
+                    transcript=transcription, duration_sec=duration,
+                )
+                logger.info(
+                    "ATS2 callback intent for %s: kind=%s conf=%.2f",
+                    call_id, intent.kind, intent.confidence,
+                )
+            except Exception:
+                logger.exception(
+                    "ATS2 callback %s — intent classify failed", call_id,
+                )
+            # На сомнении создаём (как во входящих): потеря заявки дороже.
+            if intent is None or intent.kind != KIND_NO_ACTION:
+                zayavka_id = await self._create_task_from_call(
+                    call_id=call_id,
+                    transcription=transcription,
+                    caller_phone=client_phone,
+                    caller_name=caller_name,
+                    callee_name=callee_name,
+                    callee_phone=agent_phone,
+                    duration=duration,
+                    call_date=call_date,
+                    call_type=call_type,
+                    call_status=call_status,
+                    destination=destination,
+                )
+                if zayavka_id:
+                    try:
+                        await self._twenty_port.update_task_parent(cb_id, zayavka_id)
+                    except Exception:
+                        logger.exception(
+                            "ATS2 callback %s — link callback↔заявка failed",
+                            call_id,
+                        )
+
+        return zayavka_id or cb_id
 
     async def _create_task_from_call(
         self,
@@ -224,8 +624,8 @@ class ATS2PollerService:
         call_type: str | None = None,
         call_status: str | None = None,
         destination: str | None = None,
-    ) -> bool:
-        """AI-анализ транскрипции → создание задачи в Twenty."""
+    ) -> str | None:
+        """AI-анализ транскрипции → создание задачи в Twenty. Returns task id."""
         assert self._ai_port is not None
         assert self._twenty_port is not None
 
@@ -297,7 +697,7 @@ class ATS2PollerService:
                 body_parts.append(f"- Длительность разговора: {mins}м {secs}с")
             body_parts.append(f"\n**Транскрипция:**\n{transcription}")
 
-            # Подобрать kategoriya и vazhnost из актуальных списков Twenty
+            # Подобрать kategoriya и vazhnost из актуальных списков Twenty.
             kategoriya_value: str | None = None
             vazhnost_value: str | None = None
             try:
@@ -312,16 +712,76 @@ class ATS2PollerService:
             except Exception:
                 logger.warning("ATS2 Poller: failed to select task fields for %s", call_id)
 
+            # Resolve the outlet (Location) for this incoming call —
+            # cheap fold-match → AI extract → phone fallback. The
+            # resolver also feeds caller_phone back into Location's
+            # additionalPhones (learn-by-resolve) on a name/AI hit.
+            location_rel_id: str | None = None
+            if self._location_resolver is not None:
+                try:
+                    location_rel_id = await self._location_resolver.execute(
+                        caller_phone=caller_phone,
+                        dialogue_text=transcription,
+                    )
+                except Exception:
+                    logger.exception(
+                        "ATS2 Poller: location resolve failed for %s", call_id,
+                    )
+
+            # Detect repeat обращения: было ли недавно (3 дня) задание
+            # на этой же точке с такой же сутью? Без этого все ATS-Task
+            # создавались с povtornoeObrashchenie=false → M6 в отчётах
+            # был занижен. Skipping — это та же ветка, что в Telegram-flow.
+            repeat = RepeatResult()
+            if self._detect_repeat is not None:
+                try:
+                    repeat = await self._detect_repeat.execute(
+                        location_id=location_rel_id,
+                        client_phone=caller_phone,
+                        new_dialogue=transcription,
+                    )
+                except Exception:
+                    logger.exception(
+                        "ATS2 Poller: DetectRepeat failed for %s", call_id,
+                    )
+
+            # Resolve assignee from Operator: callee_phone is the agent
+            # number, find_operator_by_phone returns the Operator entity,
+            # and Operator.memberRel points to the WorkspaceMember who
+            # answered. That same member becomes the Task assignee, so
+            # closure metrics (M1–M5) credit the right person.
+            assignee_id: str | None = None
+            if callee_phone:
+                try:
+                    op = await self._twenty_port.find_operator_by_phone(callee_phone)
+                    if op:
+                        member_id = op.get("memberRelId")
+                        if member_id:
+                            assignee_id = str(member_id)
+                except Exception:
+                    logger.exception(
+                        "ATS2 Poller: assignee resolve failed for %s", call_id,
+                    )
+
             task = await self._twenty_port.create_task(
                 title=f"📞 {classification.title}",
                 body="\n".join(body_parts),
                 due_at=call_datetime,
-                assignee_id=None,
+                assignee_id=assignee_id,
                 kategoriya=kategoriya_value,
                 vazhnost=vazhnost_value,
+                location_rel_id=location_rel_id,
+                caller_phone=caller_phone,
+                povtornoe_obrashchenie=repeat.is_repeat,
+                parent_task_id=repeat.parent_task_id,
+                istochnik="ZVONOK",
+                obrashchenie_kind=repeat.chain_position,
             )
-            logger.info("ATS2 call %s → Twenty task created: %s", call_id, task.twenty_id)
-            return True
+            logger.info(
+                "ATS2 call %s → Twenty task created: %s (loc=%s)",
+                call_id, task.twenty_id, location_rel_id or "—",
+            )
+            return task.twenty_id
         except Exception:
             logger.exception("ATS2 Poller: ошибка создания задачи для %s", call_id)
-            return False
+            return None

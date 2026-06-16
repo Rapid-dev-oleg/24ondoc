@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 from ai_classification.domain.repository import AIClassificationPort
 from telegram_ingestion.domain.models import DraftSession
+from twenty_integration.application.detect_repeat import DetectRepeat, RepeatResult
+from twenty_integration.application.resolve_location import ResolveLocation
 from twenty_integration.domain.models import TwentyTask
 from twenty_integration.domain.ports import TwentyCRMPort
 
@@ -35,6 +37,13 @@ class CreateTwentyTaskFromSession:
     def __init__(self, port: TwentyCRMPort, ai_port: AIClassificationPort | None = None) -> None:
         self._port = port
         self._ai_port = ai_port
+        # Repeat detector composed here so we don't rewire callers; relies on
+        # the same TwentyCRMPort + AI adapter. No-op when location cannot be
+        # resolved.
+        self._detect_repeat = DetectRepeat(twenty_port=port, ai_port=ai_port)
+        # Three-stage Location resolver, shared with the ATS poller (see
+        # `application/resolve_location.py`).
+        self._location_resolver = ResolveLocation(port, ai_port)
 
     async def execute(
         self,
@@ -45,6 +54,10 @@ class CreateTwentyTaskFromSession:
         file_downloader: FileDownloader | None = None,
         kategoriya: str | None = None,
         vazhnost: str | None = None,
+        *,
+        caller_phone: str | None = None,
+        dialogue_text: str | None = None,
+        location_rel_id: str | None = None,
     ) -> TwentyTask:
         """Создать задачу в Twenty из сессии.
 
@@ -56,6 +69,11 @@ class CreateTwentyTaskFromSession:
             file_downloader: Async callback (file_id) -> (bytes, filename) | None
             kategoriya: Pre-selected kategoriya value from Twenty options
             vazhnost: Pre-selected vazhnost value from Twenty options
+            caller_phone: Phone of the person who initiated the case
+            dialogue_text: Transcript / preview text — passed to ResolveLocation
+                only when `location_rel_id` is NOT supplied.
+            location_rel_id: Operator's explicit Location pick (Telegram path).
+                When set, automatic resolve is skipped entirely.
 
         Returns:
             Созданная TwentyTask
@@ -78,6 +96,52 @@ class CreateTwentyTaskFromSession:
             except Exception:
                 logger.exception("Failed to select task fields, creating without them")
 
+        # Operator's explicit pick (Telegram path) wins over auto-resolve;
+        # otherwise we run the three-stage resolver. When the operator
+        # provided BOTH a Location and a phone, we still run the
+        # learn-by-resolve step so the catalog grows from manual picks too.
+        if location_rel_id is not None:
+            if caller_phone:
+                try:
+                    await self._port.add_phone_to_location(
+                        location_rel_id, caller_phone,
+                    )
+                except Exception:
+                    logger.exception(
+                        "manual learn-by-resolve failed loc=%s phone=%s",
+                        location_rel_id, caller_phone,
+                    )
+        else:
+            location_rel_id = await self._location_resolver.execute(
+                caller_phone, dialogue_text,
+            )
+
+        # Detect chain-position (NEW / REPEAT / SYSTEM) BEFORE create_task
+        # so the Task is born with the right obrashchenieKind +
+        # parentTaskId without an extra PATCH round-trip.
+        repeat = RepeatResult()
+        try:
+            repeat = await self._detect_repeat.execute(
+                location_id=str(location_rel_id) if location_rel_id else None,
+                client_phone=caller_phone,
+                new_dialogue=dialogue_text or "",
+            )
+        except Exception:
+            logger.exception("DetectRepeat failed; proceeding with chain=NEW")
+
+        # Map DraftSession.source_type → Twenty Task.istochnikObrashcheniya
+        # so reports can split «откуда пришла Задача». CALL_T2 covers
+        # operator-confirmed ATS calls passing through the bot preview;
+        # MANUAL means the operator drafted the task by hand in chat.
+        source_to_istochnik = {
+            "call_t2": "ZVONOK",
+            "manual": "TELEGRAM",
+        }
+        istochnik = source_to_istochnik.get(
+            getattr(session.source_type, "value", None) or "manual",
+            "TELEGRAM",
+        )
+
         task = await self._port.create_task(
             title=session.ai_result.title,
             body=session.ai_result.description,
@@ -85,6 +149,12 @@ class CreateTwentyTaskFromSession:
             assignee_id=assignee_id,
             kategoriya=kategoriya,
             vazhnost=vazhnost,
+            location_rel_id=location_rel_id,
+            caller_phone=caller_phone,
+            povtornoe_obrashchenie=repeat.is_repeat,
+            parent_task_id=repeat.parent_task_id,
+            istochnik=istochnik,
+            obrashchenie_kind=repeat.chain_position,
         )
 
         # 4. Загрузить файлы в Twenty и прикрепить к задаче
@@ -107,3 +177,4 @@ class CreateTwentyTaskFromSession:
                         )
 
         return task
+
