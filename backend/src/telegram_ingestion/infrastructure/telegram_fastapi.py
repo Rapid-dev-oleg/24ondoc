@@ -39,6 +39,7 @@ from telegram_ingestion.infrastructure.bot_handler import (
     create_settings_router,
     create_tasks_router,
 )
+from telegram_ingestion.infrastructure.kp_bot_handler import create_kp_router
 from telegram_ingestion.infrastructure.reports_bot_handler import create_reports_router
 from telegram_ingestion.infrastructure.draft_session_repository import (
     SQLAlchemyRedisDraftSessionRepository,
@@ -158,6 +159,7 @@ async def telegram_webhook(
     )
     dp.include_router(create_settings_router(update_profile, save_voice, user_port))
     dp.include_router(create_call_notification_router(call_repo))
+    dp.include_router(create_kp_router(user_port))
 
     # Shared singleton from main.py lifespan; falls back to a fresh one if
     # not initialised (test harness).
